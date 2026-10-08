@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+requests
+supabase
+sentence-transformers
+neo4j
+python-dotenv
+python-multipart
