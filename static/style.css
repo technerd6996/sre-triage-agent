@@ -1,4 +1,4 @@
-body { font-family: 'IBM Plex Sans', sans-serif; background-color: #0A0D10; color: #E8ECF1; overflow: hidden; }
+body { font-family: 'IBM Plex Sans', sans-serif; background-color: #0A0D10; color: #E8ECF1; overflow: hidden; height: 100dvh; }
 .mono { font-family: 'JetBrains Mono', monospace; }
 
 /* Smooth Custom Scrollbar */
@@ -112,6 +112,7 @@ body { font-family: 'IBM Plex Sans', sans-serif; background-color: #0A0D10; colo
 
 /* ---------- Source label ---------- */
 .source-line { padding-bottom: 0.9rem; }
+.src-badge { flex-wrap: wrap; }
 .src-badge {
     display: inline-flex; align-items: center; gap: 6px;
     font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500;
@@ -119,3 +120,12 @@ body { font-family: 'IBM Plex Sans', sans-serif; background-color: #0A0D10; colo
 }
 .src-kb  { color: #34D399; background: rgba(52,211,153,0.08); border-color: rgba(52,211,153,0.35); }
 .src-gen { color: #FFB000; background: rgba(255,176,0,0.08);  border-color: rgba(255,176,0,0.35); }
+
+.content ol { list-style: decimal; padding-left: 1.5rem; margin-bottom: 0.85rem; }
+.content ol li { margin-bottom: 0.35rem; }
+.content h1, .content h2, .content h3 { color: #fff; font-weight: 600; margin: 1rem 0 0.5rem; }
+.content h1 { font-size: 1.25rem; } .content h2 { font-size: 1.1rem; } .content h3 { font-size: 1rem; }
+.content a { color: #0084FF; text-decoration: underline; }
+.content blockquote { border-left: 2px solid #2E3744; padding-left: 1rem; color: #A7B0BC; margin-bottom: 0.85rem; }
+.content table { border-collapse: collapse; margin-bottom: 1rem; font-size: 13.5px; }
+.content th, .content td { border: 1px solid #2E3744; padding: 0.4rem 0.7rem; }

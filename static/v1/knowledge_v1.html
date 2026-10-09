@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Base Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+   <link rel="stylesheet" href="/static/knowledge.css">
+</head>
+<body class="h-screen flex flex-col">
+
+    <header class="h-16 flex items-center justify-between px-8 border-b border-[#232B33] bg-[#12161C] shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded bg-amber-500 text-[#0A0D10] flex items-center justify-center font-bold mono">▮</div>
+            <div>
+                <h1 class="font-semibold text-[15px]">RAG Document Manager</h1>
+                <p class="mono text-[10px] text-gray-500 tracking-wider">SUPABASE & NEO4J CONTROLS</p>
+            </div>
+        </div>
+        <a href="/" class="mono text-[11px] text-gray-400 hover:text-amber-500 border border-[#232B33] rounded px-4 py-2 transition-colors">
+            ← BACK TO CHAT
+        </a>
+    </header>
+
+    <main class="flex-1 overflow-y-auto p-8 max-w-6xl w-full mx-auto grid grid-cols-2 gap-8">
+        
+        <!-- HYBRID RAG (SUPABASE) -->
+        <section class="panel p-6 rounded-lg flex flex-col">
+            <h2 class="font-semibold text-lg mb-1">Runbooks (Hybrid RAG)</h2>
+            <p class="text-xs text-gray-400 mb-6">Upload markdown or logs. Uploading a file with an existing name overrides it.</p>
+            
+            <div class="flex gap-2 mb-6">
+                <input type="file" id="file-upload" multiple class="flex-1 input-dark rounded-md p-2 text-sm">
+                <button id="btn-ingest" class="bg-amber-500 text-[#0A0D10] font-semibold px-4 py-2 rounded-md text-sm">Ingest</button>
+            </div>
+
+            <div id="upload-status" class="mono text-[11px] text-gray-400 mb-3 whitespace-pre-line"></div>
+
+            <div class="flex-1 overflow-y-auto">
+                <table class="w-full text-left text-sm">
+                    <thead>
+                        <tr class="text-gray-500 border-b border-[#2E3744] mono text-[10px] uppercase">
+                            <th class="pb-2">Filename</th>
+                            <th class="pb-2">Chunks</th>
+                            <th class="pb-2">Graph edges</th>
+                            <th class="pb-2 text-right">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="doc-list"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- GRAPH RAG (NEO4J) -->
+        <section class="panel p-6 rounded-lg flex flex-col">
+            <h2 class="font-semibold text-lg mb-1">Infrastructure Topology (Graph RAG)</h2>
+            <p class="text-xs text-gray-400 mb-6">Define explicit relationships between entities (e.g. Nginx -> proxies to -> App).</p>
+            
+            <div class="flex gap-2 mb-6">
+                <input type="text" id="g-src" placeholder="Source" class="w-1/3 input-dark rounded-md p-2 text-sm">
+                <input type="text" id="g-rel" placeholder="Relation" class="w-1/3 input-dark rounded-md p-2 text-sm">
+                <input type="text" id="g-dst" placeholder="Destination" class="w-1/3 input-dark rounded-md p-2 text-sm">
+                <button id="btn-add-edge" class="bg-amber-500 text-[#0A0D10] font-semibold px-4 py-2 rounded-md text-sm">Add</button>
+            </div>
+
+            <div class="flex gap-2 mb-2">
+                <input type="file" id="graph-csv" accept=".csv,text/csv" class="flex-1 input-dark rounded-md p-2 text-sm">
+                <button id="btn-import-csv" class="bg-amber-500 text-[#0A0D10] font-semibold px-4 py-2 rounded-md text-sm">Import CSV</button>
+            </div>
+            <p class="text-[11px] text-gray-500 mb-1">CSV header: <span class="mono">src,rel,dst</span>. Imported edges are protected: deleting a document never removes them.</p>
+            <div id="graph-status" class="mono text-[11px] text-gray-400 mb-4"></div>
+
+            <div class="flex-1 overflow-y-auto">
+                <table class="w-full text-left text-sm">
+                    <thead>
+                        <tr class="text-gray-500 border-b border-[#2E3744] mono text-[10px] uppercase">
+                            <th class="pb-2">Source</th>
+                            <th class="pb-2">Relation</th>
+                            <th class="pb-2">Destination</th>
+                            <th class="pb-2">Owner</th>
+                            <th class="pb-2 text-right">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="graph-list"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/knowledge.js"></script>
+</body>
+</html>

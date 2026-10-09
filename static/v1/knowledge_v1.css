@@ -1,0 +1,5 @@
+body { font-family: 'IBM Plex Sans', sans-serif; background-color: #0A0D10; color: #E8ECF1; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+.panel { background-color: #12161C; border: 1px solid #232B33; }
+.input-dark { background-color: #171C24; border: 1px solid #2E3744; color: #E8ECF1; }
+.input-dark:focus { border-color: #FFB000; outline: none; }

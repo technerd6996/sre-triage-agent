@@ -1,93 +1,96 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Knowledge Base Manager</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-   <link rel="stylesheet" href="/static/knowledge.css">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0a0d10">
+    <title>Knowledge Manager · TRIAGE-1</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/static/knowledge.css?v=5">    
 </head>
-<body class="h-screen flex flex-col">
+<body class="km-body">
+<header class="km-header">
+    <a class="brand" href="/" aria-label="Return to TRIAGE-1 chat">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
+        <span class="brand-copy"><span class="brand-title">TRIAGE-1 <span class="brand-divider">/</span> Knowledge</span><span class="brand-subtitle">RUNBOOKS · INFRASTRUCTURE GRAPH</span></span>
+    </a>
+    <div class="header-actions"><span class="header-tag"><span class="header-tag-dot"></span> KNOWLEDGE CONTROLS</span><a href="/" class="back-link"><span aria-hidden="true">←</span> Back to chat</a></div>
+</header>
 
-    <header class="h-16 flex items-center justify-between px-8 border-b border-[#232B33] bg-[#12161C] shrink-0">
-        <div class="flex items-center gap-3">
-            <div class="w-8 h-8 rounded bg-amber-500 text-[#0A0D10] flex items-center justify-center font-bold mono">▮</div>
-            <div>
-                <h1 class="font-semibold text-[15px]">RAG Document Manager</h1>
-                <p class="mono text-[10px] text-gray-500 tracking-wider">SUPABASE & NEO4J CONTROLS</p>
+<main class="km-main">
+    <section class="page-intro">
+        <div><p class="eyebrow">KNOWLEDGE OPERATIONS</p><h1>Knowledge Manager</h1><p class="intro-copy">Manage the knowledge TRIAGE-1 uses to investigate incidents.</p></div>
+        <button id="btn-refresh" class="button button-secondary refresh-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M5.6 9A7 7 0 0 1 18 6l2 6M4 12l2 6a7 7 0 0 0 12.4-3"/></svg> Refresh data</button>
+    </section>
+
+    <section class="summary-strip" aria-label="Knowledge base summary">
+        <div class="summary-item"><span class="summary-mark summary-mark-amber" aria-hidden="true">▤</span><span class="summary-copy"><span class="summary-label">Indexed documents</span><strong id="stat-documents">—</strong></span></div>
+        <span class="summary-divider" aria-hidden="true"></span>
+        <div class="summary-item"><span class="summary-mark summary-mark-blue" aria-hidden="true">▦</span><span class="summary-copy"><span class="summary-label">Vector chunks</span><strong id="stat-chunks">—</strong></span></div>
+        <span class="summary-divider" aria-hidden="true"></span>
+        <div class="summary-item"><span class="summary-mark summary-mark-green" aria-hidden="true">⌘</span><span class="summary-copy"><span class="summary-label">Graph relationships</span><strong id="stat-edges">—</strong></span></div>
+    </section>
+
+    <div id="page-notice" class="page-notice" role="status" aria-live="polite" hidden></div>
+
+    <nav id="workspace-tabs" class="workspace-tabs" role="tablist" aria-label="Knowledge manager sections">
+        <button id="tab-documents" class="workspace-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="documents-panel" tabindex="0"><span class="tab-icon tab-icon-amber" aria-hidden="true">▤</span><span class="tab-label">Runbook library</span><span id="document-count" class="tab-count">0</span></button>
+        <button id="tab-graph" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="graph-panel" tabindex="-1"><span class="tab-icon tab-icon-blue" aria-hidden="true">⌘</span><span class="tab-label">Infrastructure graph</span><span id="graph-count" class="tab-count">0</span></button>
+    </nav>
+
+    <section id="documents-panel" class="workspace-panel" role="tabpanel" aria-labelledby="tab-documents">
+        <div class="section-intro"><div><p class="panel-kicker">SUPABASE · HYBRID RAG</p><h2>Runbook library</h2><p>Add runbooks, SOPs, and logs to the searchable knowledge base. Uploading a file with an existing name replaces its indexed version.</p></div><span class="section-tag">DOCUMENTS</span></div>
+
+        <section class="upload-card" aria-labelledby="upload-heading">
+            <div class="subsection-heading"><div><h3 id="upload-heading">Add documents</h3><p>Drop supported files here or browse your computer.</p></div><span class="step-chip">STEP 1</span></div>
+            <div id="document-drop-zone" class="drop-zone">
+                <input type="file" id="file-upload" multiple class="visually-hidden" accept=".md,.markdown,.txt,.text,.log,.json,.yaml,.yml,.csv" aria-label="Choose runbook files">
+                <span class="drop-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m-5 5 5-5 5 5"/><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg></span>
+                <div class="drop-copy"><strong>Drag and drop files</strong><span>or <button id="btn-choose-docs" class="text-button" type="button">browse files</button></span><small>Multiple files supported · UTF-8 text is indexed</small></div>
+                <span class="drop-hint">MD · TXT · LOG · JSON</span>
             </div>
-        </div>
-        <a href="/" class="mono text-[11px] text-gray-400 hover:text-amber-500 border border-[#232B33] rounded px-4 py-2 transition-colors">
-            ← BACK TO CHAT
-        </a>
-    </header>
-
-    <main class="flex-1 overflow-y-auto p-8 max-w-6xl w-full mx-auto grid grid-cols-2 gap-8">
-        
-        <!-- HYBRID RAG (SUPABASE) -->
-        <section class="panel p-6 rounded-lg flex flex-col">
-            <h2 class="font-semibold text-lg mb-1">Runbooks (Hybrid RAG)</h2>
-            <p class="text-xs text-gray-400 mb-6">Upload markdown or logs. Uploading a file with an existing name overrides it.</p>
-            
-            <div class="flex gap-2 mb-6">
-                <input type="file" id="file-upload" multiple class="flex-1 input-dark rounded-md p-2 text-sm">
-                <button id="btn-ingest" class="bg-amber-500 text-[#0A0D10] font-semibold px-4 py-2 rounded-md text-sm">Ingest</button>
-            </div>
-
-            <div id="upload-status" class="mono text-[11px] text-gray-400 mb-3 whitespace-pre-line"></div>
-
-            <div class="flex-1 overflow-y-auto">
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="text-gray-500 border-b border-[#2E3744] mono text-[10px] uppercase">
-                            <th class="pb-2">Filename</th>
-                            <th class="pb-2">Chunks</th>
-                            <th class="pb-2">Graph edges</th>
-                            <th class="pb-2 text-right">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody id="doc-list"></tbody>
-                </table>
-            </div>
+            <div id="selected-files" class="selected-files" hidden></div>
+            <div class="upload-actions"><span id="selected-summary" class="muted-meta">No files selected</span><div class="button-row"><button id="btn-clear-files" class="button button-ghost" type="button" disabled>Clear selection</button><button id="btn-ingest" class="button button-primary" type="button" disabled><span aria-hidden="true">↑</span> Ingest files</button></div></div>
+            <div id="upload-status" class="status-log" role="status" aria-live="polite" hidden></div>
         </section>
 
-        <!-- GRAPH RAG (NEO4J) -->
-        <section class="panel p-6 rounded-lg flex flex-col">
-            <h2 class="font-semibold text-lg mb-1">Infrastructure Topology (Graph RAG)</h2>
-            <p class="text-xs text-gray-400 mb-6">Define explicit relationships between entities (e.g. Nginx -> proxies to -> App).</p>
-            
-            <div class="flex gap-2 mb-6">
-                <input type="text" id="g-src" placeholder="Source" class="w-1/3 input-dark rounded-md p-2 text-sm">
-                <input type="text" id="g-rel" placeholder="Relation" class="w-1/3 input-dark rounded-md p-2 text-sm">
-                <input type="text" id="g-dst" placeholder="Destination" class="w-1/3 input-dark rounded-md p-2 text-sm">
-                <button id="btn-add-edge" class="bg-amber-500 text-[#0A0D10] font-semibold px-4 py-2 rounded-md text-sm">Add</button>
-            </div>
-
-            <div class="flex gap-2 mb-2">
-                <input type="file" id="graph-csv" accept=".csv,text/csv" class="flex-1 input-dark rounded-md p-2 text-sm">
-                <button id="btn-import-csv" class="bg-amber-500 text-[#0A0D10] font-semibold px-4 py-2 rounded-md text-sm">Import CSV</button>
-            </div>
-            <p class="text-[11px] text-gray-500 mb-1">CSV header: <span class="mono">src,rel,dst</span>. Imported edges are protected: deleting a document never removes them.</p>
-            <div id="graph-status" class="mono text-[11px] text-gray-400 mb-4"></div>
-
-            <div class="flex-1 overflow-y-auto">
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="text-gray-500 border-b border-[#2E3744] mono text-[10px] uppercase">
-                            <th class="pb-2">Source</th>
-                            <th class="pb-2">Relation</th>
-                            <th class="pb-2">Destination</th>
-                            <th class="pb-2">Owner</th>
-                            <th class="pb-2 text-right">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody id="graph-list"></tbody>
-                </table>
-            </div>
+        <section class="data-section" aria-labelledby="documents-list-heading">
+            <div class="list-toolbar"><div><h3 id="documents-list-heading">Indexed documents</h3><p>Documents currently available for retrieval.</p></div><div class="search-control"><label class="search-field"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg><input id="document-search" type="search" placeholder="Search document names" autocomplete="off" aria-label="Search indexed documents" spellcheck="false"></label><button id="clear-document-search" class="search-clear" type="button" aria-label="Clear document search" title="Clear search" hidden>Clear</button></div></div>
+            <div class="table-wrap"><table class="data-table"><thead><tr><th>Document</th><th>Chunks</th><th>Graph edges</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="doc-list"><tr><td colspan="4" class="table-state">Loading documents…</td></tr></tbody></table></div>
+            <div id="document-list-footer" class="table-footer">Loading document index…</div>
         </section>
-    </main>
+    </section>
 
-    <script src="/static/knowledge.js"></script>
+    <section id="graph-panel" class="workspace-panel" role="tabpanel" aria-labelledby="tab-graph" hidden>
+        <div class="section-intro"><div><p class="panel-kicker">NEO4J AURADB · GRAPH RAG</p><h2>Infrastructure graph</h2><p>Connect services, hosts, alerts, errors, and fixes using source → relationship → destination.</p></div><span class="section-tag section-tag-blue">RELATIONSHIPS</span></div>
+
+        <section class="edge-form-card" aria-labelledby="edge-form-heading">
+            <div class="subsection-heading"><div><h3 id="edge-form-heading">Add a relationship</h3><p>Describe how one infrastructure entity relates to another.</p></div><span class="step-chip step-chip-blue">STEP 1</span></div>
+            <form id="edge-form" class="edge-form">
+                <div class="triple-fields">
+                    <label><span>Source entity</span><input type="text" id="g-src" maxlength="200" placeholder="e.g. Nginx" required></label>
+                    <label class="relation-field"><span>Relationship</span><input type="text" id="g-rel" maxlength="200" placeholder="e.g. proxies to" required></label>
+                    <label><span>Destination entity</span><input type="text" id="g-dst" maxlength="200" placeholder="e.g. App Service" required></label>
+                </div>
+                <div class="edge-form-footer"><p class="example-line">Example <code>Nginx</code> <span>→</span> <code>proxies to</code> <span>→</span> <code>App Service</code></p><button id="btn-add-edge" class="button button-primary" type="submit"><span aria-hidden="true">＋</span> Add relationship</button></div>
+            </form>
+            <details id="csv-import-details" class="csv-details"><summary><span class="csv-summary-icon">CSV</span><span><strong>Import relationships from CSV</strong><small>For bulk imports · required columns: <code>src,rel,dst</code></small></span><span class="summary-chevron" aria-hidden="true">⌄</span></summary><div class="csv-details-body"><input type="file" id="graph-csv" accept=".csv,text/csv" class="visually-hidden" aria-label="Choose graph CSV file"><div id="csv-selection" class="csv-selection" hidden></div><div class="csv-actions"><span class="muted-meta">Imported edges are kept separately from document-owned edges.</span><div class="button-row"><button id="btn-choose-csv" class="button button-secondary" type="button">Choose CSV</button><button id="btn-import-csv" class="button button-secondary" type="button" disabled>Import CSV</button></div></div></div></details>
+            <div id="graph-status" class="status-log" role="status" aria-live="polite" hidden></div>
+        </section>
+
+        <section class="data-section graph-data-section" aria-labelledby="graph-list-heading">
+            <div class="list-toolbar"><div><h3 id="graph-list-heading">All relationships</h3><p>Search by source, relationship, destination, or owner.</p></div><div class="search-control"><label class="search-field graph-search-field"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg><input id="graph-search" type="search" placeholder="Search relationships" autocomplete="off" aria-label="Search graph relationships by source, relationship, destination, or owner" spellcheck="false"></label><button id="clear-graph-search" class="search-clear" type="button" aria-label="Clear graph search" title="Clear search" hidden>Clear</button></div></div>
+            <div class="table-wrap graph-table-wrap"><table class="data-table graph-table"><thead><tr><th>Source</th><th>Relationship</th><th>Destination</th><th>Owner / source</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="graph-list"><tr><td colspan="5" class="table-state">Loading graph…</td></tr></tbody></table></div>
+            <div id="graph-list-footer" class="table-footer">Loading graph relationships…</div>
+            <p class="ownership-note"><span aria-hidden="true">ⓘ</span> Document-derived relationships may be removed when their last owning document is deleted. Seed and manual relationships are protected from document deletion.</p>
+        </section>
+    </section>
+
+    <footer class="km-footer"><span>TRIAGE-1 / KNOWLEDGE OPERATIONS</span><span>Runbooks ground responses; graph edges describe relationships.</span></footer>
+</main>
+<script src="/static/knowledge.js?v=4"></script>
 </body>
 </html>
