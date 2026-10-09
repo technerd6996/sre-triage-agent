@@ -229,13 +229,27 @@ function normalizeRelated(content) {
 
 // Label every answer as grounded or not, based on retrieved IDs the answer actually names
 function sourceBadgeHTML(sources, answer) {
-    // Out-of-scope refusals are neither grounded nor "general knowledge", so no label
     if (/^\s*I['\u2019]?m a triage assistant/i.test(answer)) return '';
 
-    const cited = (sources || []).filter(id =>
+    const retrieved = sources || [];
+    const body = answer.replace(/^\s*Related:.*$/gim, '');
+    const mentioned = [...new Set(body.match(/\b(?:RB|SOP)-\d{3}\b|\bINC-\d{4}-\d{3}\b/g) || [])];
+    const phantom = mentioned.filter(id => !retrieved.includes(id));
+    const phantomHTML = phantom.length
+        ? ` <span class="src-badge src-gen">⚠ Mentions ${phantom.map(esc).join(', ')}, which was not retrieved. May be inaccurate.</span>`
+        : '';
+    const fromGraph = /Source:\s*graph\b/i.test(answer);
+
+    const cited = retrieved.filter(id =>
         new RegExp(`(?<![\\w-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(answer));
     if (cited.length) {
-        return `<span class="src-badge src-kb">📚 From your knowledge base: ${cited.map(esc).join(', ')}</span>`;
+        return `<span class="src-badge src-kb">📚 From your knowledge base: ${cited.map(esc).join(', ')}</span>${phantomHTML}`;
+    }
+    if (fromGraph) {
+        return `<span class="src-badge src-kb">🕸 From your knowledge graph</span>${phantomHTML}`;
+    }
+    if (sources && sources.length) {
+        return `<span class="src-badge src-gen">⚠ Retrieved ${sources.map(esc).join(', ')} but the answer doesn't cite them. Verify before acting.</span>`;
     }
     return `<span class="src-badge src-gen">⚠ Not from your knowledge base. Verify against your runbooks before acting.</span>`;
 }

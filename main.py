@@ -366,6 +366,13 @@ def list_documents():
     return [{"filename": k, "chunks": v, "edges": edge_counts.get(k, 0)}
             for k, v in sorted(docs.items())]
 
+def retrieval_query(query: str, history: list) -> str:
+    q = query.strip()
+    if len(q.split()) < 8 and history:          # short follow-up like "How to fix it?"
+        prev = [m["content"] for m in history if m["role"] == "user"]
+        if prev:
+            q = prev[-1][:300] + " " + q        # add the previous user question
+    return q
 
 def _index_document(filename: str, text: str) -> dict:
     """Replace-then-ingest: removes the old version completely, then indexes the new one."""
