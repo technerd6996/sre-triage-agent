@@ -422,7 +422,7 @@ def delete_document(filename: str):
 def list_graph_edges():
     query = ("MATCH (src:Entity)-[r:RELATED_TO]->(dst:Entity) "
              "RETURN src.name AS src, r.type AS rel, dst.name AS dst, r.docs AS docs "
-             "ORDER BY src.name")
+             "ORDER BY src, rel, dst")
     with neo4j_driver.session() as session:
         return [{"src": rec["src"], "rel": rec["rel"], "dst": rec["dst"],
                  "source": ", ".join(rec["docs"]) if rec["docs"] else "seed / manual"}

@@ -5,4 +5,5 @@ supabase
 sentence-transformers
 neo4j
 python-dotenv
+dotenv
 python-multipart
