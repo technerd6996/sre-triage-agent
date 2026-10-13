@@ -10,7 +10,7 @@ NEO4J_URI = os.getenv("NEO4J_URI")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASS = os.getenv("NEO4J_PASS")
 
-EDGES_FILE = os.path.join(os.path.dirname(__file__), "graph_edges_core.csv")
+EDGES_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "graph_edges_core.csv")
 
 
 def load_edges(path: str):

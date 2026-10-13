@@ -2,8 +2,13 @@ fastapi
 uvicorn
 requests
 supabase
-sentence-transformers
 neo4j
 python-dotenv
 dotenv
 python-multipart
+langchain 
+langchain-openai 
+langgraph 
+paramiko 
+pywinrm
+sentence-transformers

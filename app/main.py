@@ -18,7 +18,10 @@ from neo4j import GraphDatabase
 
 
 # Centralized SRE persona rules
-from system_prompt import SYSTEM_PROMPT
+from pathlib import Path
+from app.agent.prompts import SYSTEM_PROMPT
+
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load secrets from .env file
 load_dotenv()
@@ -26,7 +29,7 @@ load_dotenv()
 log = logging.getLogger("uvicorn.error")
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 # --- Infrastructure Clients ---
 COLAB_API_URL = os.getenv("COLAB_API_URL")
@@ -331,13 +334,13 @@ def health_check():
 # --- PAGE ROUTING ---
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
-    with open("static/index.html", "r", encoding="utf-8") as f:
+    with open(BASE_DIR / "static" / "index.html", "r", encoding="utf-8") as f:
         return f.read()
 
 
 @app.get("/knowledge", response_class=HTMLResponse)
 async def serve_knowledge_ui():
-    with open("static/knowledge.html", "r", encoding="utf-8") as f:
+    with open(BASE_DIR / "static" / "knowledge.html", "r", encoding="utf-8") as f:
         return f.read()
 
 
