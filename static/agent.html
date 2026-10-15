@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Console · TRIAGE-1</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="icon" href="data:,">
+    <style>
+        body { font-family: 'IBM Plex Sans', sans-serif; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+    </style>
+</head>
+<body class="h-screen flex flex-col bg-[#0A0D10] text-[#E8ECF1]">
+
+<header class="h-[72px] shrink-0 flex items-center justify-between px-8 border-b border-[#232B33] bg-[#12161C]">
+    <div class="flex items-center gap-4">
+        <a href="/" class="text-[13px] text-gray-400 hover:text-[#FFB000]">← Chat</a>
+        <h1 class="mono font-bold text-[18px]">TRIAGE-1 <span class="text-gray-500">/</span> Agent Console</h1>
+    </div>
+    <label class="flex items-center gap-3 text-[13px] text-gray-300 cursor-pointer select-none">
+        <input id="auto" type="checkbox" class="accent-[#FFB000] w-4 h-4">
+        Auto-work the L1 queue
+    </label>
+</header>
+
+<div class="flex flex-1 min-h-0">
+    <aside class="w-[360px] shrink-0 border-r border-[#232B33] bg-[#0E1217] p-5 overflow-y-auto flex flex-col gap-6">
+        <section>
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="mono text-[12px] tracking-[0.18em] uppercase text-gray-400">L1 queue</h2>
+                <button id="refresh" class="text-[12px] text-gray-400 hover:text-[#FFB000]">Refresh</button>
+            </div>
+            <div id="queue" class="flex flex-col gap-2"></div>
+        </section>
+        <section>
+            <h2 class="mono text-[12px] tracking-[0.18em] uppercase text-gray-400 mb-3">Recent runs</h2>
+            <div id="runs" class="flex flex-col gap-2"></div>
+        </section>
+    </aside>
+
+    <main class="flex-1 min-w-0 overflow-y-auto p-8">
+        <div id="run-empty" class="h-full flex items-center justify-center text-gray-500 text-[14px]">
+            Pick a ticket from the queue, or turn on auto mode.
+        </div>
+        <div id="run-view" class="hidden max-w-3xl mx-auto">
+            <div class="flex items-center justify-between gap-4 mb-2">
+                <h2 id="run-title" class="mono text-[20px] font-bold"></h2>
+                <span id="run-status" class="mono text-[12px] px-3 py-1 rounded-full border"></span>
+            </div>
+            <div id="run-chips" class="flex flex-wrap gap-2 mb-6"></div>
+            <div id="steps" class="flex flex-col gap-2"></div>
+            <div id="approval" class="hidden mt-6 p-5 rounded-xl border border-[#FF8A00] bg-[#1A130A]">
+                <h3 class="mono text-[13px] tracking-[0.12em] uppercase text-[#FF8A00] mb-3">Approval required</h3>
+                <div id="approval-actions" class="flex flex-col gap-2 mb-4"></div>
+                <div class="flex gap-3">
+                    <button id="approve" class="px-5 py-2 rounded-lg bg-[#1F9D55] hover:bg-[#188347] font-semibold text-[14px]">Approve</button>
+                    <button id="reject" class="px-5 py-2 rounded-lg bg-[#2A1215] border border-[#7A2A32] text-red-300 hover:bg-[#3A1A1E] font-semibold text-[14px]">Reject</button>
+                </div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<script src="/static/js/agent.js?v=1"></script>
+</body>
+</html>

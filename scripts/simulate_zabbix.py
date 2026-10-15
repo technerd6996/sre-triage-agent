@@ -12,9 +12,9 @@ from app.tools.snow import _caller, _group, _group_id, _request, _user_id
 windows = [i for i in aws.list_instances(force=True) if i["platform"] == "windows" and i["state"] == "running"]
 if not windows:
     raise SystemExit("No running Windows instance found in AWS. Check AWS_REGION and credentials.")
-host = windows[0]["name"] or windows[0]["instance_id"]
+host = "victim-test"
 now = datetime.now()
-problem = "Free disk space is less than 20% on volume C:"
+problem = "victim-test is down"
 
 created = _request(
     "POST",

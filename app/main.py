@@ -31,6 +31,12 @@ log = logging.getLogger("uvicorn.error")
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
+try:
+    from app.api.agent import router as agent_router
+    app.include_router(agent_router)
+except Exception as e:  # the chat must keep working even if the agent side fails to load
+    log.warning("Agent API not loaded: %s", e)
+
 # --- Infrastructure Clients ---
 COLAB_API_URL = os.getenv("COLAB_API_URL")
 embedder = SentenceTransformer('all-MiniLM-L6-v2')
@@ -341,6 +347,12 @@ async def serve_ui():
 @app.get("/knowledge", response_class=HTMLResponse)
 async def serve_knowledge_ui():
     with open(BASE_DIR / "static" / "knowledge.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+
+@app.get("/agent", response_class=HTMLResponse)
+async def serve_agent_ui():
+    with open(BASE_DIR / "static" / "agent.html", "r", encoding="utf-8") as f:
         return f.read()
 
 
