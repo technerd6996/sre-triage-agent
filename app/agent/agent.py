@@ -27,6 +27,9 @@ load_dotenv()
 
 TOOLS = SNOW_TOOLS + INFRA_TOOLS
 
+from app.tools.aws_tools import AWS_TOOLS
+TOOLS = SNOW_TOOLS + INFRA_TOOLS + AWS_TOOLS
+
 aws.STRICT = True  # agent runs never fall back to the static hosts in .env
 
 BASE_PROMPT = """You are TRIAGE-1, an L1 SRE agent that works ServiceNow incidents using tools.

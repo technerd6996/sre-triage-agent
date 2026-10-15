@@ -6,6 +6,7 @@ RISK = {
     "get_incident": 0, "claim_incident": 0, "add_work_note": 0, "create_incident": 0,
     "resolve_incident": 0, "escalate_incident": 0,
     "check_reachability": 0, "check_disk_usage": 0, "lookup_ad_user": 0,
+    "check_ec2_status": 0, "check_security_group": 0, "get_cloudwatch_metric": 0,
     # L1: standard operations need a human
     "clear_temp_files": 1, "unlock_ad_account": 1,
 }

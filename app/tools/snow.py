@@ -163,8 +163,6 @@ def add_work_note(number: str, note: str) -> dict:
     _request("PATCH", f"incident/{_incident_id(number)}", json={"work_notes": note})
     return {"number": number, "note_added": True}
 
-
-@tool
 @tool
 def escalate_incident(number: str, reason: str) -> dict:
     """Hand an incident to the human L2 team when it is beyond L1, could not be fixed, or needs approval.
@@ -182,6 +180,20 @@ def escalate_incident(number: str, reason: str) -> dict:
         },
     )
     return _fetch(number)
+
+def list_queue() -> list:
+    """Ticket numbers waiting in the L1 queue: New, unassigned, oldest first."""
+    rows = _request(
+        "GET",
+        "incident",
+        params={
+            "sysparm_query": f"active=true^state=1^assigned_toISEMPTY"
+                             f"^assignment_group.name={_group()}^ORDERBYsys_created_on",
+            "sysparm_fields": "number",
+            "sysparm_limit": 10,
+        },
+    )
+    return [r["number"] for r in rows]
 
 # The agent will import this list in Phase 3
 SNOW_TOOLS = [get_incident, create_incident, claim_incident, add_work_note, escalate_incident, resolve_incident]
