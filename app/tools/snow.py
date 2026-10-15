@@ -11,7 +11,7 @@ STATE_IN_PROGRESS = 2  # "WIP"
 STATE_RESOLVED = 6
 
 # Only return these fields so we don't waste tokens on the 80+ others
-FIELDS = "number,short_description,description,state,priority,caller_id,assignment_group,assigned_to,work_notes"
+FIELDS = "number,short_description,description,state,priority,caller_id,assignment_group,assigned_to,contact_type,work_notes"
 
 
 # ---- config (read at call time so load_dotenv() has already run) ----
@@ -68,6 +68,11 @@ def _incident_id(number: str) -> str:
     return _lookup_sys_id("incident", f"number={number}", f"Incident {number}")
 
 
+def _flatten(record: dict) -> dict:
+    """Reference fields come back as {'display_value':..., 'link':...}. Keep just the readable value."""
+    return {k: (v.get("display_value") if isinstance(v, dict) else v) for k, v in record.items()}
+
+
 def _fetch(number: str) -> dict:
     rows = _request(
         "GET",
@@ -81,7 +86,7 @@ def _fetch(number: str) -> dict:
     )
     if not rows:
         return {"error": f"Incident {number} not found"}
-    return rows[0]
+    return _flatten(rows[0])
 
 
 # ---- tools the agent can call ----
@@ -89,7 +94,6 @@ def _fetch(number: str) -> dict:
 def get_incident(number: str) -> dict:
     """Fetch a ServiceNow incident by number (e.g. INC0010001). Returns its key fields."""
     return _fetch(number)
-
 
 @tool
 def create_incident(short_description: str, description: str, urgency: int = 3) -> dict:
@@ -102,6 +106,7 @@ def create_incident(short_description: str, description: str, urgency: int = 3) 
             "short_description": short_description,
             "description": description,
             "urgency": str(urgency),
+            "contact_type": os.getenv("SNOW_CHANNEL", "virtual_agent"),
             "caller_id": _user_id(_caller()),
             "assignment_group": _group_id(_group()),
             "assigned_to": _user_id(_assignee()),
@@ -114,7 +119,6 @@ def create_incident(short_description: str, description: str, urgency: int = 3) 
         json={"state": str(STATE_IN_PROGRESS), "work_notes": "Assigned to triage agent. Work started."},
     )
     return _fetch(created["number"])
-
 
 @tool
 def claim_incident(number: str, work_note: str = "Triage agent picked up this ticket.") -> dict:
@@ -161,12 +165,13 @@ def add_work_note(number: str, note: str) -> dict:
 
 
 @tool
-def escalate_incident(number: str, reason: str, group: str = "") -> dict:
-    """Hand an incident to a human team when it is beyond L1 or needs approval.
-    Unassigns the agent, moves the ticket to the escalation group, and records the reason."""
-    group = group or os.environ.get("SNOW_ESCALATION_GROUP", "")
+@tool
+def escalate_incident(number: str, reason: str) -> dict:
+    """Hand an incident to the human L2 team when it is beyond L1, could not be fixed, or needs approval.
+    Unassigns the agent and records the reason. The L2 team is fixed by configuration: do not pass a group."""
+    group = os.getenv("SNOW_ESCALATION_GROUP", "")
     if not group:
-        raise RuntimeError("No escalation group given. Set SNOW_ESCALATION_GROUP in .env.")
+        raise RuntimeError("SNOW_ESCALATION_GROUP is not set in .env")
     _request(
         "PATCH",
         f"incident/{_incident_id(number)}",

@@ -12,3 +12,4 @@ langgraph
 paramiko 
 pywinrm
 sentence-transformers
+boto3
