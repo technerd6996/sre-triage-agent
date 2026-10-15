@@ -7,6 +7,7 @@ RISK = {
     "resolve_incident": 0, "escalate_incident": 0,
     "check_reachability": 0, "check_disk_usage": 0, "lookup_ad_user": 0,
     "check_ec2_status": 0, "check_security_group": 0, "get_cloudwatch_metric": 0,
+    "escalate_l3": 0,  # notification only; no remediation happens at L3
     # L1: standard operations need a human
     "clear_temp_files": 1, "unlock_ad_account": 1,
 }
