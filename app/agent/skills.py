@@ -50,12 +50,26 @@ def pick_skill(ticket_text: str, platform: str = None):
 
 
 def build_playbook(ticket_text: str, platform: str = None):
-    """Returns (playbook_text, technical_skill_name)."""
+    """Returns (playbook_text, technical_skill_name, allowed_tool_names)."""
     skills = load_skills()
     parts = []
+    allowed = set()
+
     if BASE_SKILL in skills:
         parts.append(skills[BASE_SKILL]["body"])
+        allowed.update(skills[BASE_SKILL]["meta"].get("allowed_tools", []))
+
     name, tech = pick_skill(ticket_text, platform)
     if tech:
         parts.append(f"TECHNICAL SKILL: {name}\n{tech['body']}")
-    return "\n\n".join(parts), name
+        allowed.update(tech["meta"].get("allowed_tools", []))
+    else:
+        parts.append(
+            "TECHNICAL SKILL: none\n"
+            "No L1 automated playbook matches this issue. "
+            "Call claim_incident, call add_work_note stating no matching L1 playbook was found, "
+            "and call escalate_incident. Do not run any other tools."
+        )
+        allowed = {"claim_incident", "get_incident", "add_work_note", "escalate_incident"}
+
+    return "\n\n".join(parts), name, allowed

@@ -167,6 +167,35 @@ def clear_temp_files(target: str) -> dict:
     except Exception as e:
         return {"target": target, "error": str(e)[:300]}
 
+@tool
+def manage_service(target: str, service_name: str, action: str) -> dict:
+    """Manage a system service (start, stop, restart, status). target is 'windows' or 'linux'.
+    action must be 'start', 'stop', 'restart', or 'status'."""
+    try:
+        svc = _safe(service_name, "service_name")
+        act = action.lower()
+        if act not in ("start", "stop", "restart", "status"):
+            raise ValueError("action must be start, stop, restart, or status")
+
+        if target == "windows":
+            script = f"Get-Service -Name '{svc}' | Select-Object Name,Status | ConvertTo-Json -Compress"
+            if act != "status":
+                script = f"Restart-Service -Name '{svc}' -Force; " + script if act == "restart" else f"Set-Service -Name '{svc}' -StartupType Automatic; Start-Service -Name '{svc}'; " + script
+            return json.loads(_win(script))
+        else:
+            if act == "status":
+                out = _linux(f"systemctl is-active {svc}")
+                return {"service": svc, "status": out.strip()}
+            elif act == "restart":
+                _linux(f"sudo systemctl restart {svc}")
+            elif act == "start":
+                _linux(f"sudo systemctl start {svc}")
+            elif act == "stop":
+                _linux(f"sudo systemctl stop {svc}")
+            out = _linux(f"systemctl is-active {svc}")
+            return {"service": svc, "status": out.strip()}
+    except Exception as e:
+        return {"service": service_name, "error": str(e)[:300]}
 
 # ---- high risk: the agent must get human approval first (enforced in Phase 4) ----
 @tool

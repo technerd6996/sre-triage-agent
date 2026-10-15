@@ -24,7 +24,10 @@ RULES:
   {{"tool": "<tool_name>", "args": {{<arguments>}}}}
 - Call at most ONE tool per reply. Wait for its result before continuing.
 - Use only the tools and argument names listed above.
+- Once resolve_incident or escalate_incident succeeds, DO NOT call any more tools.
 - When you have finished, reply in plain text with no JSON."""
+
+TERMINAL_TOOLS = {"resolve_incident", "escalate_incident"}
 
 
 class ColabChat(BaseChatModel):
@@ -65,9 +68,13 @@ class ColabChat(BaseChatModel):
                     content = m.content
                 out.append({"role": "assistant", "content": content})
             elif isinstance(m, ToolMessage):
+                if m.name in TERMINAL_TOOLS and '"error"' not in str(m.content):
+                    follow_up = ("The incident is now closed or escalated. Do NOT call any more tools. "
+                                 "Reply with a two-sentence plain-text summary and no JSON.")
+                else:
+                    follow_up = "Continue with the next step in the playbook. Call ONE tool or give the final answer."
                 out.append({"role": "user",
-                            "content": f"[TOOL RESULT from {m.name}]: {m.content}\n"
-                                       f"Continue. Call another tool or give the final answer."})
+                            "content": f"[TOOL RESULT from {m.name}]: {m.content}\n{follow_up}"})
         if self.tools_spec:
             system_parts.append(self._tool_prompt())
         if system_parts:

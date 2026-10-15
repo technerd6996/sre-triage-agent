@@ -3,7 +3,7 @@ name: windows-disk-full
 description: Windows server disk space low or full (C: drive, no space left).
 systems: [windows]
 risk: medium
-keywords: [disk, space, full, windows, win-server, c:]
+keywords: [disk, space, full, c:, storage, drive, low disk, no space]
 allowed_tools: [check_reachability, check_disk_usage, clear_temp_files, add_work_note, resolve_incident, escalate_incident]
 ---
 

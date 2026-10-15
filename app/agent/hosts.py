@@ -13,3 +13,16 @@ def resolve_server(ticket_text: str):
         return None, "No known instance is named in the ticket."
     aws.ACTIVE[inst["platform"]] = inst["instance_id"]
     return inst, ""
+
+
+def resolve_default_windows():
+    """Fallback for AD user tickets that do not name a specific server: pick the running Windows instance."""
+    try:
+        win = [i for i in aws.list_instances() if i["platform"] == "windows" and i["state"] == "running"]
+        if len(win) == 1:
+            inst = win[0]
+            aws.ACTIVE["windows"] = inst["instance_id"]
+            return inst
+    except Exception:
+        pass
+    return None
