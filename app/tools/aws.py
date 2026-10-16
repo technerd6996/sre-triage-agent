@@ -14,9 +14,14 @@ _CACHE = {"at": 0.0, "instances": []}
 _TTL = 30  # seconds
 
 
+from botocore.config import Config
+
+_CFG = Config(retries={"max_attempts": 3, "mode": "standard"}, connect_timeout=5, read_timeout=15)
+
+
 @cache
 def _ec2():
-    return boto3.client("ec2", region_name=os.getenv("AWS_REGION"))
+    return boto3.client("ec2", region_name=os.getenv("AWS_REGION"), config=_CFG)
 
 
 def _flatten(inst: dict) -> dict:

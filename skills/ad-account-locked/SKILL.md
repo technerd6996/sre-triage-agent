@@ -9,23 +9,13 @@ allowed_tools: [check_reachability, lookup_ad_user, unlock_ad_account, add_work_
 
 # Active Directory account locked
 
-## Diagnose (read-only)
-1. Extract the affected username (sAMAccountName) from the ticket description. If no username is mentioned in the ticket, call add_work_note and escalate_incident stating no username was provided. Stop immediately.
-2. check_reachability with target "windows". If reachable is false, call add_work_note and escalate_incident saying the Active Directory server is unreachable. Stop immediately.
-3. lookup_ad_user with the username. Record Enabled, LockedOut, and PasswordExpired in add_work_note.
-4. If the user is not found or lookup_ad_user returns an error, call add_work_note and escalate_incident. Stop immediately.
-5. If Enabled is false, call add_work_note and escalate_incident saying the account is disabled and requires L2 review. Stop immediately.
-6. If PasswordExpired is true and LockedOut is false, call add_work_note and escalate_incident saying the password is expired. Stop immediately.
-7. If LockedOut is false and Enabled is true, call add_work_note "Account is enabled and not locked out" and call resolve_incident. Stop immediately.
-
-## Fix (needs approval)
-1. If LockedOut is true, call unlock_ad_account with the username. The engineer must approve this call.
-2. If the engineer rejects the approval, call add_work_note and escalate_incident. Do not retry.
-
-## Verify
-1. Call lookup_ad_user again with the username to confirm LockedOut is now false.
-2. If LockedOut is false, call add_work_note and resolve_incident.
-3. If LockedOut is still true, call add_work_note and escalate_incident.
+## Steps
+1. Find the username (sAMAccountName) in the ticket. If there is none, call add_work_note and escalate_incident. Stop.
+2. check_reachability with target "windows". If reachable is false, follow its next_step. Stop.
+3. lookup_ad_user with the username. Call add_work_note with Enabled, LockedOut and PasswordExpired.
+4. Follow the next_step of lookup_ad_user exactly. If it says to call unlock_ad_account, call it now. The engineer must approve this call. Do not resolve the ticket before the unlock.
+5. If the engineer rejects the approval, call add_work_note and escalate_incident. Do not retry.
+6. After unlock_ad_account, follow its next_step.
 
 ## Close notes template
-AD user <username>: Enabled=<true/false>, LockedOut before=<true/false>. Unlocked account after approval. LockedOut after=<false>.
+AD user <username>: Enabled=<true/false>, LockedOut before=<true/false>. Unlocked after approval. LockedOut after=<false>.

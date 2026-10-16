@@ -62,7 +62,7 @@ def get_cloudwatch_metric(target: str, metric: str = "CPUUtilization", minutes: 
     if metric not in ("CPUUtilization", "StatusCheckFailed"):
         return {"error": "metric must be CPUUtilization or StatusCheckFailed"}
     try:
-        cw = boto3.client("cloudwatch", region_name=os.getenv("AWS_REGION"))
+        cw = boto3.client("cloudwatch", region_name=os.getenv("AWS_REGION"), config=aws._CFG)
         end = datetime.now(timezone.utc)
         pts = cw.get_metric_statistics(
             Namespace="AWS/EC2", MetricName=metric,

@@ -2,11 +2,14 @@
 
 Tools take target="windows" or "linux" (hosts come from .env), never a free-form host.
 Tools return {"error": ...} instead of raising, so the agent can read the failure and escalate.
+Decisions (threshold checks, resolve vs escalate) are made in code and returned as "next_step",
+so a small model only has to follow the instruction.
 """
 import json
 import os
 import re
 import socket
+import time
 
 import paramiko
 import winrm
@@ -16,6 +19,24 @@ from app.tools import aws
 
 TARGETS = ("windows", "linux")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")  # blocks shell/PowerShell injection
+
+# Disk verification state (one ticket is worked at a time, so module-level state is safe)
+_CLEARED: dict[str, float] = {}   # target -> when temp files were last cleared
+_BEFORE: dict[str, dict] = {}     # target -> {disk: used_pct} before the cleanup
+VERIFY_WINDOW = 900               # seconds in which a disk check counts as the post-cleanup check
+
+_ERR_STEP = "Call add_work_note with this error, then call escalate_incident."
+
+
+# ---- config ----
+def _threshold() -> float:
+    return float(os.getenv("DISK_THRESHOLD_PCT", "85"))
+
+
+def _service_allowlist() -> set[str]:
+    raw = os.getenv("SERVICE_ALLOWLIST",
+                    "nginx,docker,postgresql,postgres,sshd,ssh,apache2,httpd,mysql,mysqld,redis,redis-server,cron")
+    return {s.strip().lower() for s in raw.split(",") if s.strip()}
 
 
 # ---- low-level helpers ----
@@ -83,6 +104,20 @@ def _safe(value: str, what: str) -> str:
     return value
 
 
+_WIN_SVC = ("Get-Service -Name '{svc}' | Select-Object Name,"
+            "@{{n='Status';e={{\"$($_.Status)\"}}}} | ConvertTo-Json -Compress")
+
+
+def _service_state(target: str, svc: str) -> str:
+    """'active' when running, else the raw state (inactive, failed, stopped, unknown...)."""
+    if target == "windows":
+        data = json.loads(_win(_WIN_SVC.format(svc=svc)))
+        s = str(data.get("Status", "")).lower()
+        return "active" if s == "running" else (s or "unknown")
+    # systemctl is-active exits non-zero for a stopped service, so '|| true' keeps the state text
+    return (_linux(f"systemctl is-active {svc} || true") or "unknown").strip().lower()
+
+
 # ---- read-only tools ----
 @tool
 def check_reachability(target: str) -> dict:
@@ -94,12 +129,14 @@ def check_reachability(target: str) -> dict:
             pass
         return {"target": target, "reachable": True, "port": port}
     except Exception as e:
-        return {"target": target, "reachable": False, "error": str(e)[:200]}
+        return {"target": target, "reachable": False, "error": str(e)[:200],
+                "next_step": "The server is not reachable. Call add_work_note, then call escalate_incident."}
 
 
 @tool
 def check_disk_usage(target: str) -> dict:
-    """Get disk usage for a server. target is 'windows' or 'linux'. Returns each disk with percent used."""
+    """Get disk usage for a server. target is 'windows' or 'linux'. Returns each disk with percent used
+    and a next_step to follow."""
     try:
         disks = []
         if target == "windows":
@@ -125,15 +162,60 @@ def check_disk_usage(target: str) -> dict:
                         {"disk": p[5], "size_gb": round(int(p[1]) / 1048576, 1),
                          "free_gb": round(int(p[3]) / 1048576, 1), "used_pct": float(p[4].rstrip("%"))}
                     )
-        return {"target": target, "disks": disks}
+        if not disks:
+            raise RuntimeError("No disks were returned by the server.")
+
+        thr = _threshold()
+        for d in disks:
+            d["over_threshold"] = d["used_pct"] is not None and d["used_pct"] > thr
+        over = [d["disk"] for d in disks if d["over_threshold"]]
+        res = {"target": target, "threshold_pct": thr, "disks": disks, "over_threshold": over}
+
+        if time.time() - _CLEARED.get(target, 0) < VERIFY_WINDOW:   # this is the post-cleanup check
+            _CLEARED.pop(target, None)
+            res["before_used_pct"] = _BEFORE.get(target, {})
+            if over:
+                res["next_step"] = (f"Still over the {thr}% threshold after cleanup ({', '.join(over)}). "
+                                    "Call add_work_note with the before and after used_pct, then call escalate_incident.")
+            else:
+                res["next_step"] = ("Cleanup verified: every disk is now under the threshold. Call add_work_note "
+                                    "with the before and after used_pct, then call resolve_incident.")
+        else:
+            _BEFORE[target] = {d["disk"]: d["used_pct"] for d in disks}
+            if over:
+                res["next_step"] = (f"Over the {thr}% threshold: {', '.join(over)}. Call clear_temp_files with "
+                                    f"target '{target}' (needs engineer approval).")
+            else:
+                res["next_step"] = ("No disk is over the threshold. Call add_work_note 'no disk issue found', "
+                                    "then call resolve_incident.")
+        return res
     except Exception as e:
-        return {"target": target, "error": str(e)[:300]}
+        return {"target": target, "error": str(e)[:300], "next_step": _ERR_STEP}
+
+
+@tool
+def check_service_status(target: str, service_name: str) -> dict:
+    """Check whether a service is running. target is 'windows' or 'linux'. Read-only.
+    Returns the status and a next_step to follow."""
+    try:
+        if target not in TARGETS:
+            raise ValueError(f"target must be one of {TARGETS}")
+        svc = _safe(service_name, "service_name")
+        status = _service_state(target, svc)
+        if status == "active":
+            step = (f"{svc} is already running. Call add_work_note with this result, then call resolve_incident.")
+        else:
+            step = (f"{svc} is not running (status: {status}). Call start_service with target '{target}' and "
+                    f"service_name '{svc}' (needs engineer approval).")
+        return {"target": target, "service": svc, "status": status, "next_step": step}
+    except Exception as e:
+        return {"target": target, "service": service_name, "error": str(e)[:300], "next_step": _ERR_STEP}
 
 
 @tool
 def lookup_ad_user(username: str) -> dict:
     """Look up an Active Directory user by username (sAMAccountName). Returns whether the account is
-    enabled, locked out, or has an expired password. Use it for access issues."""
+    enabled, locked out, or has an expired password, and a next_step to follow. Use it for access issues."""
     try:
         u = _safe(username, "username")
         script = (
@@ -142,16 +224,27 @@ def lookup_ad_user(username: str) -> dict:
             "Select-Object SamAccountName,Enabled,LockedOut,PasswordExpired,"
             "@{n='LastLogon';e={\"$($_.LastLogonDate)\"}} | ConvertTo-Json -Compress"
         )
-        return json.loads(_win(script))
+        res = json.loads(_win(script))
+        if not res.get("Enabled"):
+            step = "The account is disabled and needs L2 review. Call add_work_note, then call escalate_incident."
+        elif res.get("LockedOut"):
+            step = (f"The account is locked out. Call unlock_ad_account with username '{u}' "
+                    "(needs engineer approval). Do not resolve the ticket yet.")
+        elif res.get("PasswordExpired"):
+            step = "The password is expired, not locked. Call add_work_note, then call escalate_incident."
+        else:
+            step = "The account is enabled and not locked out. Call add_work_note with this, then call resolve_incident."
+        res["next_step"] = step
+        return res
     except Exception as e:
-        return {"username": username, "error": str(e)[:300]}
+        return {"username": username, "error": str(e)[:300], "next_step": _ERR_STEP}
 
 
-# ---- low-risk write ----
+# ---- writes (these need human approval, see policy.py) ----
 @tool
 def clear_temp_files(target: str) -> dict:
     """Delete temp files older than 1 day on a server to free disk space. target is 'windows' or 'linux'.
-    Safe and low risk. Run check_disk_usage afterwards to verify."""
+    Needs engineer approval. Afterwards call check_disk_usage to verify."""
     try:
         if target == "windows":
             script = (
@@ -161,46 +254,46 @@ def clear_temp_files(target: str) -> dict:
                 "$f | Remove-Item -Force -ErrorAction SilentlyContinue; "
                 "Write-Output ([math]::Round($b/1MB,1))"
             )
-            return {"target": target, "freed_mb": float(_win(script) or 0)}
-        out = _linux("find /tmp -xdev -type f -mtime +1 -delete -print | wc -l")
-        return {"target": target, "files_deleted": int(out or 0)}
+            res = {"target": target, "freed_mb": float(_win(script) or 0)}
+        else:
+            out = _linux("find /tmp -xdev -type f -mtime +1 -delete -print | wc -l")
+            res = {"target": target, "files_deleted": int(out or 0)}
+        _CLEARED[target] = time.time()
+        res["next_step"] = f"Cleanup done. Call check_disk_usage with target '{target}' to verify."
+        return res
     except Exception as e:
-        return {"target": target, "error": str(e)[:300]}
+        return {"target": target, "error": str(e)[:300], "next_step": _ERR_STEP}
+
 
 @tool
-def manage_service(target: str, service_name: str, action: str) -> dict:
-    """Manage a system service (start, stop, restart, status). target is 'windows' or 'linux'.
-    action must be 'start', 'stop', 'restart', or 'status'."""
+def start_service(target: str, service_name: str) -> dict:
+    """Start a stopped service. target is 'windows' or 'linux'. Needs engineer approval.
+    Returns the new status and a next_step to follow."""
     try:
+        if target not in TARGETS:
+            raise ValueError(f"target must be one of {TARGETS}")
         svc = _safe(service_name, "service_name")
-        act = action.lower()
-        if act not in ("start", "stop", "restart", "status"):
-            raise ValueError("action must be start, stop, restart, or status")
-
+        if svc.lower() not in _service_allowlist():
+            raise ValueError(f"Service '{svc}' is not on the allowed list (SERVICE_ALLOWLIST).")
         if target == "windows":
-            script = f"Get-Service -Name '{svc}' | Select-Object Name,Status | ConvertTo-Json -Compress"
-            if act != "status":
-                script = f"Restart-Service -Name '{svc}' -Force; " + script if act == "restart" else f"Set-Service -Name '{svc}' -StartupType Automatic; Start-Service -Name '{svc}'; " + script
-            return json.loads(_win(script))
+            _win(f"Start-Service -Name '{svc}'")
         else:
-            if act == "status":
-                out = _linux(f"systemctl is-active {svc}")
-                return {"service": svc, "status": out.strip()}
-            elif act == "restart":
-                _linux(f"sudo systemctl restart {svc}")
-            elif act == "start":
-                _linux(f"sudo systemctl start {svc}")
-            elif act == "stop":
-                _linux(f"sudo systemctl stop {svc}")
-            out = _linux(f"systemctl is-active {svc}")
-            return {"service": svc, "status": out.strip()}
+            _linux(f"sudo -n systemctl start {svc}")
+        status = _service_state(target, svc)
+        if status == "active":
+            step = (f"{svc} is now running. Call add_work_note with before and after status, "
+                    "then call resolve_incident.")
+        else:
+            step = (f"{svc} is still not running (status: {status}). Call add_work_note with this, "
+                    "then call escalate_incident.")
+        return {"target": target, "service": svc, "status": status, "next_step": step}
     except Exception as e:
-        return {"service": service_name, "error": str(e)[:300]}
+        return {"target": target, "service": service_name, "error": str(e)[:300], "next_step": _ERR_STEP}
 
-# ---- high risk: the agent must get human approval first (enforced in Phase 4) ----
+
 @tool
 def unlock_ad_account(username: str) -> dict:
-    """Unlock a locked Active Directory account. HIGH RISK: requires human approval before it runs."""
+    """Unlock a locked Active Directory account. Needs engineer approval before it runs."""
     try:
         u = _safe(username, "username")
         script = (
@@ -209,10 +302,17 @@ def unlock_ad_account(username: str) -> dict:
             f"Get-ADUser -Identity '{u}' -Properties LockedOut | "
             "Select-Object SamAccountName,LockedOut | ConvertTo-Json -Compress"
         )
-        return json.loads(_win(script))
+        res = json.loads(_win(script))
+        if res.get("LockedOut"):
+            res["next_step"] = "The account is still locked. Call add_work_note, then call escalate_incident."
+        else:
+            res["next_step"] = ("The account is now unlocked. Call add_work_note with before and after "
+                                "LockedOut values, then call resolve_incident.")
+        return res
     except Exception as e:
-        return {"username": username, "error": str(e)[:300]}
+        return {"username": username, "error": str(e)[:300], "next_step": _ERR_STEP}
 
 
-INFRA_TOOLS = [check_reachability, check_disk_usage, lookup_ad_user, clear_temp_files, unlock_ad_account]
+INFRA_TOOLS = [check_reachability, check_disk_usage, check_service_status, lookup_ad_user,
+               clear_temp_files, start_service, unlock_ad_account]
 HIGH_RISK_TOOLS = {"unlock_ad_account"}

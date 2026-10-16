@@ -6,6 +6,8 @@ The docstring is what the LLM reads to decide when to use it, so keep it short.
 import os
 import requests
 from langchain_core.tools import tool
+import time
+from datetime import datetime, timezone
 
 STATE_IN_PROGRESS = 2  # "WIP"
 STATE_RESOLVED = 6
@@ -27,25 +29,40 @@ def _assignee() -> str:
     return os.getenv("SNOW_ASSIGNEE", "svc_triage_01")
 
 
-# ---- low-level helpers ----
+RETRY_METHODS = {"GET", "PATCH", "PUT"}  # POST (create) is never retried: it could duplicate a ticket
+
+
 def _request(method: str, path: str, **kwargs):
-    """Single place that talks to SNOW. Raises with the response body on errors."""
+    """Single place that talks to SNOW. Retries transient failures on safe methods.
+    Raises with the response body on errors."""
     base = os.environ["SNOW_INSTANCE"].strip().rstrip("/")
     if not base.startswith("http"):
         base = f"https://{base}.service-now.com" if "." not in base else f"https://{base}"
     auth = (os.environ["SNOW_USER"], os.environ["SNOW_PASSWORD"])
-    resp = requests.request(
-        method,
-        f"{base}/api/now/table/{path}",
-        auth=auth,
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
-        timeout=20,
-        **kwargs,
-    )
+    attempts = 3 if method.upper() in RETRY_METHODS else 1
+    resp = None
+    for i in range(attempts):
+        try:
+            resp = requests.request(
+                method,
+                f"{base}/api/now/table/{path}",
+                auth=auth,
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                timeout=(5, 20),
+                **kwargs,
+            )
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if i == attempts - 1:
+                raise RuntimeError(f"SNOW unreachable: {str(e)[:200]}")
+            time.sleep(2 ** i)
+            continue
+        if resp.status_code in (429, 502, 503, 504) and i < attempts - 1:
+            time.sleep(2 ** i)
+            continue
+        break
     if not resp.ok:
         raise RuntimeError(f"SNOW {resp.status_code} on {method} {path}: {resp.text[:500]}")
     return resp.json()["result"]
-
 
 def _lookup_sys_id(table: str, query: str, label: str) -> str:
     rows = _request(
@@ -95,23 +112,57 @@ def get_incident(number: str) -> dict:
     """Fetch a ServiceNow incident by number (e.g. INC0010001). Returns its key fields."""
     return _fetch(number)
 
+def search_users(text: str, limit: int = 8) -> list[dict]:
+    """Type-ahead for the Caller field: active users matching name, user name or email."""
+    text = text.replace("^", " ").strip()[:50]
+    rows = _request("GET", "sys_user", params={
+        "sysparm_query": f"active=true^nameLIKE{text}^ORuser_nameLIKE{text}^ORemailLIKE{text}",
+        "sysparm_limit": limit,
+        "sysparm_fields": "user_name,name,email",
+    })
+    return [{"user_name": r.get("user_name", ""), "name": r.get("name", ""), "email": r.get("email", "")}
+            for r in rows]
+
+
+def find_ci_id(name: str) -> str | None:
+    """sys_id of the CMDB configuration item with this name, or None if there is none."""
+    try:
+        rows = _request("GET", "cmdb_ci", params={
+            "sysparm_query": f"name={name.replace('^', ' ')}", "sysparm_limit": 1, "sysparm_fields": "sys_id"})
+        return rows[0]["sys_id"] if rows else None
+    except Exception:
+        return None
+
+
 @tool
-def create_incident(short_description: str, description: str, urgency: int = 3) -> dict:
+def create_incident(short_description: str, description: str, urgency: int = 3, impact: int = 3,
+                    caller: str = "", ci: str = "") -> dict:
     """Create a ServiceNow incident, assign it to the triage agent in the L1 group, and move it to
-    In Progress. urgency: 1=high, 2=medium, 3=low. Returns the incident as it now stands."""
-    created = _request(
-        "POST",
-        "incident",
-        json={
-            "short_description": short_description,
-            "description": description,
-            "urgency": str(urgency),
-            "contact_type": os.getenv("SNOW_CHANNEL", "virtual_agent"),
-            "caller_id": _user_id(_caller()),
-            "assignment_group": _group_id(_group()),
-            "assigned_to": _user_id(_assignee()),
-        },
+    In Progress. urgency and impact: 1=high, 2=medium, 3=low. caller is a ServiceNow user_name
+    (defaults to the integration user). ci is the configuration item (server) name.
+    Returns the incident as it now stands."""
+    body = {
+        "short_description": short_description,
+        "description": description,
+        "urgency": str(urgency),
+        "impact": str(impact),
+        "contact_type": os.getenv("SNOW_CHANNEL", "virtual_agent"),
+        "caller_id": _user_id(caller or _caller()),
+        "assignment_group": _group_id(_group()),
+        "assigned_to": _user_id(_assignee()),
+    }
+    if ci:
+        ci_id = find_ci_id(ci)
+        if ci_id:
+            body["cmdb_ci"] = ci_id
+    created = _request("POST", "incident", json=body)
+    # Assignment is done. Now move to WIP as a separate step.
+    _request(
+        "PATCH",
+        f"incident/{created['sys_id']}",
+        json={"state": str(STATE_IN_PROGRESS), "work_notes": "Assigned to triage agent. Work started."},
     )
+    return _fetch(created["number"])
     # Assignment is done. Now move to WIP as a separate step.
     _request(
         "PATCH",
@@ -194,6 +245,59 @@ def list_queue() -> list:
         },
     )
     return [r["number"] for r in rows]
+
+# Used only when ServiceNow has no SLA records on the ticket. (response_min, resolution_min) by priority.
+# These numbers are placeholders. Replace them with your real SLAs.
+SLA_FALLBACK = {"1": (15, 240), "2": (30, 480), "3": (120, 1440), "4": (240, 4320)}
+
+
+def _human(minutes: float) -> str:
+    m = max(int(round(minutes)), 1)
+    if m < 60:
+        return f"{m} minute{'s' if m != 1 else ''}"
+    h, rem = divmod(m, 60)
+    if h < 24:
+        return f"{h} hour{'s' if h != 1 else ''}" + (f" {rem} minutes" if rem else "")
+    d, h = divmod(h, 24)
+    return f"{d} day{'s' if d != 1 else ''}" + (f" {h} hours" if h else "")
+
+
+def get_sla(number: str) -> dict:
+    """Response and resolution targets as readable text. Reads the ticket's task_sla records
+    (SLA names containing 'response' / 'resolution'); falls back to SLA_FALLBACK by priority."""
+    out = {"response": None, "resolution": None, "source": "servicenow"}
+    try:
+        rows = _request("GET", "task_sla", params={
+            "sysparm_query": f"task={_incident_id(number)}",
+            "sysparm_fields": "sla.name,planned_end_time",
+            "sysparm_limit": 10,
+        })
+        now = datetime.now(timezone.utc)
+        for r in rows:
+            name = str(r.get("sla.name", "")).lower()
+            end = r.get("planned_end_time")
+            if not end:
+                continue
+            due = datetime.strptime(end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            if due <= now:
+                continue
+            text = _human((due - now).total_seconds() / 60)
+            if "response" in name and not out["response"]:
+                out["response"] = text
+            elif "resolution" in name and not out["resolution"]:
+                out["resolution"] = text
+    except Exception:
+        pass
+    if not (out["response"] and out["resolution"]):
+        try:
+            prio = (_fetch(number).get("priority") or "3")[:1]
+        except Exception:
+            prio = "3"
+        resp_m, reso_m = SLA_FALLBACK.get(prio, SLA_FALLBACK["3"])
+        out["response"] = out["response"] or _human(resp_m)
+        out["resolution"] = out["resolution"] or _human(reso_m)
+        out["source"] = "fallback"
+    return out
 
 # The agent will import this list in Phase 3
 SNOW_TOOLS = [get_incident, create_incident, claim_incident, add_work_note, escalate_incident, resolve_incident]

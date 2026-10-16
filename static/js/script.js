@@ -7,6 +7,10 @@ const fileInput = document.getElementById('chat-file');
 const turnCount = document.getElementById('turn-count');
 const chatListContainer = document.getElementById('chat-list');
 const slider = document.getElementById('context-slider');
+const WRAP_Q = 'Is there anything else we can help you with?';
+const DEFAULT_PLACEHOLDER = input ? input.placeholder : '';
+const watchers = {};   // runId -> poll timer
+const FIXED_RE = /\b(fixed|resolved|solved|sorted)\b|\bworking\s+(now|again|fine)\b|\b(it'?s|is)\s+working\b/i;
 
 // --- Security helpers ---
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -146,7 +150,8 @@ function renderChatList() {
         btn.type = 'button';
         btn.className = `flex items-center gap-3 flex-1 text-left truncate text-[14px] ${isActive ? 'text-amber-500 font-medium' : 'text-gray-400 hover:text-gray-200'}`;
         btn.title = chat.title;
-        btn.innerHTML = `<span class="text-[10px] shrink-0">${isActive ? '●' : '○'}</span> <span class="truncate">${esc(chat.title)}</span>`;
+        const dot = chat.closed ? '🔒' : (isActive ? '●' : '○');
+        btn.innerHTML = `<span class="text-[10px] shrink-0">${dot}</span> <span class="truncate">${esc(chat.title)}</span>${chat.closed ? '<span class="text-[10px] mono text-gray-500 shrink-0 ml-1">closed</span>' : ''}`;
         btn.onclick = () => switchChat(id);
 
         const dotsBtn = document.createElement('button');
@@ -165,6 +170,15 @@ function renderChatList() {
         renameBtn.innerHTML = '✏️ Rename';
         renameBtn.onclick = (e) => renameChat(id, e);
         menu.appendChild(renameBtn);
+
+        if (!chat.closed) {
+            const closeBtn = document.createElement('button');
+            closeBtn.type = 'button';
+            closeBtn.className = 'text-left px-3 py-2 text-[12.5px] text-gray-300 hover:bg-[#232B33] hover:text-white flex items-center gap-2 transition-colors border-t border-[#232B33]/50';
+            closeBtn.innerHTML = '🔒 Close chat';
+            closeBtn.onclick = (e) => { e.stopPropagation(); openMenuId = null; closeChat(id, true); };
+            menu.appendChild(closeBtn);
+        }
 
         if (Object.keys(chats).length > 1) {
             const delBtn = document.createElement('button');
@@ -188,14 +202,16 @@ function createNewChat() {
     chats[newId] = { title: "New Triage", history: [] };
     switchChat(newId);
 }
-
 function switchChat(id) {
     activeChatId = id;
     renderChatList();
     if (messagesWrapper) messagesWrapper.innerHTML = '';
 
-    const hist = chats[activeChatId].history;
-    if (!hist || hist.length === 0) {
+    const chat = chats[activeChatId];
+    const hist = chat.history || [];
+    const notes = chat.notes || [];
+
+    if (!hist.length && !notes.length) {
         if (emptyState) emptyState.style.display = 'flex';
         if (messagesWrapper) {
             messagesWrapper.classList.add('hidden');
@@ -207,12 +223,22 @@ function switchChat(id) {
             messagesWrapper.classList.remove('hidden');
             messagesWrapper.classList.add('flex');
         }
-        const metaStore = chats[activeChatId].meta || {};
-        hist.forEach((msg, i) => appendDOM(msg.role, msg.content,
-            msg.role === 'assistant' ? metaStore[i] : undefined));
+        const metaStore = chat.meta || {};
+        const showNotes = (at) => notes.filter((n) => n.at === at).forEach((n) => appendDOM('assistant', n.text));
+        hist.forEach((msg, i) => {
+            showNotes(i);
+            appendDOM(msg.role, msg.content, msg.role === 'assistant' ? metaStore[i] : undefined);
+        });
+        showNotes(hist.length);
+
+        if (chat.closed) renderClosedFooter();
+        else if (chat.wrap === 'asking') renderWrapUp(id);
+        else if (chat.run) resumeRun(id);
     }
-    if (turnCount) turnCount.innerText = ((hist ? hist.length : 0) / 2).toString();
+    if (turnCount) turnCount.innerText = (hist.length / 2).toString();
+    applyComposerState();
 }
+
 
 const RELATED_RE = /^[ \t]*(?:[-*•][ \t]+)?(?:\*\*)?Related(?:\*\*)?:(?:\*\*)?[ \t]*(.*)$/gim;
 
@@ -251,14 +277,18 @@ function sourceBadgeHTML(sources, answer) {
 
 function formatSeverity(content) {
     content = normalizeRelated(content);
+    content = content.replace(/\s*\bSource:\s*[^\n]*$/i, '').trim();  // shown as the source badge instead
     const match = content.match(/SEVERITY:\s*(INFO|WARN|CRITICAL)/i);
+    let html;
     if (match) {
         const sev = match[1].toUpperCase();
         const cleanContent = content.replace(match[0], '').trim();
         const marker = `<div class="sev-card sev-${sev}"><span class="w-2 h-2 rounded-full bg-current"></span>SEVERITY — ${sev}</div>`;
-        return marker + renderMarkdown(cleanContent);
+        html = marker + renderMarkdown(cleanContent);
+    } else {
+        html = renderMarkdown(content);
     }
-    return renderMarkdown(content);
+    return `<div class="kb-answer">${html}</div>`;
 }
 
 const ATTACHMENT_RE = /^\[Attached file: ([^\]]+)\]\n\n([\s\S]*)$/;
@@ -277,7 +307,7 @@ function renderUserContent(content) {
         </details>`;
 }
 
-function appendDOM(role, content, sources) {
+function appendDOM(role, content, info) {
     if (emptyState) emptyState.style.display = 'none';
     if (messagesWrapper) {
         messagesWrapper.classList.remove('hidden');
@@ -300,13 +330,151 @@ function appendDOM(role, content, sources) {
         <div class="source-line"></div>
     `;
 
-    if (!isUser && sources) {
-        div.querySelector('.source-line').innerHTML = sourceBadgeHTML(sources, content);
+    if (!isUser && info) {
+        const srcs = Array.isArray(info) ? info : (info.sources || []);   // old saves stored a bare array
+        div.querySelector('.source-line').innerHTML = sourceBadgeHTML(srcs, content);
+        const inc = Array.isArray(info) ? null : info.incident;
+        if (inc && ['can_report', 'needs_server'].includes(inc.status) && !chats[activeChatId]?.closed) {
+            renderCreateIncidentAction(div.querySelector('.content'), inc.description || '', inc.suggested_server);
+        }
     }
 
     if (messagesWrapper) messagesWrapper.appendChild(div);
     if (chatContainer) chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
     return div.querySelector('.content');
+}
+
+const THINKING_STEPS = ['Thinking…', 'Searching runbooks…', 'Checking the knowledge graph…', 'Putting the answer together…'];
+
+function startThinking(node) {
+    node.innerHTML = `<div class="thinking"><span class="thinking-dots"><i></i><i></i><i></i></span><span class="thinking-label shimmer">${THINKING_STEPS[0]}</span></div>`;
+    const label = node.querySelector('.thinking-label');
+    let i = 0;
+    const timer = setInterval(() => {
+        i = Math.min(i + 1, THINKING_STEPS.length - 1);   // stays on the last step
+        label.textContent = THINKING_STEPS[i];
+    }, 2500);
+    return () => clearInterval(timer);
+}
+
+function setComposer(enabled, placeholder) {
+    [input, sendBtn, fileInput].forEach((el) => { if (el) el.disabled = !enabled; });
+    if (input) input.placeholder = placeholder || DEFAULT_PLACEHOLDER;
+    if (sendBtn) sendBtn.classList.toggle('opacity-50', !enabled);
+}
+
+function applyComposerState() {
+    const chat = chats[activeChatId];
+    if (chat.closed) setComposer(false, 'This chat is closed. Start a new chat to continue.');
+    else if (chat.wrap === 'asking') setComposer(false, 'Choose Yes or No above to continue…');
+    else setComposer(true);
+}
+
+// Saves a UI-only assistant message with the chat and shows it if that chat is open
+function pushNote(chatId, text) {
+    const chat = chats[chatId];
+    (chat.notes ??= []).push({ at: chat.history.length, text });
+    saveState();
+    return chatId === activeChatId ? appendDOM('assistant', text) : null;
+}
+
+function renderWrapUp(chatId) {
+    const body = appendDOM('assistant', WRAP_Q);
+    const row = mkEl('div', 'mt-3 flex gap-3');
+    const yes = mkEl('button', 'px-5 py-2 rounded-lg bg-[#FFB000] text-black font-semibold text-[14px] hover:bg-[#E6A000]', 'Yes');
+    const no = mkEl('button', 'px-5 py-2 rounded-lg border border-[#2E3744] text-gray-200 text-[14px] hover:border-gray-500', 'No');
+    yes.type = no.type = 'button';
+    const answer = (wantsMore) => {
+        const chat = chats[chatId];
+        const line = `${WRAP_Q} — **${wantsMore ? 'Yes' : 'No'}**`;
+        body.innerHTML = formatSeverity(line);          // replaces the buttons with the answered line
+        chat.wrap = null;
+        (chat.notes ??= []).push({ at: chat.history.length, text: line });
+        if (wantsMore) {
+            pushNote(chatId, 'Sure, what else can I help you with?');
+            applyComposerState();
+        } else {
+            closeChat(chatId);
+        }
+    };
+    yes.onclick = () => answer(true);
+    no.onclick = () => answer(false);
+    row.append(yes, no);
+    body.appendChild(row);
+}
+
+function renderClosedFooter() {
+    const b = mkEl('button', 'self-start mt-2 mb-8 px-4 py-2 rounded-lg border border-[#2E3744] text-gray-200 text-[14px] hover:border-[#FFB000] hover:text-[#FFB000]', '＋ Start a new chat');
+    b.type = 'button';
+    b.onclick = createNewChat;
+    if (messagesWrapper) messagesWrapper.appendChild(b);
+}
+
+function closeChat(chatId, rerender) {
+    const chat = chats[chatId];
+    const text = '🔒 This chat is now closed. Thank you for contacting TRIAGE-1.';
+    chat.closed = true;
+    chat.wrap = null;
+    chat.run = null;
+    (chat.notes ??= []).push({ at: chat.history.length, text });
+    saveState();
+    if (chatId !== activeChatId) { renderChatList(); return; }
+    if (rerender) { switchChat(chatId); return; }
+    appendDOM('assistant', text);
+    renderClosedFooter();
+    applyComposerState();
+    renderChatList();
+}
+
+// Runs when the agent run for a ticket ends
+async function onRunFinished(chatId, outcome, number) {
+    const chat = chats[chatId];
+    if (!chat || !chat.run || chat.run.number !== number) return;   // also stops double-firing
+    chat.run = null;
+    let text;
+    if (outcome === 'resolved') {
+        text = `✅ Ticket **${number}** has been resolved.`;
+    } else if (outcome === 'escalated') {
+        let sla = {};
+        try { sla = await (await fetch(`/api/issues/${encodeURIComponent(number)}/sla`)).json(); } catch (e) {}
+        text = `⬆️ Ticket **${number}** has been passed to our L2 team. An engineer will reach you in **${sla.response || 'a short while'}**, and the issue should be fixed in **${sla.resolution || 'the agreed resolution time'}**.`;
+    } else if (outcome === 'queued') {
+        text = `🎫 Ticket **${number}** has been created. TRIAGE-1 will pick it up shortly.`;
+    } else {
+        text = `Ticket **${number}** is still open. The support team will follow up with you.`;
+    }
+    pushNote(chatId, text);
+    chat.wrap = 'asking';
+    saveState();
+    if (chatId === activeChatId) { renderWrapUp(chatId); applyComposerState(); }
+}
+
+// After a refresh, re-attach to a run that was still going
+function resumeRun(chatId) {
+    const r = chats[chatId].run;
+    const body = appendDOM('assistant', `Checking on ticket **${r.number}**…`);
+    watchRun(body, r.runId, r.number, r.server, chatId);
+}
+
+function clearIncidentButtons(chat) {
+    document.querySelectorAll('.incident-action').forEach((n) => n.remove());
+    Object.values(chat.meta || {}).forEach((m) => { if (m && !Array.isArray(m)) m.incident = null; });
+}
+
+function looksFixed(t) {
+    return t.length <= 80 && !t.includes('?') && FIXED_RE.test(t) && !/\b(not|never|still)\b|n't/i.test(t);
+}
+
+function handleFixed(text) {
+    const chat = chats[activeChatId];
+    const reply = 'Glad to hear it is sorted! 🎉';
+    chat.history.push({ role: 'user', content: text }, { role: 'assistant', content: reply });
+    appendDOM('assistant', reply);
+    chat.wrap = 'asking';
+    saveState();
+    renderWrapUp(activeChatId);
+    applyComposerState();
+    if (turnCount) turnCount.innerText = (chat.history.length / 2).toString();
 }
 
 let busy = false;
@@ -347,9 +515,7 @@ async function streamResponse(query) {
     const activeHistory = chat.history;
     const contentNode = appendDOM('assistant', '');
 
-    if (contentNode) {
-        contentNode.innerHTML = `<div class="mono text-[#FFB000] text-[13px] animate-pulse mt-1 flex items-center gap-2">▮ Diagnosing...</div>`;
-    }
+    const stopThinking = contentNode ? startThinking(contentNode) : () => {}; 
     if (chatContainer) chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
 
     const maxTurns = slider ? parseInt(slider.value, 10) : 6;
@@ -388,6 +554,7 @@ async function streamResponse(query) {
 
             if (parsed.text) {
                 if (isFirstChunk && contentNode) {
+                    stopThinking();
                     contentNode.innerHTML = "";
                     isFirstChunk = false;
                 }
@@ -424,7 +591,7 @@ async function streamResponse(query) {
         if (turnCount) turnCount.innerText = (activeHistory.length / 2).toString();
 
         const store = (chat.meta ??= {});
-        store[activeHistory.length - 1] = meta.sources;
+        store[activeHistory.length - 1] = { sources: meta.sources, incident: meta.incident || null };
         saveState();
 
         const sourceLine = contentNode?.parentElement?.querySelector('.source-line');
@@ -438,8 +605,15 @@ async function streamResponse(query) {
             sourceLine.innerHTML = badgeHTML;
         }
 
-        if (meta.incident?.status === 'needs_server' && contentNode) {
-            renderServerPrompt(contentNode, meta.incident.description || query);
+        if (['can_report', 'needs_server'].includes(meta.incident?.status) && contentNode) {
+            renderCreateIncidentAction(contentNode, meta.incident.description || query, meta.incident.suggested_server);
+        }
+
+        const citedSop = (meta.sources || []).some((id) => fullText.includes(id));
+        if (citedSop && !meta.incident && !/SEVERITY:/i.test(fullText)) {
+            chat.wrap = 'asking';
+            saveState();
+            if (chatId === activeChatId) renderWrapUp(chatId);
         }
 
     } catch (err) {
@@ -448,11 +622,9 @@ async function streamResponse(query) {
             contentNode.innerHTML = `<span class="text-red-400">Request failed: ${esc(err.message)}<br><span class="text-gray-500 text-[13px]">Check the uvicorn terminal for the full traceback.</span></span>`;
         }
     } finally {
+        stopThinking();
         busy = false;
-        if (sendBtn) {
-            sendBtn.disabled = false;
-            sendBtn.classList.remove('opacity-50');
-        }
+        applyComposerState();
     }
 }
 
@@ -464,7 +636,7 @@ function showGreeting() {
     btn.type = 'button';
     btn.textContent = '🛠 Report an Issue';
     btn.className = 'mt-4 px-4 py-2 rounded-lg bg-[#FFB000] text-black font-semibold text-[14px] hover:bg-[#E6A000]';
-    btn.onclick = startIssueFlow;
+    btn.onclick = () => startIssueFlow();
     body.appendChild(btn);
 }
 
@@ -475,10 +647,12 @@ function mkEl(tag, cls, text) {
     return n;
 }
 
-async function renderServerPrompt(container, issueDescription) {
+async function renderServerPrompt(container, issueDescription, suggested) {
     const box = mkEl('div', 'mt-4 p-4 rounded-xl bg-[#12161C] border border-[#FFB000]/40');
     const title = mkEl('div', 'mono text-[12px] uppercase tracking-wider text-[#FFB000] font-semibold mb-1', '⚡ Action Required: Select Affected Server');
-    const sub = mkEl('p', 'text-[13.5px] text-gray-300 mb-3', 'Which server is experiencing this issue? Pick a server below to raise a ServiceNow ticket and start TRIAGE-1:');
+    const sub = mkEl('p', 'text-[13.5px] text-gray-300 mb-3', suggested
+        ? `Looks like this is about ${suggested}. Confirm the server to raise a ServiceNow ticket and start TRIAGE-1:`
+        : 'Which server is experiencing this issue? Pick a server below to raise a ServiceNow ticket and start TRIAGE-1:');
     const listWrap = mkEl('div', 'flex flex-wrap gap-2');
     const statusMsg = mkEl('div', 'text-[13px] text-gray-400 mt-2 mono', 'Loading servers…');
 
@@ -522,6 +696,8 @@ async function renderServerPrompt(container, issueDescription) {
                             return link;
                         })()
                     );
+                    box.replaceChildren();
+                    watchRun(box, data.run_id, data.number, s.name);
                 } catch (err) {
                     statusMsg.className = 'text-[13px] text-red-400 mt-2 mono';
                     statusMsg.textContent = err.message;
@@ -536,101 +712,173 @@ async function renderServerPrompt(container, issueDescription) {
     }
 }
 
-function startIssueFlow() {
-    if (document.getElementById('issue-modal')) return;
-    let selected = null, timer = null;
-
-    const overlay = mkEl('div', 'fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4');
-    overlay.id = 'issue-modal';
-    const card = mkEl('div', 'w-full max-w-lg rounded-2xl bg-[#12161C] border border-[#2E3744] p-6 shadow-2xl');
-    const close = () => overlay.remove();
-
-    const field = 'w-full rounded-lg bg-[#0A0D10] border border-[#2E3744] px-3 py-2.5 text-[14px] text-white outline-none focus:border-[#FFB000]';
-    const search = mkEl('input', field);
-    search.placeholder = 'Start typing a server name…';
-    search.autocomplete = 'off';
-    const list = mkEl('div', 'hidden absolute left-0 right-0 top-full mt-1 rounded-lg bg-[#171C24] border border-[#2E3744] z-10 overflow-hidden');
-    const wrap = mkEl('div', 'relative');
-    wrap.append(search, list);
-
-    const desc = mkEl('textarea', field + ' resize-none');
-    desc.rows = 4;
-    desc.placeholder = 'What is going wrong? For example: disk is almost full, cannot connect, service is down…';
-    const err = mkEl('div', 'text-[13px] text-red-400 min-h-[18px] mt-3');
-    const cancel = mkEl('button', 'px-4 py-2 rounded-lg border border-[#2E3744] text-gray-300 text-[14px] hover:border-gray-500', 'Cancel');
-    cancel.type = 'button';
-    const submit = mkEl('button', 'px-5 py-2 rounded-lg bg-[#FFB000] text-black font-semibold text-[14px] hover:bg-[#E6A000] disabled:opacity-50', 'Submit');
-    submit.type = 'button';
-    const btns = mkEl('div', 'flex justify-end gap-3 mt-2');
-    btns.append(cancel, submit);
-
-    card.append(
-        mkEl('h3', 'text-[18px] font-semibold text-white mb-4', 'Report an Issue'),
-        mkEl('label', 'block text-[12px] mono uppercase tracking-wider text-gray-400 mb-2', 'Server'), wrap,
-        mkEl('label', 'block text-[12px] mono uppercase tracking-wider text-gray-400 mt-4 mb-2', 'Description'), desc,
-        err, btns,
+function renderCreateIncidentAction(container, description, server) {
+    const bar = mkEl('div', 'incident-action');
+    bar.append(
+        mkEl('span', 'incident-action-text', server ? `This looks like a live issue on ${server}.` : 'This looks like a live issue.'),
     );
-    overlay.append(card);
-    document.body.append(overlay);
-    search.focus();
+    const btn = mkEl('button', 'incident-action-btn', '🎫 Create incident');
+    btn.type = 'button';
+    btn.onclick = () => startIssueFlow({ description, server });
+    bar.append(btn);
+    container.appendChild(bar);
+}
+
+// Search box with results that update as the user types
+function makeTypeahead(placeholder, search, initial, onPick) {
+    const field = 'w-full rounded-lg bg-[#0A0D10] border border-[#2E3744] px-3 py-2.5 text-[14px] text-white outline-none focus:border-[#FFB000]';
+    const input = mkEl('input', field);
+    input.placeholder = placeholder;
+    input.autocomplete = 'off';
+    if (initial) input.value = initial;
+    const list = mkEl('div', 'hidden absolute left-0 right-0 top-full mt-1 rounded-lg bg-[#171C24] border border-[#2E3744] z-10 overflow-hidden max-h-60 overflow-y-auto');
+    const wrap = mkEl('div', 'relative');
+    wrap.append(input, list);
+    let timer = null, seq = 0;
 
     async function load() {
+        const mine = ++seq;
         try {
-            const r = await fetch('/api/servers?q=' + encodeURIComponent(search.value.trim()));
-            const rows = await r.json();
+            const rows = await search(input.value.trim());
+            if (mine !== seq) return;  // a newer keystroke is already in flight
             list.replaceChildren();
-            if (!rows.length) list.append(mkEl('div', 'px-3 py-2 text-[13px] text-gray-500', 'No matching servers'));
-            rows.forEach((s) => {
+            if (!rows.length) list.append(mkEl('div', 'px-3 py-2 text-[13px] text-gray-500', 'No matches'));
+            rows.forEach((row) => {
                 const b = mkEl('button', 'w-full text-left px-3 py-2 hover:bg-[#232B33] flex justify-between gap-3 text-[14px] text-gray-200');
                 b.type = 'button';
-                b.append(mkEl('span', '', s.name), mkEl('span', 'mono text-[11px] text-gray-500', `${s.platform} · ${s.state}`));
-                b.onclick = () => { selected = s.name; search.value = s.name; list.classList.add('hidden'); };
+                b.append(mkEl('span', '', row.primary), mkEl('span', 'mono text-[11px] text-gray-500', row.secondary || ''));
+                b.onclick = () => { input.value = row.primary; list.classList.add('hidden'); onPick(row); };
                 list.append(b);
             });
             list.classList.remove('hidden');
         } catch (e) { list.classList.add('hidden'); }
     }
-    search.addEventListener('input', () => { selected = null; clearTimeout(timer); timer = setTimeout(load, 200); });
-    search.addEventListener('focus', load);
-    card.addEventListener('click', (e) => { if (!wrap.contains(e.target)) list.classList.add('hidden'); });
+    input.addEventListener('input', () => { onPick(null); clearTimeout(timer); timer = setTimeout(load, 150); });
+    input.addEventListener('focus', load);
+    return { wrap, input, hide: () => list.classList.add('hidden') };
+}
+
+function startIssueFlow(prefill) {
+    const chatId = activeChatId;
+    if (document.getElementById('issue-modal')) return;
+    const pre = (prefill && typeof prefill.description === 'string') ? prefill : {};
+    const chosen = { caller: null, ci: pre.server || null };
+
+    const overlay = mkEl('div', 'fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4');
+    overlay.id = 'issue-modal';
+    const card = mkEl('div', 'w-full max-w-lg rounded-2xl bg-[#12161C] border border-[#2E3744] p-6 shadow-2xl');
+    const close = () => overlay.remove();
+    const label = (t, first) => mkEl('label', `block text-[12px] mono uppercase tracking-wider text-gray-400 ${first ? '' : 'mt-4'} mb-2`, t);
+    const field = 'w-full rounded-lg bg-[#0A0D10] border border-[#2E3744] px-3 py-2.5 text-[14px] text-white outline-none focus:border-[#FFB000]';
+
+    const caller = makeTypeahead('Search by name, username or email…', async (q) => {
+        if (q.length < 2) return [];
+        const r = await fetch('/api/users?q=' + encodeURIComponent(q));
+        return (await r.json()).map((u) => ({ primary: u.name || u.user_name, secondary: u.email || u.user_name, user_name: u.user_name }));
+    }, '', (row) => { chosen.caller = row ? row.user_name : null; });
+
+    const ci = makeTypeahead('Start typing a server name…', async (q) => {
+        const r = await fetch('/api/servers?q=' + encodeURIComponent(q));
+        return (await r.json()).map((s) => ({ primary: s.name, secondary: `${s.platform} · ${s.state}` }));
+    }, pre.server || '', (row) => { chosen.ci = row ? row.primary : null; });
+
+    const levels = (selected) => {
+        const s = mkEl('select', field);
+        [['1', '1 - High'], ['2', '2 - Medium'], ['3', '3 - Low']].forEach(([v, t]) => {
+            const o = mkEl('option', '', t);
+            o.value = v;
+            if (v === selected) o.selected = true;
+            s.append(o);
+        });
+        return s;
+    };
+    const impact = levels('2');
+    const urgency = levels('2');
+    const grid = mkEl('div', 'grid grid-cols-2 gap-4');
+    const colI = mkEl('div'); colI.append(label('Impact', false), impact);
+    const colU = mkEl('div'); colU.append(label('Urgency', false), urgency);
+    grid.append(colI, colU);
+
+    const desc = mkEl('textarea', field + ' resize-none');
+    desc.rows = 3;
+    desc.placeholder = 'What is going wrong? For example: disk is almost full, service is down…';
+    const err = mkEl('div', 'text-[13px] text-red-400 min-h-[18px] mt-3');
+    const cancel = mkEl('button', 'px-4 py-2 rounded-lg border border-[#2E3744] text-gray-300 text-[14px] hover:border-gray-500', 'Cancel');
+    cancel.type = 'button';
+    const submit = mkEl('button', 'px-5 py-2 rounded-lg bg-[#FFB000] text-black font-semibold text-[14px] hover:bg-[#E6A000] disabled:opacity-50', 'Create incident');
+    submit.type = 'button';
+    const btns = mkEl('div', 'flex justify-end gap-3 mt-2');
+    btns.append(cancel, submit);
+
+    card.append(
+        mkEl('h3', 'text-[18px] font-semibold text-white mb-4', 'Create incident'),
+        label('Caller', true), caller.wrap,
+        label('Configuration item', false), ci.wrap,
+        mkEl('div', 'mt-4'), grid,
+    );
+    if (pre.description) {
+        card.append(mkEl('p', 'mt-4 text-[12.5px] text-gray-500', `Description (from your message): ${pre.description.slice(0, 110)}${pre.description.length > 110 ? '…' : ''}`));
+    } else {
+        card.append(label('Description', false), desc);
+    }
+    card.append(err, btns);
+    overlay.append(card);
+    document.body.append(overlay);
+    caller.input.focus();
+
+    card.addEventListener('click', (e) => {
+        [caller, ci].forEach((t) => { if (!t.wrap.contains(e.target)) t.hide(); });
+    });
     overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
     cancel.onclick = close;
 
     submit.onclick = async () => {
         err.textContent = '';
-        const description = desc.value.trim();
-        if (!selected) { err.textContent = 'Pick a server from the list.'; return; }
+        const description = (pre.description || desc.value).trim();
+        if (!chosen.caller) { err.textContent = 'Pick a caller from the list.'; return; }
+        if (!chosen.ci) { err.textContent = 'Pick a configuration item (server) from the list.'; return; }
         if (description.length < 10) { err.textContent = 'Please describe the problem in a few words.'; return; }
         submit.disabled = true;
-        submit.textContent = 'Creating ticket…';
-        const transcript = (chats[activeChatId].history || []).slice(-40)
+        submit.textContent = 'Creating incident…';
+        const transcript = (chats[chatId].history || []).slice(-40)
             .map((m) => ({ role: m.role, content: String(m.content).slice(0, 4000) }));
         try {
             const r = await fetch('/api/issues', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ server: selected, description, transcript }),
+                body: JSON.stringify({
+                    server: chosen.ci, description, transcript, caller: chosen.caller,
+                    impact: Number(impact.value), urgency: Number(urgency.value),
+                }),
             });
             const data = await r.json().catch(() => ({}));
-            if (!r.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Could not create the ticket.');
+            if (!r.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Could not create the incident.');
+
             close();
-            appendDOM('assistant', `Ticket **${data.number}** has been created for **${selected}** and the agent is investigating. If a fix needs approval, an IT engineer will review it.`);
+            const chat = chats[chatId];
+            chat.run = { runId: data.run_id || null, number: data.number, server: chosen.ci };
+            clearIncidentButtons(chat);
+            saveState();
+            const live = pushNote(chatId, `Incident **${data.number}** has been created for **${chosen.ci}**. Here is what TRIAGE-1 is doing:`);
+            if (live) watchRun(live, data.run_id, data.number, chosen.ci, chatId);
         } catch (e) {
             err.textContent = e.message;
             submit.disabled = false;
-            submit.textContent = 'Submit';
+            submit.textContent = 'Create incident';
         }
     };
 }
 
 function handleSend() {
     const text = input ? input.value.trim() : '';
-    if (!text || busy) return;
+    const chat = chats[activeChatId];
+    if (!text || busy || chat.closed || chat.wrap === 'asking') return;
     appendDOM('user', text);
     if (input) {
         input.value = '';
         input.style.height = 'auto';
     }
     if (GREETING_RE.test(text)) { showGreeting(); return; }
+    if (looksFixed(text)) { handleFixed(text); return; }
     streamResponse(text);
 }
 
@@ -730,3 +978,72 @@ if (clearNo) clearNo.addEventListener('click', () => setClearConfirm(false));
 if (clearYes) clearYes.addEventListener('click', clearAllChats);
 
 switchChat(activeChatId);
+
+// ---- live progress card (per ticket) and global status box (for every user) ----
+const RUN_STATUS_LABEL = {
+    running: '⚙ TRIAGE-1 is working…',
+    awaiting_approval: '⏸ Waiting for an engineer to approve an action',
+    done: '✓ Finished',
+    error: '✗ Stopped with an error',
+    interrupted: '✗ Interrupted by a server restart',
+};
+
+function watchRun(container, runId, number, server, chatId) {
+    const card = mkEl('div', 'mt-3 p-4 rounded-xl bg-[#12161C] border border-[#2E3744]');
+    const head = mkEl('div', 'mono text-[13px] font-semibold text-[#FFB000] mb-1', `🎫 ${number} · ${server}`);
+    const status = mkEl('div', 'mono text-[12px] text-gray-400 mb-2', 'Starting…');
+    const list = mkEl('ul', 'space-y-1 text-[13.5px] text-gray-200');
+    const link = mkEl('a', 'inline-block mt-3 mono text-[12px] text-[#FFB000] hover:underline', 'Open Agent Console →');
+    link.href = '/agent';
+    card.append(head, status, list, link);
+    container.appendChild(card);
+    if (!runId) {
+        status.textContent = 'Ticket created. The agent is busy and will pick it up shortly.';
+        if (chatId) onRunFinished(chatId, 'queued', number);
+        return;
+    }
+    if (watchers[runId]) clearInterval(watchers[runId]);
+    let after = 0;
+    const timer = setInterval(async () => {
+        try {
+            const r = await fetch(`/api/agent/runs/${runId}?after=${after}`);
+            if (r.status === 404) {   // run history is lost when the server restarts
+                clearInterval(timer); delete watchers[runId];
+                status.textContent = 'Live progress is no longer available.';
+                if (chatId) onRunFinished(chatId, 'unknown', number);
+                return;
+            }
+            if (!r.ok) return;
+            const d = await r.json();
+            after = d.next;
+            (d.steps || []).forEach((s) => list.appendChild(mkEl('li', '', s.text)));
+            status.textContent = RUN_STATUS_LABEL[d.status] || d.status;
+            if (['done', 'error', 'interrupted'].includes(d.status)) {
+                clearInterval(timer); delete watchers[runId];
+                if (chatId) onRunFinished(chatId, d.outcome, number);
+            }
+        } catch (e) { /* keep polling */ }
+    }, 3000);
+    watchers[runId] = timer;
+}
+
+(function liveBanner() {
+    const bar = mkEl('div', 'fixed bottom-4 right-4 z-[90] hidden max-w-sm rounded-xl bg-[#12161C] border border-[#FFB000]/50 px-4 py-3 shadow-2xl');
+    const t1 = mkEl('div', 'mono text-[11px] uppercase tracking-wider text-[#FFB000] font-semibold');
+    const t2 = mkEl('div', 'text-[13px] text-gray-200 mt-1');
+    bar.append(t1, t2);
+    document.body.appendChild(bar);
+    async function tick() {
+        try {
+            const r = await fetch('/api/agent/live');
+            if (!r.ok) return;
+            const d = await r.json();
+            if (!d.active) { bar.classList.add('hidden'); return; }
+            t1.textContent = `TRIAGE-1 · ${d.ticket}${d.server ? ' · ' + d.server : ''}`;
+            t2.textContent = d.text || 'Working…';
+            bar.classList.remove('hidden');
+        } catch (e) { /* ignore */ }
+    }
+    tick();
+    setInterval(tick, 4000);
+})();

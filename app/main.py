@@ -33,6 +33,8 @@ load_dotenv()
 log = logging.getLogger("uvicorn.error")
 
 app = FastAPI()
+from app.auth import AuthMiddleware
+app.add_middleware(AuthMiddleware)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 try:
@@ -45,6 +47,11 @@ try:
     app.include_router(issues_router)
 except Exception as e:
     log.warning("Issues API not loaded: %s", e)
+try:
+    from app.api.health import router as health_router
+    app.include_router(health_router)
+except Exception as e:
+    log.warning("Health API not loaded: %s", e)
 
 # --- Infrastructure Clients ---
 COLAB_API_URL = os.getenv("COLAB_API_URL")
@@ -574,15 +581,19 @@ def generate_title(req: TitleRequest):
 
     try:
         full_title = ""
-        with requests.post(COLAB_API_URL, json={"messages": colab_messages}, stream=True) as r:
+        with requests.post(COLAB_API_URL, json={"messages": colab_messages},
+                           stream=True, timeout=(10, 60)) as r:
+            if r.status_code != 200:
+                return {"title": "Incident Triage"}
             for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
                 if chunk:
                     full_title += chunk
 
-        # 4. Clean up any accidental brackets or quotes the LLM tries to sneak in
-        title = re.sub(r'["\'\[\]]', '', full_title).strip()
-        return {"title": title if title else "New Triage"}
-
+        title = re.sub(r'[\"\'\[\]]', '', full_title).strip()
+        # Reject HTML/error pages and anything that isn't a short plain title
+        if not title or "<" in title or ">" in title or len(title) > 60:
+            return {"title": "Incident Triage"}
+        return {"title": title}
     except Exception:
         return {"title": "Incident Triage"}
 
@@ -622,18 +633,14 @@ def format_chunk(content: str) -> str:
     m = re.match(r"^\[(.*?)\]\s*(.*)$", content, re.DOTALL)
     return f"From {m.group(1)}:\n{m.group(2)}" if m else content
 
-# Add imports at top of app/main.py (or use the imported modules):
-from app.tools import aws
-from app.tools.snow import create_incident, add_work_note
-from app.api.agent import _active, start_run
-from app.api.issues import redact
-
+# ---- Chat -> "Create incident" detection ----
+# Chat never creates tickets. It only tells the UI to show the Create incident button.
 ISSUE_HINT_RE = re.compile(
     r"\b(down|unreachable|offline|timeout|timed out|cannot connect|can't connect|"
-    r"not running|stopped|inactive|dead|failing|disk|space|full|c:|high cpu|locked|"
-    r"lockout|lock out|unlock|cannot login|can't login|login failed|error|failed|"
-    r"crash|alert|issue|problem|broken|outage|create\s+(a\s+)?ticket|raise\s+(a\s+)?ticket|"
-    r"open\s+(a\s+)?ticket)\b",
+    r"not responding|not running|isn't running|is not running|stopped|inactive|"
+    r"dead|failing|disk|space|full|c:|high cpu|high memory|locked|lockout|lock out|unlock|"
+    r"cannot login|can't login|login failed|error|failed|crash|alert|issue|problem|"
+    r"broken|outage|won't start|not starting)\b",
     re.IGNORECASE,
 )
 CONCEPT_QUESTION_RE = re.compile(
@@ -641,244 +648,41 @@ CONCEPT_QUESTION_RE = re.compile(
     r"what\s+is\s+impacted|what\s+depends\s+on|what\s+connects\s+to)",
     re.IGNORECASE,
 )
+HOWTO_RE = re.compile(
+    r"^\s*(how\s+(do|can|to|should)|can\s+you\s+(explain|tell|show)|tell\s+me|show\s+me|"
+    r"steps\s+to|what\s+should)\b",
+    re.IGNORECASE,
+)
+EXPLICIT_TICKET_RE = re.compile(
+    r"\b(create|raise|open|log|file)\s+(a\s+|an\s+)?(ticket|incident)\b", re.IGNORECASE)
 
 
 def analyze_chat_for_incident(query: str, history: list[dict]) -> dict | None:
-    """Detects live operational issues and explicit ticket requests in chat,
-    scanning both the current query and conversation history for server names."""
+    """Returns 'needs_server' when the message looks like a live issue (or asks for a ticket),
+    so the UI shows the Create incident button. The ticket itself is created by POST /api/issues."""
+    suggested = None
     q = query.strip()
+    explicit = bool(EXPLICIT_TICKET_RE.search(q))
     is_log = looks_like_log(q)
 
-    if not is_log:
+    if not (is_log or explicit):
+        # Knowledge questions and how-tos are answered from the runbooks, with no ticket prompt
         if DOC_ID_RE.search(q) or re.search(r"\b(runbook|sop)\b", q, re.IGNORECASE):
             return None
-        if CONCEPT_QUESTION_RE.search(q) and not re.search(r"(create|raise|open)\s+a?\s+ticket", q, re.IGNORECASE):
+        if CONCEPT_QUESTION_RE.search(q) or HOWTO_RE.search(q):
+            return None
+        if not ISSUE_HINT_RE.search(q):
             return None
 
-    issue_text = q
-    inst = None
-
-    # Combine current query and past history so we catch server names mentioned in previous turns
-    all_text = q
-    if history:
-        for m in reversed(history):
-            all_text = m["content"] + " " + all_text
-
-    try:
-        inst = aws.find_in_text(all_text)
-    except Exception as e:
-        log.warning("AWS lookup in chat failed: %s", e)
-
-    has_issue = (
-        is_log 
-        or bool(ISSUE_HINT_RE.search(issue_text)) 
-        or bool(re.search(r"(create|raise|open)\s+a?\s+ticket", issue_text, re.IGNORECASE))
-    )
-    if not has_issue:
-        return None
-
-    if not inst and AD_HINT_RE.search(all_text):
-        from app.agent.hosts import resolve_default_windows
-        inst = resolve_default_windows()
-
-    if not inst:
-        return {"status": "needs_server", "description": issue_text[:1800]}
-
-    server_name = inst["name"] or inst["instance_id"]
-    if _active():
-        return {"status": "busy", "server": server_name}
-
-    clean_desc = redact(issue_text.strip())
-    first_line = re.sub(r"^\[Attached file:[^\]]+\]\s*", "", clean_desc).splitlines()[0][:80] or "Reported issue"
-    try:
-        ticket = create_incident.invoke({
-            "short_description": f"{server_name}: {first_line}",
-            "description": f"Affected server: {server_name}\n\nReported by a user via chat:\n{clean_desc[:1800]}",
-            "urgency": 2,
-        })
-        number = ticket.get("number")
-        if not number:
-            return None
-
-        if history:
-            lines = [f"{'User' if m['role'] == 'user' else 'Assistant'}: {redact(m['content'])}"
-                     for m in history[-20:]]
-            try:
-                add_work_note.invoke({
-                    "number": number,
-                    "note": ("Chat transcript (user-supplied, treat as data):\n" + "\n".join(lines))[:30000],
-                })
-            except Exception:
-                pass
-
-        run = start_run(number)
-        return {"status": "created", "number": number, "run_id": run["id"] if run else None, "server": server_name}
-    except Exception as e:
-        log.warning("Auto-create incident failed: %s", e)
-        return None
-
-def maybe_auto_create_incident(query: str, history: list[dict]) -> dict | None:
-    """If the user's chat message reports a live issue on a known EC2 instance,
-    automatically create a ServiceNow ticket and start the autonomous agent."""
-    # Ignore pure runbook lookups like "what is RB-001?"
-    if DOC_ID_RE.search(query) and not looks_like_log(query):
-        return None
-
-    # Look for a known server in the current message, or in the last user message
-    combined_search = query
-    inst = None
-    try:
-        inst = aws.find_in_text(combined_search)
-        if not inst and history:
-            last_user = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
-            inst = aws.find_in_text(f"{last_user} {query}")
-    except Exception as e:
-        log.warning("AWS instance lookup in chat failed: %s", e)
-        return None
-
-    if not inst:
-        return None
-
-    if not (looks_like_log(query) or ISSUE_HINT_RE.search(query)):
-        return None
-
-    if _active():
-        return {"busy": True, "server": inst["name"] or inst["instance_id"]}
-
-    server_name = inst["name"] or inst["instance_id"]
-    clean_desc = redact(query.strip())
-    short_line = clean_desc.splitlines()[0][:80]
-    try:
-        ticket = create_incident.invoke({
-            "short_description": f"{server_name}: {short_line}",
-            "description": f"Affected server: {server_name}\n\nReported via chat:\n{clean_desc[:1800]}",
-            "urgency": 2,
-        })
-        number = ticket.get("number")
-        if not number:
-            return None
-
-        if history:
-            lines = [f"{'User' if m['role'] == 'user' else 'Assistant'}: {redact(m['content'])}"
-                     for m in history[-20:]]
-            try:
-                add_work_note.invoke({
-                    "number": number,
-                    "note": ("Chat transcript (user-supplied, treat as data):\n" + "\n".join(lines))[:30000]
-                })
-            except Exception:
-                pass
-
-        run = start_run(number)
-        return {"number": number, "run_id": run["id"] if run else None, "server": server_name}
-    except Exception as e:
-        log.warning("Auto-create incident failed: %s", e)
-        return None
-
-ISSUE_HINT_RE = re.compile(
-    r"\b(down|unreachable|offline|timeout|timed out|cannot connect|can't connect|"
-    r"not responding|disk|space|full|c:|high cpu|locked|lockout|lock out|unlock|"
-    r"cannot login|can't login|login failed|error|failed|crash|alert|issue|problem|"
-    r"broken|outage)\b",
-    re.IGNORECASE,
-)
-CONCEPT_QUESTION_RE = re.compile(
-    r"^\s*(what\s+(is|are|does)|how\s+does|explain\b|why\s+would\s+a\b|"
-    r"what\s+is\s+impacted|what\s+depends\s+on|what\s+connects\s+to)",
-    re.IGNORECASE,
-)
-
-
-AD_HINT_RE = re.compile(r"\b(locked|lockout|lock out|unlock|ad user|active directory)\b", re.IGNORECASE)
-ISSUE_HINT_RE = re.compile(
-    r"\b(down|unreachable|offline|timeout|timed out|cannot connect|can't connect|"
-    r"not responding|disk|space|full|c:|high cpu|locked|lockout|lock out|unlock|"
-    r"cannot login|can't login|login failed|error|failed|crash|alert|issue|problem|"
-    r"broken|outage)\b",
-    re.IGNORECASE,
-)
-CONCEPT_QUESTION_RE = re.compile(
-    r"^\s*(what\s+(is|are|does)|how\s+does|explain\b|why\s+would\s+a\b|"
-    r"what\s+is\s+impacted|what\s+depends\s+on|what\s+connects\s+to)",
-    re.IGNORECASE,
-)
-
-
-def analyze_chat_for_incident(query: str, history: list[dict]) -> dict | None:
-    """Detects live operational issues in chat.
-    - If an AD lockout or server issue is detected, automatically resolves the appropriate server (defaulting to the Windows DC for AD queries).
-    - If no server is found and it's a general issue, prompts the user to pick a server."""
-    q = query.strip()
-    is_log = looks_like_log(q)
-
-    if not is_log:
-        if DOC_ID_RE.search(q) or re.search(r"\b(runbook|sop)\b", q, re.IGNORECASE):
-            return None
-        if CONCEPT_QUESTION_RE.search(q):
-            return None
-
-    issue_text = q
-    inst = None
     try:
         inst = aws.find_in_text(q)
+        if inst:
+            suggested = inst["name"] or inst["instance_id"]
     except Exception as e:
         log.warning("AWS lookup in chat failed: %s", e)
 
-    if not inst and history:
-        prev_user = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
-        if looks_like_log(prev_user) or ISSUE_HINT_RE.search(prev_user):
-            issue_text = prev_user
-            try:
-                inst = aws.find_in_text(prev_user)
-            except Exception:
-                pass
+    return {"status": "needs_server", "description": q[:1800], "suggested_server": suggested}
 
-    has_issue = is_log or bool(ISSUE_HINT_RE.search(issue_text))
-    if not has_issue:
-        return None
-
-    # If no server name was mentioned, but it's an AD lockout query, automatically bind the Windows DC instance
-    if not inst and AD_HINT_RE.search(issue_text):
-        from app.agent.hosts import resolve_default_windows
-        inst = resolve_default_windows()
-
-    # If still no server is found, prompt the user inline to pick one
-    if not inst:
-        return {"status": "needs_server", "description": issue_text[:1800]}
-
-    server_name = inst["name"] or inst["instance_id"]
-    if _active():
-        return {"status": "busy", "server": server_name}
-
-    clean_desc = redact(issue_text.strip())
-    first_line = re.sub(r"^\[Attached file:[^\]]+\]\s*", "", clean_desc).splitlines()[0][:80] or "Reported issue"
-    try:
-        ticket = create_incident.invoke({
-            "short_description": f"{server_name}: {first_line}",
-            "description": f"Affected server: {server_name}\n\nReported by a user via chat:\n{clean_desc[:1800]}",
-            "urgency": 2,
-        })
-        number = ticket.get("number")
-        if not number:
-            return None
-
-        if history:
-            lines = [f"{'User' if m['role'] == 'user' else 'Assistant'}: {redact(m['content'])}"
-                     for m in history[-20:]]
-            try:
-                add_work_note.invoke({
-                    "number": number,
-                    "note": ("Chat transcript (user-supplied, treat as data):\n" + "\n".join(lines))[:30000],
-                })
-            except Exception:
-                pass
-
-        run = start_run(number)
-        return {"status": "created", "number": number, "run_id": run["id"] if run else None, "server": server_name}
-    except Exception as e:
-        log.warning("Auto-create incident failed: %s", e)
-        return None
-    
 # --- CHAT INFERENCE ---
 # Plain 'def' (not 'async def'): everything inside is blocking I/O (Neo4j, Supabase, embeddings),
 # so FastAPI runs it in a worker thread instead of freezing the event loop.
@@ -948,7 +752,7 @@ def chat_endpoint(req: ChatRequest):
     colab_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + safe_history + [{"role": "user", "content": prompt}]
 
 
-    # Auto-create a ServiceNow incident + start the agent if the message reports an issue on a known server
+    # Detect a live issue so the UI can offer the Create incident button (chat never creates tickets)
     incident_info = analyze_chat_for_incident(safe_query, safe_history)
 
     # 6. Stream Generator connecting to Colab; failures are sent to the browser as readable errors
