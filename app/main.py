@@ -658,15 +658,25 @@ EXPLICIT_TICKET_RE = re.compile(
 
 
 def analyze_chat_for_incident(query: str, history: list[dict]) -> dict | None:
-    """Returns 'needs_server' when the message looks like a live issue (or asks for a ticket),
-    so the UI shows the Create incident button. The ticket itself is created by POST /api/issues."""
+    """Decides whether the UI offers the Create incident button.
+    mode 'issue'    : the message reports a live problem.
+    mode 'explicit' : the user asked for a ticket. The issue text is this message,
+                      or the last issue the user described earlier in the chat."""
     suggested = None
     q = query.strip()
-    explicit = bool(EXPLICIT_TICKET_RE.search(q))
     is_log = looks_like_log(q)
+    explicit = bool(EXPLICIT_TICKET_RE.search(q)) and not is_log
+    issue_text = q
 
-    if not (is_log or explicit):
-        # Knowledge questions and how-tos are answered from the runbooks, with no ticket prompt
+    if explicit:
+        if not ISSUE_HINT_RE.search(q):
+            issue_text = next(
+                (m["content"] for m in reversed(history)
+                 if m["role"] == "user"
+                 and not EXPLICIT_TICKET_RE.search(m["content"])
+                 and (looks_like_log(m["content"]) or ISSUE_HINT_RE.search(m["content"]))),
+                "")
+    elif not is_log:
         if DOC_ID_RE.search(q) or re.search(r"\b(runbook|sop)\b", q, re.IGNORECASE):
             return None
         if CONCEPT_QUESTION_RE.search(q) or HOWTO_RE.search(q):
@@ -674,15 +684,30 @@ def analyze_chat_for_incident(query: str, history: list[dict]) -> dict | None:
         if not ISSUE_HINT_RE.search(q):
             return None
 
-    try:
-        inst = aws.find_in_text(q)
-        if inst:
-            suggested = inst["name"] or inst["instance_id"]
-    except Exception as e:
-        log.warning("AWS lookup in chat failed: %s", e)
+    if issue_text:
+        try:
+            inst = aws.find_in_text(issue_text)
+            if inst:
+                suggested = inst["name"] or inst["instance_id"]
+        except Exception as e:
+            log.warning("AWS lookup in chat failed: %s", e)
 
-    return {"status": "needs_server", "description": q[:1800], "suggested_server": suggested}
+    return {"status": "needs_server", "mode": "explicit" if explicit else "issue",
+            "description": issue_text[:1800], "suggested_server": suggested}
 
+
+def canned_stream(text: str, incident: dict | None):
+    """A fixed reply in the same stream format, so no RAG lookup or model call is needed."""
+    def gen():
+        yield f"data: {json.dumps({'meta': {'sources': [], 'incident': incident, 'kind': 'canned'}})}\n\n"
+        yield f"data: {json.dumps({'text': text})}\n\n"
+        yield "data: [DONE]\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+OFFTOPIC_RE = re.compile(r"^\s*I['\u2019]?m a triage assistant", re.IGNORECASE)
+OFFTOPIC_REPLY = ("I'm a triage assistant, so I can only help with error logs, stack traces, and specific "
+                  "SRE or infrastructure questions. Try pasting a log, or ask something like why nginx "
+                  "returns a 502 or what is impacted if redis is down.")
 # --- CHAT INFERENCE ---
 # Plain 'def' (not 'async def'): everything inside is blocking I/O (Neo4j, Supabase, embeddings),
 # so FastAPI runs it in a worker thread instead of freezing the event loop.
@@ -697,6 +722,15 @@ def chat_endpoint(req: ChatRequest):
          "content": smart_truncate_log(m.content) if m.role == "user" else m.content}
         for m in req.history
     ]
+
+    # 1c. Scenario routing: a ticket request never reaches RAG or the model
+    incident_info = analyze_chat_for_incident(safe_query, safe_history)
+    if incident_info and incident_info["mode"] == "explicit":
+        text = ("Sure, I can raise a ticket for that. Check the details below and click **Create incident**."
+                if incident_info["description"] else
+                "Sure, I can raise a ticket. Click **Create incident**, pick the caller and the affected server, "
+                "and describe what is going wrong.")
+        return canned_stream(text, incident_info)
 
     # 2. Retrieve Subgraph (Graph RAG). A failure here must not kill the chat.
     cypher = """
@@ -755,7 +789,7 @@ def chat_endpoint(req: ChatRequest):
     # Detect a live issue so the UI can offer the Create incident button (chat never creates tickets)
     incident_info = analyze_chat_for_incident(safe_query, safe_history)
 
-    # 6. Stream Generator connecting to Colab; failures are sent to the browser as readable errors
+        # 6. Stream Generator connecting to Colab; failures are sent to the browser as readable errors
     def stream_generator():
         yield f"data: {json.dumps({'meta': {'sources': sources, 'incident': incident_info}})}\n\n"
         try:
@@ -764,9 +798,23 @@ def chat_endpoint(req: ChatRequest):
                 if r.status_code != 200:
                     yield f"data: {json.dumps({'error': f'LLM server returned HTTP {r.status_code}. Is the Colab session alive?'})}\n\n"
                 else:
+                    head, decided = "", False
                     for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
-                        if chunk:
-                            yield f"data: {json.dumps({'text': chunk})}\n\n"
+                        if not chunk:
+                            continue
+                        if not decided:
+                            head += chunk
+                            if len(head) < 40:
+                                continue          # wait until we can tell what kind of reply this is
+                            decided = True
+                            if OFFTOPIC_RE.match(head):
+                                yield f"data: {json.dumps({'text': OFFTOPIC_REPLY})}\n\n"
+                                break             # drop whatever advice the model added
+                            chunk = head
+                        yield f"data: {json.dumps({'text': chunk})}\n\n"
+                    if not decided and head:      # very short reply
+                        text = OFFTOPIC_REPLY if OFFTOPIC_RE.match(head) else head
+                        yield f"data: {json.dumps({'text': text})}\n\n"
         except Exception as e:
             log.error("LLM request failed: %s", e)
             yield f"data: {json.dumps({'error': f'LLM server unreachable: {e}'})}\n\n"

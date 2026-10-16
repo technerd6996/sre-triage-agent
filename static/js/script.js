@@ -36,6 +36,13 @@ function loadState() {
         if (s && s.chats && Object.keys(s.chats).length) {
             for (const c of Object.values(s.chats)) {
                 if (c.title === "Generating title...") c.title = "Incident Triage";
+                // Flag older off-topic turns so they stay out of the model context and the ticket transcript
+                (c.history || []).forEach((m, i, arr) => {
+                    if (m.role === 'assistant' && /^\s*I['\u2019]?m a triage assistant/i.test(m.content)) {
+                        m.skip = true;
+                        if (arr[i - 1]) arr[i - 1].skip = true;
+                    }
+                });
             }
             return s;
         }
@@ -108,7 +115,7 @@ function renderChatList() {
 
         const div = document.createElement('div');
         div.className = `group relative flex items-center justify-between w-full px-2 py-1.5 rounded transition-colors ${isActive ? 'bg-amber-500/10' : 'hover:bg-white/5'} chat-menu-container mb-1`;
-        
+
         if (renamingId === id) {
             const inp = document.createElement('input');
             inp.value = chat.title;
@@ -163,7 +170,7 @@ function renderChatList() {
         const menu = document.createElement('div');
         menu.id = `menu-${id}`;
         menu.className = `hidden absolute right-4 top-8 w-32 bg-[#171C24] border border-[#2E3744] rounded-md shadow-2xl z-50 flex flex-col py-1 overflow-hidden`;
-        
+
         const renameBtn = document.createElement('button');
         renameBtn.type = 'button';
         renameBtn.className = 'text-left px-3 py-2 text-[12.5px] text-gray-300 hover:bg-[#232B33] hover:text-white flex items-center gap-2 transition-colors';
@@ -202,6 +209,7 @@ function createNewChat() {
     chats[newId] = { title: "New Triage", history: [] };
     switchChat(newId);
 }
+
 function switchChat(id) {
     activeChatId = id;
     renderChatList();
@@ -226,8 +234,12 @@ function switchChat(id) {
         const metaStore = chat.meta || {};
         const showNotes = (at) => notes.filter((n) => n.at === at).forEach((n) => appendDOM('assistant', n.text));
         hist.forEach((msg, i) => {
-            showNotes(i);
-            appendDOM(msg.role, msg.content, msg.role === 'assistant' ? metaStore[i] : undefined);
+            try {
+                showNotes(i);
+                appendDOM(msg.role, msg.content, msg.role === 'assistant' ? metaStore[i] : undefined);
+            } catch (e) {
+                console.error('Could not render message', i, e);   // one bad message must not blank the chat
+            }
         });
         showNotes(hist.length);
 
@@ -238,7 +250,6 @@ function switchChat(id) {
     if (turnCount) turnCount.innerText = (hist.length / 2).toString();
     applyComposerState();
 }
-
 
 const RELATED_RE = /^[ \t]*(?:[-*•][ \t]+)?(?:\*\*)?Related(?:\*\*)?:(?:\*\*)?[ \t]*(.*)$/gim;
 
@@ -252,7 +263,7 @@ function normalizeRelated(content) {
 
 function sourceBadgeHTML(sources, answer) {
     if (/^\s*I['\u2019]?m a triage assistant/i.test(answer)) return '';
-    const retrieved = sources || [];
+    const retrieved = Array.isArray(sources) ? sources : ((sources && sources.sources) || []);
     const body = answer.replace(/^\s*Related:.*$/gim, '');
     const mentioned = [...new Set(body.match(/\b(?:RB|SOP)-\d{3}\b|\bINC-\d{4}-\d{3}\b/g) || [])];
     const phantom = mentioned.filter(id => !retrieved.includes(id));
@@ -269,8 +280,8 @@ function sourceBadgeHTML(sources, answer) {
     if (fromGraph) {
         return `<span class="src-badge src-kb">🕸 From your knowledge graph</span>${phantomHTML}`;
     }
-    if (sources && sources.length) {
-        return `<span class="src-badge src-gen">⚠ Retrieved ${sources.map(esc).join(', ')} but the answer doesn't cite them. Verify before acting.</span>`;
+    if (retrieved.length) {
+        return `<span class="src-badge src-gen">⚠ Retrieved ${retrieved.map(esc).join(', ')} but the answer doesn't cite them. Verify before acting.</span>`;
     }
     return `<span class="src-badge src-gen">⚠ Not from your knowledge base. Verify against your runbooks before acting.</span>`;
 }
@@ -331,11 +342,12 @@ function appendDOM(role, content, info) {
     `;
 
     if (!isUser && info) {
-        const srcs = Array.isArray(info) ? info : (info.sources || []);   // old saves stored a bare array
-        div.querySelector('.source-line').innerHTML = sourceBadgeHTML(srcs, content);
-        const inc = Array.isArray(info) ? null : info.incident;
+        const isArr = Array.isArray(info);                       // old saves stored a bare array of sources
+        const srcs = isArr ? info : (info.sources || []);
+        div.querySelector('.source-line').innerHTML = (!isArr && info.kind === 'canned') ? '' : sourceBadgeHTML(srcs, content);
+        const inc = isArr ? null : info.incident;
         if (inc && ['can_report', 'needs_server'].includes(inc.status) && !chats[activeChatId]?.closed) {
-            renderCreateIncidentAction(div.querySelector('.content'), inc.description || '', inc.suggested_server);
+            renderCreateIncidentAction(div.querySelector('.content'), inc.description || '', inc.suggested_server, inc.mode);
         }
     }
 
@@ -468,13 +480,19 @@ function looksFixed(t) {
 function handleFixed(text) {
     const chat = chats[activeChatId];
     const reply = 'Glad to hear it is sorted! 🎉';
-    chat.history.push({ role: 'user', content: text }, { role: 'assistant', content: reply });
+    chat.history.push({ role: 'user', content: text, skip: true }, { role: 'assistant', content: reply, skip: true });
     appendDOM('assistant', reply);
     chat.wrap = 'asking';
     saveState();
     renderWrapUp(activeChatId);
     applyComposerState();
     if (turnCount) turnCount.innerText = (chat.history.length / 2).toString();
+}
+
+// What goes into the ServiceNow work note: no off-topic turns, no ticket requests, last 12 messages
+function ticketTranscript(chatId) {
+    return (chats[chatId].history || []).filter((m) => !m.skip).slice(-12)
+        .map((m) => ({ role: m.role, content: String(m.content).slice(0, 4000) }));
 }
 
 let busy = false;
@@ -515,11 +533,11 @@ async function streamResponse(query) {
     const activeHistory = chat.history;
     const contentNode = appendDOM('assistant', '');
 
-    const stopThinking = contentNode ? startThinking(contentNode) : () => {}; 
+    const stopThinking = contentNode ? startThinking(contentNode) : () => {};
     if (chatContainer) chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
 
     const maxTurns = slider ? parseInt(slider.value, 10) : 6;
-    const limitedHistory = activeHistory.slice(-(maxTurns * 2)).map(({ role, content }) => ({ role, content }));
+    const limitedHistory = activeHistory.filter((m) => !m.skip).slice(-(maxTurns * 2)).map(({ role, content }) => ({ role, content }));
 
     try {
         const response = await fetch('/api/chat', {
@@ -586,17 +604,21 @@ async function streamResponse(query) {
             return;
         }
 
-        activeHistory.push({ role: "user", content: query });
-        activeHistory.push({ role: "assistant", content: fullText });
+        // Off-topic turns and ticket requests stay out of the model context and the ticket transcript
+        const offTopic = /^\s*I['\u2019]?m a triage assistant/i.test(fullText);
+        const skip = offTopic || meta.incident?.mode === 'explicit';
+        if (offTopic) meta.incident = null;   // no Create incident button under a declined message
+        activeHistory.push({ role: "user", content: query, skip });
+        activeHistory.push({ role: "assistant", content: fullText, skip });
         if (turnCount) turnCount.innerText = (activeHistory.length / 2).toString();
 
         const store = (chat.meta ??= {});
-        store[activeHistory.length - 1] = { sources: meta.sources, incident: meta.incident || null };
+        store[activeHistory.length - 1] = { sources: meta.sources, incident: meta.incident || null, kind: meta.kind || null };
         saveState();
 
         const sourceLine = contentNode?.parentElement?.querySelector('.source-line');
         if (sourceLine) {
-            let badgeHTML = sourceBadgeHTML(meta.sources, fullText);
+            let badgeHTML = meta.kind === 'canned' ? '' : sourceBadgeHTML(meta.sources, fullText);
             if (meta.incident?.status === 'created') {
                 badgeHTML += ` <a href="/agent" class="src-badge src-kb" style="text-decoration:none; margin-left:6px;">🎫 Ticket ${esc(meta.incident.number)} created for ${esc(meta.incident.server)} · View Agent Run →</a>`;
             } else if (meta.incident?.status === 'busy') {
@@ -606,7 +628,7 @@ async function streamResponse(query) {
         }
 
         if (['can_report', 'needs_server'].includes(meta.incident?.status) && contentNode) {
-            renderCreateIncidentAction(contentNode, meta.incident.description || query, meta.incident.suggested_server);
+            renderCreateIncidentAction(contentNode, meta.incident.description ?? '', meta.incident.suggested_server, meta.incident.mode);
         }
 
         const citedSop = (meta.sources || []).some((id) => fullText.includes(id));
@@ -647,76 +669,12 @@ function mkEl(tag, cls, text) {
     return n;
 }
 
-async function renderServerPrompt(container, issueDescription, suggested) {
-    const box = mkEl('div', 'mt-4 p-4 rounded-xl bg-[#12161C] border border-[#FFB000]/40');
-    const title = mkEl('div', 'mono text-[12px] uppercase tracking-wider text-[#FFB000] font-semibold mb-1', '⚡ Action Required: Select Affected Server');
-    const sub = mkEl('p', 'text-[13.5px] text-gray-300 mb-3', suggested
-        ? `Looks like this is about ${suggested}. Confirm the server to raise a ServiceNow ticket and start TRIAGE-1:`
-        : 'Which server is experiencing this issue? Pick a server below to raise a ServiceNow ticket and start TRIAGE-1:');
-    const listWrap = mkEl('div', 'flex flex-wrap gap-2');
-    const statusMsg = mkEl('div', 'text-[13px] text-gray-400 mt-2 mono', 'Loading servers…');
-
-    box.append(title, sub, listWrap, statusMsg);
-    container.appendChild(box);
-
-    try {
-        const r = await fetch('/api/servers');
-        const rows = await r.json();
-        statusMsg.textContent = '';
-        if (!rows.length) {
-            statusMsg.textContent = 'No running servers found in AWS.';
-            return;
-        }
-        rows.forEach((s) => {
-            const btn = mkEl('button', 'px-3.5 py-2 rounded-lg bg-[#171C24] border border-[#2E3744] hover:border-[#FFB000] hover:text-[#FFB000] text-[13.5px] text-gray-200 flex items-center gap-2 transition-colors');
-            btn.type = 'button';
-            btn.append(mkEl('span', 'font-semibold', s.name), mkEl('span', 'mono text-[11px] text-gray-500', `(${s.platform} · ${s.state})`));
-            btn.onclick = async () => {
-                listWrap.querySelectorAll('button').forEach((b) => { b.disabled = true; b.classList.add('opacity-50'); });
-                statusMsg.className = 'text-[13px] text-[#FFB000] mt-2 mono';
-                statusMsg.textContent = `Creating ServiceNow ticket for ${s.name}…`;
-
-                const paddedDesc = issueDescription.trim().length >= 10 ? issueDescription.trim() : `Issue on ${s.name}: ${issueDescription.trim()}`;
-                const transcript = (chats[activeChatId].history || []).slice(-40).map((m) => ({ role: m.role, content: String(m.content).slice(0, 4000) }));
-
-                try {
-                    const res = await fetch('/api/issues', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ server: s.name, description: paddedDesc, transcript }),
-                    });
-                    const data = await res.json().catch(() => ({}));
-                    if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Could not create ticket.');
-
-                    box.replaceChildren(
-                        mkEl('div', 'mono text-[13px] text-[#34D399] font-semibold', `✓ Ticket ${data.number} created for ${s.name} — TRIAGE-1 is now investigating.`),
-                        (() => {
-                            const link = mkEl('a', 'inline-block mt-2 mono text-[12px] text-[#FFB000] hover:underline', 'Open Agent Console to view live progress →');
-                            link.href = '/agent';
-                            return link;
-                        })()
-                    );
-                    box.replaceChildren();
-                    watchRun(box, data.run_id, data.number, s.name);
-                } catch (err) {
-                    statusMsg.className = 'text-[13px] text-red-400 mt-2 mono';
-                    statusMsg.textContent = err.message;
-                    listWrap.querySelectorAll('button').forEach((b) => { b.disabled = false; b.classList.remove('opacity-50'); });
-                }
-            };
-            listWrap.appendChild(btn);
-        });
-    } catch (e) {
-        statusMsg.className = 'text-[13px] text-red-400 mt-2 mono';
-        statusMsg.textContent = 'Could not load server list.';
-    }
-}
-
-function renderCreateIncidentAction(container, description, server) {
+function renderCreateIncidentAction(container, description, server, mode) {
     const bar = mkEl('div', 'incident-action');
-    bar.append(
-        mkEl('span', 'incident-action-text', server ? `This looks like a live issue on ${server}.` : 'This looks like a live issue.'),
-    );
+    const msg = mode === 'explicit'
+        ? 'Ready to raise a ticket?'
+        : (server ? `This looks like a live issue on ${server}.` : 'This looks like a live issue.');
+    bar.append(mkEl('span', 'incident-action-text', msg));
     const btn = mkEl('button', 'incident-action-btn', '🎫 Create incident');
     btn.type = 'button';
     btn.onclick = () => startIssueFlow({ description, server });
@@ -840,8 +798,7 @@ function startIssueFlow(prefill) {
         if (description.length < 10) { err.textContent = 'Please describe the problem in a few words.'; return; }
         submit.disabled = true;
         submit.textContent = 'Creating incident…';
-        const transcript = (chats[chatId].history || []).slice(-40)
-            .map((m) => ({ role: m.role, content: String(m.content).slice(0, 4000) }));
+        const transcript = ticketTranscript(chatId);
         try {
             const r = await fetch('/api/issues', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -937,7 +894,7 @@ async function checkAgentStatus() {
             if (text) text.innerText = "Offline";
             const side = document.getElementById('agent-status');
             if (side) side.innerText = "● offline";
-        } 
+        }
         if (++healthFails < 2) return;
     } catch (err) {
         if (dot) dot.className = "w-3 h-3 rounded-full bg-red-500 animate-ping";
