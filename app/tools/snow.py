@@ -32,13 +32,16 @@ def _assignee() -> str:
 RETRY_METHODS = {"GET", "PATCH", "PUT"}  # POST (create) is never retried: it could duplicate a ticket
 
 
-def _request(method: str, path: str, **kwargs):
+def _request(method: str, path: str, identity: str = "agent", **kwargs):
     """Single place that talks to SNOW. Retries transient failures on safe methods.
     Raises with the response body on errors."""
     base = os.environ["SNOW_INSTANCE"].strip().rstrip("/")
     if not base.startswith("http"):
         base = f"https://{base}.service-now.com" if "." not in base else f"https://{base}"
-    auth = (os.environ["SNOW_USER"], os.environ["SNOW_PASSWORD"])
+    if identity == "checker":
+        auth = (os.environ["SNOW_CHECKER_USER"], os.environ["SNOW_CHECKER_PASSWORD"])
+    else:
+        auth = (os.environ["SNOW_USER"], os.environ["SNOW_PASSWORD"])
     attempts = 3 if method.upper() in RETRY_METHODS else 1
     resp = None
     for i in range(attempts):
@@ -73,9 +76,10 @@ def _lookup_sys_id(table: str, query: str, label: str) -> str:
     return rows[0]["sys_id"]
 
 
-def _user_id(user_name: str) -> str:
-    return _lookup_sys_id("sys_user", f"user_name={user_name}", f"User '{user_name}'")
-
+def _user_id(user: str) -> str:
+    """Caller can be a ServiceNow user_name or an email address."""
+    user = user.replace("^", "")
+    return _lookup_sys_id("sys_user", f"user_name={user}^ORemail={user}", f"User '{user}'")
 
 def _group_id(name: str) -> str:
     return _lookup_sys_id("sys_user_group", f"name={name}", f"Group '{name}'")
@@ -239,7 +243,7 @@ def list_queue() -> list:
         "incident",
         params={
             "sysparm_query": f"active=true^state=1^assigned_toISEMPTY"
-                             f"^assignment_group.name={_group()}^ORDERBYsys_created_on",
+                             f"^assignment_group.name={_group()}^ORDERBYpriority^ORDERBYsys_created_on",
             "sysparm_fields": "number",
             "sysparm_limit": 10,
         },

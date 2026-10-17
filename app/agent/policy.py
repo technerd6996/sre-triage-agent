@@ -21,3 +21,41 @@ def needs_approval(tool_name: str) -> bool:
 
 def interrupt_config(tools) -> dict:
     return {t.name: True for t in tools if needs_approval(t.name)}
+
+import os
+import time
+from app import store
+
+FLAP_LIMIT = 3
+_RESTORES: dict[str, list[float]] = {}
+
+
+def autonomy_mode() -> str:
+    return store.get_setting("autonomy_mode", "shadow")          # off | shadow | on
+
+
+def _critical() -> set[str]:
+    return {s.strip().lower() for s in os.getenv("CRITICAL_SERVICES", "").split(",") if s.strip()}
+
+
+def autonomous_restore(actions) -> tuple[bool, str]:
+    """(run without a human?, reason). Only a single start_service on a critical service that is really stopped."""
+    mode = autonomy_mode()
+    if mode == "off" or len(actions) != 1 or actions[0].get("name") != "start_service":
+        return False, ""
+    args = actions[0].get("args") or {}
+    svc, target = str(args.get("service_name", "")).lower(), args.get("target", "")
+    if svc not in _critical():
+        return False, ""
+    now = time.time()
+    recent = [t for t in _RESTORES.get(svc, []) if now - t < 3600]
+    if len(recent) >= FLAP_LIMIT:
+        return False, f"flap protection: {svc} auto-restored {len(recent)} times in the last hour, needs a human"
+    from app.tools.infra import check_service_status          # lazy import avoids a circular import
+    res = check_service_status.invoke({"target": target, "service_name": svc})
+    if res.get("status") not in ("inactive", "failed", "stopped"):
+        return False, f"preflight: {svc} is '{res.get('status') or res.get('error', 'unknown')}', not clearly stopped"
+    if mode == "shadow":
+        return False, f"shadow mode: would have auto-restored {svc} on {target}"
+    _RESTORES[svc] = recent + [now]
+    return True, f"auto-restoring critical service {svc} on {target}"

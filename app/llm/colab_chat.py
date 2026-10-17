@@ -6,10 +6,13 @@ Tool calling is done through the prompt: the model is told to answer with one JS
 object {"tool": "...", "args": {...}} when it wants a tool, and plain text when done.
 """
 import json
+import time
 import uuid
 from typing import Any, List, Optional
 
 import requests
+from app.llm import usage
+from app.llm.gate import llm_slot
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -102,11 +105,18 @@ class ColabChat(BaseChatModel):
 
     def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None,
                   run_manager: Any = None, **kwargs: Any) -> ChatResult:
+        msgs = self._to_colab(messages)
+        run_id, kind = usage.agent_context()          # 'triage' or 'resume', set by _consume
+        tokens_in = usage.count_messages(msgs)
         text = ""
-        with requests.post(self.url, json={"messages": self._to_colab(messages)},
-                           stream=True, timeout=self.timeout) as r:
-            r.raise_for_status()
-            for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
-                if chunk:
-                    text += chunk
+        with llm_slot(kind) as waited:
+            t0 = time.time()
+            with requests.post(self.url, json={"messages": msgs},
+                               stream=True, timeout=self.timeout) as r:
+                r.raise_for_status()
+                for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
+                    if chunk:
+                        text += chunk
+            seconds = time.time() - t0
+        usage.log_call(kind, run_id, tokens_in, usage.count_tokens(text), seconds, waited)
         return ChatResult(generations=[ChatGeneration(message=self._parse(text))])

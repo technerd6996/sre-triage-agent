@@ -24,7 +24,46 @@ function renderMarkdown(text) {
 }
 
 // --- State Management ---
-const STORE_KEY = 'triage1_chats_v1';
+let STORE_KEY = 'triage1_chats_v1';
+let currentUser = null;
+
+async function initUserSession() {
+    try {
+        const res = await fetch('/api/auth/me');
+        if (!res.ok) {
+            window.location.href = '/static/login.html';
+            return;
+        }
+        currentUser = await res.json();
+        STORE_KEY = `triage1_chats_v1:${currentUser.user_id}`;
+        const label = document.getElementById('user-label');
+        if (label) label.textContent = `${currentUser.name} · ${currentUser.role === 'viewer' ? 'end user' : currentUser.role}`;
+        const lo = document.getElementById('logout-btn');
+        if (lo) lo.onclick = async () => {
+            await fetch('/api/auth/logout', { method: 'POST' });
+            window.location.href = '/static/login.html';
+        };        
+        // Hide Admin/Agent buttons based on role
+        const agentBtn = document.querySelector('a[href="/agent"]');
+        const kbBtn = document.querySelector('a[href="/knowledge"]');
+        if (currentUser.role === 'viewer') {
+            if (agentBtn) agentBtn.style.display = 'none';
+            if (kbBtn) kbBtn.style.display = 'none';
+        } else if (currentUser.role === 'approver') {
+            // Approver can see KB, but it will be read-only (enforced via API)
+        }
+        
+        // Load state now that we have the namespaced key
+        const saved = loadState();
+        chats = saved ? saved.chats : { "chat_1": { title: "Default Chat", history: [] } };
+        activeChatId = (saved && saved.chats[saved.activeChatId]) ? saved.activeChatId : Object.keys(chats)[0];
+        
+        renderChatList();
+        switchChat(activeChatId);
+    } catch (e) {
+        console.error("Auth check failed", e);
+    }
+}
 
 function saveState() {
     try { localStorage.setItem(STORE_KEY, JSON.stringify({ chats, activeChatId })); } catch (e) {}
@@ -50,9 +89,8 @@ function loadState() {
     return null;
 }
 
-const saved = loadState();
-let chats = saved ? saved.chats : { "chat_1": { title: "Default Chat", history: [] } };
-let activeChatId = (saved && saved.chats[saved.activeChatId]) ? saved.activeChatId : Object.keys(chats)[0];
+let chats = { "chat_1": { title: "Default Chat", history: [] } };   // real chats load after login
+let activeChatId = "chat_1";
 
 // --- Menu State Management ---
 let openMenuId = null;
@@ -729,12 +767,6 @@ function startIssueFlow(prefill) {
     const label = (t, first) => mkEl('label', `block text-[12px] mono uppercase tracking-wider text-gray-400 ${first ? '' : 'mt-4'} mb-2`, t);
     const field = 'w-full rounded-lg bg-[#0A0D10] border border-[#2E3744] px-3 py-2.5 text-[14px] text-white outline-none focus:border-[#FFB000]';
 
-    const caller = makeTypeahead('Search by name, username or email…', async (q) => {
-        if (q.length < 2) return [];
-        const r = await fetch('/api/users?q=' + encodeURIComponent(q));
-        return (await r.json()).map((u) => ({ primary: u.name || u.user_name, secondary: u.email || u.user_name, user_name: u.user_name }));
-    }, '', (row) => { chosen.caller = row ? row.user_name : null; });
-
     const ci = makeTypeahead('Start typing a server name…', async (q) => {
         const r = await fetch('/api/servers?q=' + encodeURIComponent(q));
         return (await r.json()).map((s) => ({ primary: s.name, secondary: `${s.platform} · ${s.state}` }));
@@ -770,8 +802,7 @@ function startIssueFlow(prefill) {
 
     card.append(
         mkEl('h3', 'text-[18px] font-semibold text-white mb-4', 'Create incident'),
-        label('Caller', true), caller.wrap,
-        label('Configuration item', false), ci.wrap,
+        label('Configuration item', true), ci.wrap,
         mkEl('div', 'mt-4'), grid,
     );
     if (pre.description) {
@@ -785,7 +816,7 @@ function startIssueFlow(prefill) {
     caller.input.focus();
 
     card.addEventListener('click', (e) => {
-        [caller, ci].forEach((t) => { if (!t.wrap.contains(e.target)) t.hide(); });
+        if (!ci.wrap.contains(e.target)) ci.hide();
     });
     overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
     cancel.onclick = close;
@@ -793,7 +824,6 @@ function startIssueFlow(prefill) {
     submit.onclick = async () => {
         err.textContent = '';
         const description = (pre.description || desc.value).trim();
-        if (!chosen.caller) { err.textContent = 'Pick a caller from the list.'; return; }
         if (!chosen.ci) { err.textContent = 'Pick a configuration item (server) from the list.'; return; }
         if (description.length < 10) { err.textContent = 'Please describe the problem in a few words.'; return; }
         submit.disabled = true;
@@ -803,7 +833,7 @@ function startIssueFlow(prefill) {
             const r = await fetch('/api/issues', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    server: chosen.ci, description, transcript, caller: chosen.caller,
+                    server: chosen.ci, description, transcript, caller: "",
                     impact: Number(impact.value), urgency: Number(urgency.value),
                 }),
             });
@@ -934,7 +964,7 @@ const clearYes = document.getElementById('clear-yes');
 if (clearNo) clearNo.addEventListener('click', () => setClearConfirm(false));
 if (clearYes) clearYes.addEventListener('click', clearAllChats);
 
-switchChat(activeChatId);
+initUserSession();
 
 // ---- live progress card (per ticket) and global status box (for every user) ----
 const RUN_STATUS_LABEL = {

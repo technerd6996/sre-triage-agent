@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>TRIAGE-1</title>
+<style>body{background:#0A0D10;color:#E5E7EB;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.box{text-align:center;max-width:420px}h2{margin:0 0 8px}p{color:#9CA3AF}a,button{color:#FFB000;background:none;border:0;font-size:14px;cursor:pointer;text-decoration:underline}</style></head>
+<body><div class="box">
+  <h2>Chat is currently disabled</h2>
+  <p>This service has been disabled by your administrator. Please contact your IT team to raise or track an issue.</p>
+  <p><a id="agent" href="/agent" style="display:none">Open Agent Console</a></p>
+  <button onclick="fetch('/api/auth/logout',{method:'POST'}).then(()=>location.href='/static/login.html')">Log out</button>
+</div>
+<script>fetch('/api/auth/me').then(r=>r.json()).then(m=>{if(m.role==='approver')document.getElementById('agent').style.display='inline'})</script>
+</body></html>

@@ -72,6 +72,25 @@ async function loadRuns() {
     } catch (e) { /* the next refresh retries */ }
 }
 
+async function loadPending() {
+    try {
+        const rows = await api('/api/agent/approvals');
+        $('pending-count').textContent = `(${rows.length})`;
+        const box = $('pending');
+        box.replaceChildren();
+        if (!rows.length) box.append(el('p', 'text-[13px] text-gray-500', 'Nothing waiting.'));
+        rows.forEach((p) => {
+            const mins = Math.max(0, Math.round((Date.now() / 1000 - p.requested_at) / 60));
+            const row = el('button', 'text-left p-3 rounded-lg bg-[#1A130A] border border-[#FF8A00] hover:bg-[#241A0D]');
+            row.append(el('div', 'mono text-[13px] text-[#FF8A00]', p.ticket + (p.server ? ' \u00b7 ' + p.server : '')));
+            p.actions.forEach((a) => row.append(el('div', 'text-[12px] text-gray-300', `${a.text} (${a.risk})`)));
+            row.append(el('div', 'text-[11px] text-gray-500 mt-1', `waiting ${mins} min`));
+            row.onclick = () => attach(p.run_id);
+            box.append(row);
+        });
+    } catch (e) { /* the next refresh retries */ }
+}
+
 // ---------- one run ----------
 async function startRun(ticket) {
     try {
@@ -118,6 +137,7 @@ function render(d) {
     pill.className = `mono text-[12px] px-3 py-1 rounded-full border ${cls}`;
     d.events.forEach(addEvent);
     showApproval(d.status === 'awaiting_approval' ? d.pending : null);
+    showP1(d.p1);
     const last = $('steps').lastElementChild;
     if (last) last.scrollIntoView({ block: 'nearest' });
 }
@@ -166,12 +186,16 @@ function showApproval(actions) {
 }
 
 async function decide(approve) {
+    const feedback = $('comment').value.trim();
+    if (!approve && !feedback) { $('comment').focus(); alert('Add a comment explaining the rejection.'); return; }
     $('approve').disabled = $('reject').disabled = true;
     try {
-        await post(`/api/agent/runs/${runId}/decision`, { approve });
+        await post(`/api/agent/runs/${runId}/decision`, { approve, feedback });
         $('approval').classList.add('hidden');
+        $('comment').value = '';
         clearTimeout(timer);
         poll();
+        loadPending();
     } catch (e) {
         alert(e.message);
         $('approve').disabled = $('reject').disabled = false;
@@ -180,6 +204,29 @@ async function decide(approve) {
 $('approve').onclick = () => decide(true);
 $('reject').onclick = () => decide(false);
 
+// ---------- P1 declaration ----------
+function showP1(p) {
+    const box = $('p1box');
+    if (!p || p.status === 'dismissed' || p.status === 'declared') { box.classList.add('hidden'); return; }
+    $('p1-reason').textContent = 'Reason: ' + p.reason;
+    $('p1-to').textContent = 'To: ' + (p.to.join(', ') || 'NOT CONFIGURED') + (p.cc.length ? ' | Cc: ' + p.cc.join(', ') : '') + ' | Bridge: ' + (p.bridge || 'NOT CONFIGURED');
+    $('p1-err').textContent = p.notice_error ? 'Notice not sent: ' + p.notice_error : '';
+    if (box.classList.contains('hidden')) $('p1-body').value = p.draft;
+    $('p1-go').textContent = p.status === 'proposed' ? 'Declare P1 and send notice' : 'Retry sending notice';
+    box.classList.remove('hidden');
+}
+
+async function p1Decide(approve) {
+    try {
+        const p = await post(`/api/agent/runs/${runId}/p1`, { approve, body: $('p1-body').value });
+        showP1(p);
+        if (approve && p.status === 'declared') alert('P1 declared and notice sent.');
+        loadPending();
+    } catch (e) { alert(e.message); }
+}
+$('p1-go').onclick = () => p1Decide(true);
+$('p1-no').onclick = () => p1Decide(false);
+
 // ---------- auto mode and startup ----------
 $('auto').onchange = async (e) => {
     try { await post('/api/agent/auto', { enabled: e.target.checked }); }
@@ -187,8 +234,13 @@ $('auto').onchange = async (e) => {
 };
 $('refresh').onclick = loadQueue;
 
-api('/api/agent/auto').then((a) => { $('auto').checked = a.enabled; }).catch(() => {});
+api('/api/auth/me').then((m) => {
+    if (m.role === 'admin') api('/api/agent/auto').then((a) => { $('auto').checked = a.enabled; }).catch(() => {});
+    else $('auto-wrap').style.display = 'none';
+}).catch(() => {});
 loadQueue();
 loadRuns();
+loadPending();
 setInterval(loadQueue, 10000);
 setInterval(loadRuns, 5000);
+setInterval(loadPending, 5000);

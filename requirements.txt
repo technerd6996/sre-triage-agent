@@ -13,3 +13,5 @@ paramiko
 pywinrm
 sentence-transformers
 boto3
+passlib
+bcrypt

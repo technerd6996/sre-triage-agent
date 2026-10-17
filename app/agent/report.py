@@ -72,6 +72,8 @@ def _result(name: str, content) -> str | None:
 
 def describe(ev: dict) -> str | None:
     """One plain-English line for an agent event, or None if it is not worth showing."""
+    if ev.get("type") == "verification":
+        return ev.get("text")
     t = ev.get("type")
     if t == "start":
         where = f" for {ev['server']}" if ev.get("server") else ""
@@ -100,6 +102,8 @@ def _outcome(run: dict) -> str:
     for e in run["events"]:
         if e.get("type") == "tool_call" and e.get("name") in ("resolve_incident", "escalate_incident"):
             last = e["name"]
+    if any(e.get("type") == "verification" and e.get("verdict") == "fail" for e in run["events"]):
+        return "ESCALATED to a human engineer (fix did not verify)"
     if last == "resolve_incident":
         return "RESOLVED by TRIAGE-1"
     if last == "escalate_incident":

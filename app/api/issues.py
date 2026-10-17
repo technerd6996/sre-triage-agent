@@ -42,7 +42,7 @@ class IssueRequest(BaseModel):
     server: str = Field(min_length=1, max_length=100)           # configuration item
     description: str = Field(min_length=10, max_length=2000)
     transcript: list[Turn] = Field(default_factory=list, max_length=40)
-    caller: str = Field(default="", max_length=100)             # sys_user.user_name picked from /api/users
+    caller: str = Field(default="", max_length=100)             # Deprecated in UI, fallback only
     impact: int = Field(default=2, ge=1, le=3)
     urgency: int = Field(default=2, ge=1, le=3)
 
@@ -110,7 +110,7 @@ def report_issue(req: IssueRequest, request: Request):
             "description": f"Affected server: {inst['name']}\n\nReported by a user via chat:\n{desc}",
             "urgency": req.urgency,
             "impact": req.impact,
-            "caller": req.caller,
+            "caller": getattr(request.state, "user", req.caller), # Use authenticated session user
             "ci": inst["name"],
         })
     except Exception as e:

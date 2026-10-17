@@ -1,0 +1,1 @@
+Get-ChildItem -Path app,data,scripts,skills,static,tests -Recurse -Include .py,.md,.js,.html,.css  ForEach-Object { `n=== FILE $($_.FullName) ===`n; Get-Content $_.FullName }  Set-Content project_code.txt -Encoding UTF8

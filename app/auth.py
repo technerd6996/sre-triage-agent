@@ -1,15 +1,8 @@
-"""Authentication + role enforcement (HTTP Basic, roles from env).
-Auth is OFF when TRIAGE_USERS is unset, so local dev keeps working.
-Run behind HTTPS in production: Basic auth is not encrypted on plain HTTP."""
-import base64
+"""Authentication + role enforcement using Supabase sessions."""
 import hashlib
 import logging
-import os
-import re
-import secrets
 import time
-from collections import defaultdict, deque
-
+from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
 
@@ -17,92 +10,87 @@ from app import store
 
 log = logging.getLogger("uvicorn.error")
 LEVELS = {"viewer": 1, "approver": 2, "admin": 3}
-MAX_FAILS, FAIL_WINDOW = 5, 300  # 5 bad logins per IP per 5 minutes -> temporary block
-_FAILS: dict[str, deque] = defaultdict(deque)
 
+import re
 
-def _load_users() -> dict:
-    """TRIAGE_USERS="veda:pass1:admin,ravi:sha256-<hex>:approver,nive:pass3:viewer"
-    No ':' or ',' inside passwords. Use sha256-<hex> to avoid plain text in .env."""
-    users = {}
-    for item in os.getenv("TRIAGE_USERS", "").split(","):
-        item = item.strip()
-        if not item:
-            continue
-        parts = item.split(":", 2)
-        if len(parts) != 3 or parts[2] not in LEVELS or not parts[0] or not parts[1]:
-            log.warning("TRIAGE_USERS: skipped invalid entry (format name:password:role)")
-            continue
-        users[parts[0]] = (parts[1], parts[2])
-    return users
-
-
-USERS = _load_users()
-if USERS:
-    log.info("Auth enabled for %d user(s).", len(USERS))
-else:
-    log.warning("TRIAGE_USERS is not set: authentication is DISABLED.")
-
-
-def _verify(given: str, stored: str) -> bool:
-    if stored.startswith("sha256-"):
-        return secrets.compare_digest(hashlib.sha256(given.encode()).hexdigest(), stored[7:])
-    return secrets.compare_digest(given.encode(), stored.encode())
-
-
-def _parse_basic(header: str):
-    if not header.lower().startswith("basic "):
-        return None
-    try:
-        user, _, pw = base64.b64decode(header[6:]).decode("utf-8").partition(":")
-        return user, pw
-    except Exception:
-        return None
-
+_RUN_ONE = re.compile(r"^/api/agent/runs/[^/]+$")
 
 def required_role(method: str, path: str) -> str:
-    if path.startswith("/api/agent/audit"):
+    # Admin only
+    if (path.startswith(("/api/admin", "/admin", "/api/users", "/api/agent/audit"))
+            or path == "/api/agent/auto"
+            or (path.startswith("/api/rag") and method not in ("GET", "HEAD", "OPTIONS"))):
         return "admin"
-    if method == "POST" and re.match(r"^/api/agent/(run|auto)$", path):
+    # Approver and above: Agent Console, KB pages, run lists, queue, decisions
+    if path in ("/agent", "/knowledge") or path.startswith("/api/rag"):
         return "approver"
-    if method == "POST" and re.match(r"^/api/agent/runs/[^/]+/decision$", path):
+    if path.startswith("/api/agent/"):
+        # Chat users still poll their own run and the live banner
+        if method == "GET" and (_RUN_ONE.match(path) or path == "/api/agent/live"):
+            return "viewer"
         return "approver"
-    if path.startswith("/api/rag") and method not in ("GET", "HEAD", "OPTIONS"):
-        return "admin"
     return "viewer"
 
+CACHE_TTL = 45   # seconds a session lookup is reused; also the longest a disabled user keeps access
+_CACHE: dict[str, tuple[float, float, dict]] = {}   # token_hash -> (cached_at, session_expires, user_info)
 
-def _locked(ip: str) -> bool:
-    q, now = _FAILS[ip], time.time()
-    while q and now - q[0] > FAIL_WINDOW:
-        q.popleft()
-    return len(q) >= MAX_FAILS
 
+def _lookup_session(token: str | None) -> dict | None:
+    if not token:
+        return None
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    now = time.time()
+    hit = _CACHE.get(token_hash)
+    if hit and now - hit[0] < CACHE_TTL and now < hit[1]:
+        return hit[2]
+    res = store.supabase.table("sessions").select("user_id, expires_at").eq("token_hash", token_hash).execute()
+    if not res.data or res.data[0]["expires_at"] <= now:
+        _CACHE.pop(token_hash, None)
+        return None
+    ures = store.supabase.table("users").select("user_id, name, role, status").eq("user_id", res.data[0]["user_id"]).execute()
+    if not ures.data or ures.data[0].get("status") != "active":
+        _CACHE.pop(token_hash, None)
+        return None
+    _CACHE[token_hash] = (now, res.data[0]["expires_at"], ures.data[0])
+    return ures.data[0]
+
+
+def forget_session(token: str | None):
+    if token:
+        _CACHE.pop(hashlib.sha256(token.encode()).hexdigest(), None)
+
+
+def forget_user(user_id: str):
+    """Call after a role change or disable so it applies immediately (used by the admin console later)."""
+    for k in [k for k, v in _CACHE.items() if v[2]["user_id"] == user_id]:
+        _CACHE.pop(k, None)
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
+    async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if not USERS or path == "/api/health" or request.method == "OPTIONS":
+        if path in ("/api/health", "/api/auth/login") or request.method == "OPTIONS" or path.startswith("/static"):
             return await call_next(request)
 
-        ip = request.client.host if request.client else "unknown"
-        if _locked(ip):
-            return JSONResponse({"detail": "Too many failed logins. Try again in a few minutes."}, status_code=429)
+        user_info = _lookup_session(request.cookies.get("triage_session"))
 
-        creds = _parse_basic(request.headers.get("authorization", ""))
-        entry = USERS.get(creds[0]) if creds else None
-        if not creds or not entry or not _verify(creds[1], entry[0]):
-            if creds:
-                _FAILS[ip].append(time.time())
-                store.audit(None, None, ip, "login_failed", f"user={creds[0][:40]}")
-            return Response(status_code=401,
-                            headers={"WWW-Authenticate": 'Basic realm="TRIAGE-1", charset="UTF-8"'})
+        if not user_info:
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+            return Response(status_code=302, headers={"Location": "/static/login.html"})
 
-        user, role = creds[0], entry[1]
+        role = user_info["role"]
         need = required_role(request.method, path)
-        if LEVELS[role] < LEVELS[need]:
-            store.audit(None, None, user, "forbidden", f"{request.method} {path} needs {need}")
+        
+        if LEVELS.get(role, 0) < LEVELS.get(need, 1):
+            store.audit(None, None, user_info["user_id"], "forbidden", f"{request.method} {path} needs {need}")
             return JSONResponse({"detail": f"This action requires the {need} role."}, status_code=403)
 
-        request.state.user = f"{user} ({role})"
+        # Redirect Admin away from the chat interface (Phase 1 rule)
+        if path == "/" and role == "admin":
+            return Response(status_code=302, headers={"Location": "/admin"})
+
+        request.state.user = user_info["user_id"]
+        request.state.role = role
+        request.state.user_name = user_info["name"]
+
         return await call_next(request)

@@ -5,14 +5,15 @@ start() and resume() are generators that yield simple event dicts for a UI or a 
   start | tool_call | tool_result | final | approval_required | nudge | warning | done | error
 """
 import os
+import sqlite3
 import uuid
 from functools import cache
-
+from pathlib import Path
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_core.messages import ToolMessage
-from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from app.agent.policy import interrupt_config
@@ -28,7 +29,13 @@ load_dotenv()
 
 TOOLS = SNOW_TOOLS + INFRA_TOOLS + AWS_TOOLS
 TOOL_MAP = {t.name: t for t in TOOLS}
-CHECKPOINTER = InMemorySaver()  # shared across runs so resume() finds the paused state
+
+# Persistent checkpointer using local SQLite (bypasses Windows C++ build errors)
+CHECKPOINT_DB = os.getenv("CHECKPOINT_DB") or str(Path(__file__).resolve().parents[2] / "triage_checkpoints.db")
+_checkpointer_conn = sqlite3.connect(CHECKPOINT_DB, check_same_thread=False)
+CHECKPOINTER = SqliteSaver(_checkpointer_conn)
+CHECKPOINTER.setup()
+
 THREAD_TOOLS = {}               # thread_id -> tuple of allowed tool names
 
 aws.STRICT = True  # agent runs never fall back to the static hosts in .env
@@ -172,7 +179,7 @@ def start(ticket_number: str, thread_id: str = ""):
     THREAD_TOOLS[thread_id] = tool_tuple
 
     yield {"type": "start", "thread_id": thread_id, "ticket": ticket_number,
-           "skill": skill, "server": label}
+           "skill": skill, "server": label, "tools": list(tool_tuple)}
     msg = (f"Work incident {ticket_number}.\nShort description: {short}\nDescription: {desc}\n"
            f"{server}\n\nPLAYBOOK:\n{playbook}")
     yield from _run_guarded(get_agent(tool_tuple), {"messages": [{"role": "user", "content": msg}]},

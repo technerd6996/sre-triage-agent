@@ -4,11 +4,13 @@ import csv
 import json
 import re
 import logging
+import time
 import requests
 from typing import Annotated, Literal
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File
 from fastapi.concurrency import run_in_threadpool
+from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
@@ -16,9 +18,13 @@ from sentence_transformers import SentenceTransformer
 from supabase import create_client, Client
 from neo4j import GraphDatabase
 from app.tools import aws
+from app import store
 from app.tools.snow import create_incident, add_work_note
 from app.api.agent import _active, start_run
 from app.api.issues import redact
+from app.llm import usage
+from app.llm.gate import LLMBusy, llm_slot
+from app.api.admin import router as admin_router
 
 
 # Centralized SRE persona rules
@@ -52,6 +58,15 @@ try:
     app.include_router(health_router)
 except Exception as e:
     log.warning("Health API not loaded: %s", e)
+try:
+    from app.api.auth import router as auth_router
+    app.include_router(auth_router)
+except Exception as e:
+    log.warning("Auth API not loaded: %s", e)
+
+app.include_router(admin_router)
+
+
 
 # --- Infrastructure Clients ---
 COLAB_API_URL = os.getenv("COLAB_API_URL")
@@ -168,10 +183,15 @@ def delete_vectors(filename: str):
 # ======================================================================
 def call_llm(messages: list, timeout: int = 180) -> str:
     out = ""
-    with requests.post(COLAB_API_URL, json={"messages": messages}, stream=True, timeout=timeout) as r:
-        for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
-            if chunk:
-                out += chunk
+    tokens_in = usage.count_messages(messages)
+    with llm_slot("ingest", wait_timeout=None) as waited:
+        t0 = time.time()
+        with requests.post(COLAB_API_URL, json={"messages": messages}, stream=True, timeout=timeout) as r:
+            for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
+                if chunk:
+                    out += chunk
+        seconds = time.time() - t0
+    usage.log_call("ingest", None, tokens_in, usage.count_tokens(out), seconds, waited)
     return out
 
 
@@ -338,6 +358,10 @@ def remove_doc_graph(filename: str) -> dict:
     with neo4j_driver.session() as session:
         return session.execute_write(_tx)
 
+@app.get("/admin", response_class=HTMLResponse)
+async def serve_admin_ui():
+    with open(BASE_DIR / "static" / "admin.html", "r", encoding="utf-8") as f:
+        return f.read()
 
 # ---- COLAB PING STATUS ----
 @app.get("/api/health")
@@ -356,7 +380,8 @@ def health_check():
 # --- PAGE ROUTING ---
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
-    with open(BASE_DIR / "static" / "index.html", "r", encoding="utf-8") as f:
+    page = "index.html" if store.get_setting("chat_enabled", True) else "chat_off.html"
+    with open(BASE_DIR / "static" / page, "r", encoding="utf-8") as f:
         return f.read()
 
 
@@ -581,13 +606,17 @@ def generate_title(req: TitleRequest):
 
     try:
         full_title = ""
-        with requests.post(COLAB_API_URL, json={"messages": colab_messages},
-                           stream=True, timeout=(10, 60)) as r:
-            if r.status_code != 200:
-                return {"title": "Incident Triage"}
-            for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
-                if chunk:
-                    full_title += chunk
+        tokens_in = usage.count_messages(colab_messages)
+        with llm_slot("chat", wait_timeout=15) as waited:
+            t0 = time.time()
+            with requests.post(COLAB_API_URL, json={"messages": colab_messages},
+                               stream=True, timeout=(10, 60)) as r:
+                if r.status_code != 200:
+                    return {"title": "Incident Triage"}
+                for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
+                    if chunk:
+                        full_title += chunk
+        usage.log_call("chat", None, tokens_in, usage.count_tokens(full_title), time.time() - t0, waited)
 
         title = re.sub(r'[\"\'\[\]]', '', full_title).strip()
         # Reject HTML/error pages and anything that isn't a short plain title
@@ -713,6 +742,8 @@ OFFTOPIC_REPLY = ("I'm a triage assistant, so I can only help with error logs, s
 # so FastAPI runs it in a worker thread instead of freezing the event loop.
 @app.post("/api/chat")
 def chat_endpoint(req: ChatRequest):
+    if not store.get_setting("chat_enabled", True):
+        raise HTTPException(403, "Chat is switched off by an administrator.")
     # 1. Truncate massive pasted logs or attached files immediately
     safe_query = smart_truncate_log(req.query)
 
@@ -792,29 +823,39 @@ def chat_endpoint(req: ChatRequest):
         # 6. Stream Generator connecting to Colab; failures are sent to the browser as readable errors
     def stream_generator():
         yield f"data: {json.dumps({'meta': {'sources': sources, 'incident': incident_info}})}\n\n"
+        tokens_in = usage.count_messages(colab_messages)
+        sent = []                              # text actually streamed to the browser, for token counting
         try:
-            with requests.post(COLAB_API_URL, json={"messages": colab_messages},
-                               stream=True, timeout=(10, 300)) as r:
-                if r.status_code != 200:
-                    yield f"data: {json.dumps({'error': f'LLM server returned HTTP {r.status_code}. Is the Colab session alive?'})}\n\n"
-                else:
-                    head, decided = "", False
-                    for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
-                        if not chunk:
-                            continue
-                        if not decided:
-                            head += chunk
-                            if len(head) < 40:
-                                continue          # wait until we can tell what kind of reply this is
-                            decided = True
-                            if OFFTOPIC_RE.match(head):
-                                yield f"data: {json.dumps({'text': OFFTOPIC_REPLY})}\n\n"
-                                break             # drop whatever advice the model added
-                            chunk = head
-                        yield f"data: {json.dumps({'text': chunk})}\n\n"
-                    if not decided and head:      # very short reply
-                        text = OFFTOPIC_REPLY if OFFTOPIC_RE.match(head) else head
-                        yield f"data: {json.dumps({'text': text})}\n\n"
+            with llm_slot("chat") as waited:
+                t0 = time.time()
+                with requests.post(COLAB_API_URL, json={"messages": colab_messages},
+                                   stream=True, timeout=(10, 300)) as r:
+                    if r.status_code != 200:
+                        yield f"data: {json.dumps({'error': f'LLM server returned HTTP {r.status_code}. Is the Colab session alive?'})}\n\n"
+                    else:
+                        head, decided = "", False
+                        for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
+                            if not chunk:
+                                continue
+                            if not decided:
+                                head += chunk
+                                if len(head) < 40:
+                                    continue          # wait until we can tell what kind of reply this is
+                                decided = True
+                                if OFFTOPIC_RE.match(head):
+                                    sent.append(OFFTOPIC_REPLY)
+                                    yield f"data: {json.dumps({'text': OFFTOPIC_REPLY})}\n\n"
+                                    break             # drop whatever advice the model added
+                                chunk = head
+                            sent.append(chunk)
+                            yield f"data: {json.dumps({'text': chunk})}\n\n"
+                        if not decided and head:      # very short reply
+                            text = OFFTOPIC_REPLY if OFFTOPIC_RE.match(head) else head
+                            sent.append(text)
+                            yield f"data: {json.dumps({'text': text})}\n\n"
+            usage.log_call("chat", None, tokens_in, usage.count_tokens("".join(sent)), time.time() - t0, waited)
+        except LLMBusy:
+            yield f"data: {json.dumps({'error': 'The AI model is busy with another task. Please try again in a moment.'})}\n\n"
         except Exception as e:
             log.error("LLM request failed: %s", e)
             yield f"data: {json.dumps({'error': f'LLM server unreachable: {e}'})}\n\n"

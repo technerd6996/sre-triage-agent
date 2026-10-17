@@ -14,7 +14,7 @@ if not windows:
     raise SystemExit("No running Windows instance found in AWS. Check AWS_REGION and credentials.")
 host = "victim-test"
 now = datetime.now()
-problem = "victim-test is down"
+problem = "Nginx service stopped"
 
 created = _request(
     "POST",

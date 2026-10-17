@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>TRIAGE-1 Admin</title>
+<style>body{background:#0A0D10;color:#E5E7EB;font-family:system-ui;padding:40px}label{display:block;margin:14px 0}button,select{padding:6px 12px;border-radius:8px}</style></head>
+<body>
+  <h2>TRIAGE-1 Admin Console</h2>
+  <label><input id="chat" type="checkbox"> Chat enabled for users</label>
+  <label><input id="auto" type="checkbox"> Auto-work the L1 queue (persists across restarts)</label>
+  <label>Autonomous restore of critical services:
+    <select id="aut"><option value="off">off</option><option value="shadow">shadow (log only)</option><option value="on">on</option></select></label>
+  <h3>P1 notice settings</h3>
+  <label>Bridge link (https) <input id="br" size="50"></label>
+  <label>To (comma-separated) <input id="to" size="50"></label>
+  <label>Cc (comma-separated) <input id="cc" size="50"></label>
+  <button id="p1save">Save P1 settings</button>
+  <p id="msg" style="color:#9CA3AF"></p>
+  <p><a href="/agent" style="color:#FFB000">Agent Console</a> &middot; <a href="/knowledge" style="color:#FFB000">KB Management</a></p>
+  <button onclick="fetch('/api/auth/logout',{method:'POST'}).then(()=>location.href='/static/login.html')">Log out</button>
+<script>
+const j=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()});
+fetch('/api/chat/status').then(r=>r.json()).then(d=>chat.checked=d.enabled);
+fetch('/api/agent/auto').then(r=>r.json()).then(d=>auto.checked=d.enabled);
+fetch('/api/admin/autonomy').then(r=>r.json()).then(d=>aut.value=d.mode);
+chat.onchange=()=>j('/api/admin/chat',{enabled:chat.checked}).then(()=>msg.textContent='Chat '+(chat.checked?'on':'off')).catch(e=>{chat.checked=!chat.checked;msg.textContent=e.message});
+auto.onchange=()=>j('/api/agent/auto',{enabled:auto.checked}).then(()=>msg.textContent='Auto mode '+(auto.checked?'on':'off')).catch(e=>{auto.checked=!auto.checked;msg.textContent=e.message});
+aut.onchange=()=>j('/api/admin/autonomy',{mode:aut.value}).then(()=>msg.textContent='Autonomy: '+aut.value).catch(e=>msg.textContent=e.message);
+const split=s=>s.split(',').map(x=>x.trim()).filter(Boolean);
+fetch('/api/admin/p1').then(r=>r.json()).then(d=>{br.value=d.bridge_link||'';to.value=(d.to||[]).join(', ');cc.value=(d.cc||[]).join(', ')});
+p1save.onclick=()=>fetch('/api/admin/p1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bridge_link:br.value.trim(),to:split(to.value),cc:split(cc.value)})}).then(async r=>{const d=await r.json();msg.textContent=r.ok?'P1 settings saved':(d.detail||'Error')});
+</script></body></html>

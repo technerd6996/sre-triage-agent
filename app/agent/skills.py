@@ -32,6 +32,11 @@ def load_skills() -> dict:
         skills[meta.get("name", p.parent.name)] = {"meta": meta, "body": body}
     return skills
 
+def _kw_match(keyword: str, text: str) -> bool:
+    """Whole-word match, so a keyword like 'c' no longer matches every ticket.
+    A trailing plural is allowed ('service' matches 'services'). `text` must be lower-case."""
+    kw = re.escape(keyword.lower())
+    return re.search(rf"(?<![a-z0-9]){kw}(?:e?s)?(?![a-z0-9])", text) is not None
 
 def pick_skill(ticket_text: str, platform: str = None):
     """Technical skill whose keywords match best, limited to skills for this platform."""
@@ -43,7 +48,7 @@ def pick_skill(ticket_text: str, platform: str = None):
         systems = s["meta"].get("systems", [])
         if platform and systems and platform not in systems:
             continue
-        score = sum(1 for kw in s["meta"].get("keywords", []) if kw.lower() in text)
+        score = sum(1 for kw in s["meta"].get("keywords", []) if _kw_match(kw, text))
         if score > best_score:
             best_name, best, best_score = name, s, score
     return best_name, best
