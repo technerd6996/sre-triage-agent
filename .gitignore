@@ -5,3 +5,8 @@ venv/
 __pycache__/
 _restructure_backup/
 triage_runs.db
+triage_checkpoints.db
+triage_checkpoints.db-shm
+triage_checkpoints.db-wal
+project_code.txt
+"code exrtration command.txt"
