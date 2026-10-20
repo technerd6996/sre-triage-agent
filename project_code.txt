@@ -738,7 +738,7 @@ def _clock(ts) -> str:
     return time.strftime("%H:%M:%S", time.gmtime(ts)) if ts else "--:--:--"
 
 
-def build_report(run: dict, full: bool = True) -> str:
+def _build_report_old(run: dict, full: bool = True) -> str:
     """The structured work note posted to ServiceNow when a run finishes.
 
     full=True (default): include the step-by-step list.
@@ -767,6 +767,122 @@ def build_report(run: dict, full: bool = True) -> str:
     if final:
         lines += ["", "Agent summary:", final.strip()[:800]]
     return "\n".join(lines)
+
+_DIAG = {"check_reachability", "check_disk_usage", "check_service_status", "lookup_ad_user",
+         "check_ec2_status", "check_security_group", "get_cloudwatch_metric"}
+_ACTION = {"clear_temp_files", "start_service", "unlock_ad_account"}
+
+
+def _span(run: dict) -> str:
+    ts = [e["ts"] for e in run.get("events", []) if e.get("ts")]
+    if len(ts) < 2:
+        return ""
+    secs = int(max(ts) - min(ts))
+    d = f"{secs // 60} min {secs % 60} s" if secs >= 60 else f"{secs} s"
+    return f"{d} ({_clock(min(ts))} to {_clock(max(ts))} UTC)"
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def _next_steps(outcome: str, checker_will_run: bool) -> str:
+    if outcome.startswith("RESOLVED"):
+        if checker_will_run:
+            return ("An independent check will now verify the fix. The ticket is closed if it passes and "
+                    "reopened if it does not. See the next note from triage-checker.")
+        return "No further action is needed. If the problem comes back, reopen this ticket or raise a new one."
+    if outcome.startswith("ESCALATED"):
+        return ("A human engineer needs to take over this ticket. The reason is in the agent summary above "
+                "and in the escalation note.")
+    return "The run ended without resolving or escalating. Please review the timeline and take over manually."
+
+
+def build_report(run: dict, full: bool = True) -> str:
+    """The verbose, plain-English work note posted to ServiceNow when a run ends.
+
+    full=True: includes the step-by-step timeline.
+    full=False: same sections without the timeline, because the checker posts the consolidated note.
+    """
+    events = run.get("events", [])
+    outcome = _outcome(run)
+    server = run.get("server") or "unknown"
+    skill = run.get("skill") or "none"
+    final = next((str(e.get("text", "")).strip() for e in events if e.get("type") == "final"), "")
+    findings, actions, problems = [], [], []
+    last_decision, pending_call = None, None
+    for e in events:
+        t, name = e.get("type"), e.get("name")
+        if t == "decision":
+            last_decision = e
+            if not e.get("approve"):
+                actions.append(f"{_clock(e.get('ts'))}  The proposed change was rejected by {e.get('by', 'an engineer')}.")
+        elif t == "tool_call" and name in _ACTION:
+            pending_call = e
+        elif t == "tool_result":
+            res = _result(name, e.get("content"))
+            if not res:
+                continue
+            if name in _DIAG:
+                findings.append(res)
+            elif name in _ACTION:
+                args = dict((pending_call or {}).get("args") or {})
+                if server != "unknown":
+                    args["target"] = server
+                line = f"{_clock(e.get('ts'))}  {_fmt_call(name, args)}. Result: {res}"
+                if last_decision and last_decision.get("approve"):
+                    line += f" (approved by {last_decision.get('by', 'an engineer')} at {_clock(last_decision.get('ts'))} UTC)"
+                actions.append(line)
+                pending_call = None
+        elif t in ("error", "warning"):
+            d = describe(e)
+            if d:
+                problems.append(d)
+
+    where = f"on {server}" if server != "unknown" else "(server not identified)"
+    how = f"using the {skill} playbook" if skill != "none" else "without a matching playbook"
+    summary = [f"TRIAGE-1 worked {run.get('ticket', 'this ticket')} {where} {how}."]
+    if findings:
+        summary.append(f"It ran {_plural(len(findings), 'diagnostic check')} first.")
+    done = sum(1 for a in actions if "was rejected" not in a)
+    if done:
+        summary.append(f"It then made {_plural(done, 'change')} on the server.")
+    if len(actions) > done:
+        summary.append("An engineer rejected a proposed change.")
+    summary.append(f"Outcome: {outcome}.")
+
+    checker_will_run = not full
+    lines = ["TRIAGE-1 INCIDENT REPORT", "=" * 24, "",
+             f"Ticket:    {run.get('ticket', '')}",
+             f"Server:    {server}",
+             f"Playbook:  {skill}",
+             f"Outcome:   {outcome}"]
+    if _span(run):
+        lines.append(f"Duration:  {_span(run)}")
+    lines += ["", "SUMMARY", " ".join(summary)]
+    if final:
+        lines += ["", "Agent's own summary:", final[:1200]]
+    lines += ["", "WHAT TRIAGE-1 FOUND"]
+    lines += [f"  - {f}" for f in findings] or ["  - No diagnostic results were recorded."]
+    lines += ["", "WHAT TRIAGE-1 DID"]
+    lines += [f"  - {a}" for a in actions] or ["  - No changes were made to any system."]
+    ctx = run.get("service_context") or {}
+    if ctx.get("found") and ctx.get("summary"):
+        lines += ["", "SERVICE IMPACT (from the CMDB)", f"  {str(ctx['summary']).strip()[:800]}"]
+    if problems:
+        lines += ["", "PROBLEMS DURING THE RUN"] + [f"  - {p}" for p in problems]
+    lines += ["", "NEXT STEPS", f"  {_next_steps(outcome, checker_will_run)}"]
+    if full:
+        lines += ["", "TIMELINE (times in UTC)"]
+        n = 0
+        for e in events:
+            if e.get("type") == "final":
+                continue
+            d = describe(e)
+            if d:
+                n += 1
+                lines.append(f"  {n}. {_clock(e.get('ts'))}  {d}")
+    return "\n".join(lines)[:30000]
 
 def outcome_code(run: dict) -> str:
     """'resolved', 'escalated' or 'incomplete', for the chat UI."""
@@ -1538,7 +1654,10 @@ def _consume(run: dict, events, kind: str = "triage"):
                     _add_event(run, {"type": "decision", "approve": True, "by": "policy (autonomous restore)"})
                     try:
                         add_work_note.invoke({"number": run["ticket"],
-                                              "note": f"TRIAGE-1 policy: {why}. No approval needed for critical-service restore."})
+                                              "note": ("TRIAGE-1 restarted the service without waiting for approval, because the "
+                                                       "autonomous-restore policy allows it in this case.\n\n"
+                                                       f"Reason: {why}.\n"
+                                                       "The result is verified separately by triage-checker when verification is enabled.")})
                     except Exception as e:
                         log.warning("Could not post autonomy note to %s: %s", run["ticket"], str(e)[:200])
                 else:
@@ -1555,6 +1674,18 @@ def _consume(run: dict, events, kind: str = "triage"):
                             log.error("Could not save approval request for %s: %s", run["ticket"], str(e)[:200])
                     store.audit(run["id"], run["ticket"], "agent", "approval_requested",
                                 ", ".join(a.get("name", "?") for a in ev["actions"]))
+                    try:
+                        listing = "\n".join(f"  - {_fmt_call(a.get('name'), a.get('args'))} (risk level {a.get('risk')})"
+                                            for a in pending_actions)
+                        add_work_note.invoke({"number": run["ticket"], "note": (
+                            "TRIAGE-1 is waiting for a human to approve a change.\n\n"
+                            f"Proposed action(s):\n{listing}\n\n"
+                            "Why approval is needed: these actions change a system, so a person must approve them first.\n"
+                            "Where to decide: the TRIAGE-1 agent console.\n"
+                            f"If nobody answers within {_approval_timeout() // 60} minutes, the request is treated as "
+                            "rejected and the ticket is escalated to a human engineer.")})
+                    except Exception as e:
+                        log.warning("Could not post the approval request to %s: %s", run["ticket"], str(e)[:200])
             elif ev["type"] == "error":
                 run["status"] = "error"
             store.save_run(run)
@@ -1718,8 +1849,13 @@ def decide(run_id: str, req: DecisionRequest, request: Request):
                 f"tools={tools}; feedback={req.feedback}")
                 
     # Add ServiceNow Work Note for the decision
-    decision_text = "Approved" if req.approve else "Rejected"
-    note = f"{decision_text} by {name} ({who}): {req.feedback or 'No comment provided.'}"
+    decision_text = "APPROVED" if req.approve else "REJECTED"
+    what = "\n".join(f"  - {_fmt_call(a.get('name'), a.get('args'))}" for a in pending) or "  - (details not recorded)"
+    after = ("TRIAGE-1 will now carry out the action(s) and continue the playbook." if req.approve
+             else "TRIAGE-1 will not make this change and will escalate the ticket to a human engineer.")
+    note = (f"{decision_text} by {name} ({who}) at {time.strftime('%H:%M:%S', time.gmtime())} UTC.\n\n"
+            f"Action(s) decided:\n{what}\n\n"
+            f"Approver comment: {req.feedback or 'No comment provided.'}\n\n{after}")
     try:
         add_work_note.invoke({"number": r["ticket"], "note": note})
     except Exception as e:
@@ -3623,8 +3759,13 @@ def create_incident(short_description: str, description: str, urgency: int = 3, 
     )
     return _fetch(created["number"])
 
+CLAIM_NOTE = ("TRIAGE-1 picked up this ticket and has started automated triage.\n\n"
+              "What happens next: it chooses a playbook, runs read-only diagnostics, and asks a human to "
+              "approve any change that carries risk. A full report is added to this ticket when it finishes.")
+
+
 @tool
-def claim_incident(number: str, work_note: str = "Triage agent picked up this ticket.") -> dict:
+def claim_incident(number: str, work_note: str = CLAIM_NOTE) -> dict:
     """Take ownership of an existing incident: assign it to the triage agent and move it to In Progress.
     Use this first when a ticket arrives in the L1 queue."""
     sys_id = _incident_id(number)
@@ -4022,7 +4163,10 @@ def _reopens(ticket: str) -> int:
 def _report(run: dict, kind: str, notes: list, verdict: str, comment: str, prefix: str = "") -> str:
     """One work note: what TRIAGE-1 ran, what the checker ran, the checker's comment and the verdict."""
     from app.agent.report import _clock, describe          # same wording the run report and UI use
-    lines = [f"{prefix}TRIAGE-1 RESOLUTION REPORT (checker)", "",
+    plain = {"pass": "The fix was independently verified and holds.",
+             "fail": "The independent check FAILED, so the problem is not fixed. A human engineer is needed.",
+             }.get(str(verdict).lower(), "The independent check could not be completed. Please verify manually.")
+    lines = [f"{prefix}TRIAGE-1 RESOLUTION REPORT (checker)", "", f"RESULT: {plain}", "",
              f"Ticket:   {run['ticket']}", f"Server:   {run.get('server') or 'unknown'}",
              f"Playbook: {run.get('skill') or 'none'}", "",
              "1. Actions by the TRIAGE-1 agent (times UTC):"]
@@ -11010,8 +11154,9 @@ document.getElementById('logout-btn').onclick = () =>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="/static/css/theme.css?v=6">
-    <script src="/static/js/theme.js?v=6"></script>
+    <link rel="stylesheet" href="/static/css/style.css?v=10">
+    <link rel="stylesheet" href="/static/css/theme.css?v=7">
+    <script src="/static/js/theme.js?v=7"></script>
     <style>
         .msg-user .content { background: var(--panel-soft); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; }
         .msg-ai + .msg-user { margin-top: 12px; }
@@ -11094,9 +11239,9 @@ document.getElementById('logout-btn').onclick = () =>
                 <button onclick="createNewChat()" class="new-chat-btn text-[16px] px-5 py-2.5 rounded-xl font-semibold">
                     + New Chat
                 </button>
-                <button onclick="startIssueFlow()" class="text-[16px] px-5 py-2.5 rounded-xl font-semibold bg-[#FFB000] text-black hover:bg-[#E6A000] transition-colors">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-                    Manage Knowledge Base
+                <button onclick="startIssueFlow()" class="inline-flex items-center gap-2 text-[16px] px-5 py-2.5 rounded-xl font-semibold bg-[#FFB000] text-black hover:bg-[#E6A000] transition-colors">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+                    Report an Issue
                 </button>
                 <div id="status-pill" tabindex="0" role="status" title="Checking the AI modelâ€¦" class="status-pill mono text-[15px] text-gray-300 border border-[#2E3744] rounded-full px-5 py-2.5 flex items-center gap-2.5 bg-[#12161C]">
                     <span id="status-dot" class="w-3 h-3 rounded-full bg-[#FFB000] animate-pulse"></span>

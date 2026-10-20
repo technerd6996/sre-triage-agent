@@ -175,8 +175,13 @@ def create_incident(short_description: str, description: str, urgency: int = 3, 
     )
     return _fetch(created["number"])
 
+CLAIM_NOTE = ("TRIAGE-1 picked up this ticket and has started automated triage.\n\n"
+              "What happens next: it chooses a playbook, runs read-only diagnostics, and asks a human to "
+              "approve any change that carries risk. A full report is added to this ticket when it finishes.")
+
+
 @tool
-def claim_incident(number: str, work_note: str = "Triage agent picked up this ticket.") -> dict:
+def claim_incident(number: str, work_note: str = CLAIM_NOTE) -> dict:
     """Take ownership of an existing incident: assign it to the triage agent and move it to In Progress.
     Use this first when a ticket arrives in the L1 queue."""
     sys_id = _incident_id(number)

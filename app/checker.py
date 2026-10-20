@@ -162,7 +162,10 @@ def _reopens(ticket: str) -> int:
 def _report(run: dict, kind: str, notes: list, verdict: str, comment: str, prefix: str = "") -> str:
     """One work note: what TRIAGE-1 ran, what the checker ran, the checker's comment and the verdict."""
     from app.agent.report import _clock, describe          # same wording the run report and UI use
-    lines = [f"{prefix}TRIAGE-1 RESOLUTION REPORT (checker)", "",
+    plain = {"pass": "The fix was independently verified and holds.",
+             "fail": "The independent check FAILED, so the problem is not fixed. A human engineer is needed.",
+             }.get(str(verdict).lower(), "The independent check could not be completed. Please verify manually.")
+    lines = [f"{prefix}TRIAGE-1 RESOLUTION REPORT (checker)", "", f"RESULT: {plain}", "",
              f"Ticket:   {run['ticket']}", f"Server:   {run.get('server') or 'unknown'}",
              f"Playbook: {run.get('skill') or 'none'}", "",
              "1. Actions by the TRIAGE-1 agent (times UTC):"]

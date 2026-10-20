@@ -139,7 +139,10 @@ def _consume(run: dict, events, kind: str = "triage"):
                     _add_event(run, {"type": "decision", "approve": True, "by": "policy (autonomous restore)"})
                     try:
                         add_work_note.invoke({"number": run["ticket"],
-                                              "note": f"TRIAGE-1 policy: {why}. No approval needed for critical-service restore."})
+                                              "note": ("TRIAGE-1 restarted the service without waiting for approval, because the "
+                                                       "autonomous-restore policy allows it in this case.\n\n"
+                                                       f"Reason: {why}.\n"
+                                                       "The result is verified separately by triage-checker when verification is enabled.")})
                     except Exception as e:
                         log.warning("Could not post autonomy note to %s: %s", run["ticket"], str(e)[:200])
                 else:
@@ -156,6 +159,18 @@ def _consume(run: dict, events, kind: str = "triage"):
                             log.error("Could not save approval request for %s: %s", run["ticket"], str(e)[:200])
                     store.audit(run["id"], run["ticket"], "agent", "approval_requested",
                                 ", ".join(a.get("name", "?") for a in ev["actions"]))
+                    try:
+                        listing = "\n".join(f"  - {_fmt_call(a.get('name'), a.get('args'))} (risk level {a.get('risk')})"
+                                            for a in pending_actions)
+                        add_work_note.invoke({"number": run["ticket"], "note": (
+                            "TRIAGE-1 is waiting for a human to approve a change.\n\n"
+                            f"Proposed action(s):\n{listing}\n\n"
+                            "Why approval is needed: these actions change a system, so a person must approve them first.\n"
+                            "Where to decide: the TRIAGE-1 agent console.\n"
+                            f"If nobody answers within {_approval_timeout() // 60} minutes, the request is treated as "
+                            "rejected and the ticket is escalated to a human engineer.")})
+                    except Exception as e:
+                        log.warning("Could not post the approval request to %s: %s", run["ticket"], str(e)[:200])
             elif ev["type"] == "error":
                 run["status"] = "error"
             store.save_run(run)
@@ -319,8 +334,13 @@ def decide(run_id: str, req: DecisionRequest, request: Request):
                 f"tools={tools}; feedback={req.feedback}")
                 
     # Add ServiceNow Work Note for the decision
-    decision_text = "Approved" if req.approve else "Rejected"
-    note = f"{decision_text} by {name} ({who}): {req.feedback or 'No comment provided.'}"
+    decision_text = "APPROVED" if req.approve else "REJECTED"
+    what = "\n".join(f"  - {_fmt_call(a.get('name'), a.get('args'))}" for a in pending) or "  - (details not recorded)"
+    after = ("TRIAGE-1 will now carry out the action(s) and continue the playbook." if req.approve
+             else "TRIAGE-1 will not make this change and will escalate the ticket to a human engineer.")
+    note = (f"{decision_text} by {name} ({who}) at {time.strftime('%H:%M:%S', time.gmtime())} UTC.\n\n"
+            f"Action(s) decided:\n{what}\n\n"
+            f"Approver comment: {req.feedback or 'No comment provided.'}\n\n{after}")
     try:
         add_work_note.invoke({"number": r["ticket"], "note": note})
     except Exception as e:

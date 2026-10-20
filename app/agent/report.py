@@ -115,7 +115,7 @@ def _clock(ts) -> str:
     return time.strftime("%H:%M:%S", time.gmtime(ts)) if ts else "--:--:--"
 
 
-def build_report(run: dict, full: bool = True) -> str:
+def _build_report_old(run: dict, full: bool = True) -> str:
     """The structured work note posted to ServiceNow when a run finishes.
 
     full=True (default): include the step-by-step list.
@@ -144,6 +144,122 @@ def build_report(run: dict, full: bool = True) -> str:
     if final:
         lines += ["", "Agent summary:", final.strip()[:800]]
     return "\n".join(lines)
+
+_DIAG = {"check_reachability", "check_disk_usage", "check_service_status", "lookup_ad_user",
+         "check_ec2_status", "check_security_group", "get_cloudwatch_metric"}
+_ACTION = {"clear_temp_files", "start_service", "unlock_ad_account"}
+
+
+def _span(run: dict) -> str:
+    ts = [e["ts"] for e in run.get("events", []) if e.get("ts")]
+    if len(ts) < 2:
+        return ""
+    secs = int(max(ts) - min(ts))
+    d = f"{secs // 60} min {secs % 60} s" if secs >= 60 else f"{secs} s"
+    return f"{d} ({_clock(min(ts))} to {_clock(max(ts))} UTC)"
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def _next_steps(outcome: str, checker_will_run: bool) -> str:
+    if outcome.startswith("RESOLVED"):
+        if checker_will_run:
+            return ("An independent check will now verify the fix. The ticket is closed if it passes and "
+                    "reopened if it does not. See the next note from triage-checker.")
+        return "No further action is needed. If the problem comes back, reopen this ticket or raise a new one."
+    if outcome.startswith("ESCALATED"):
+        return ("A human engineer needs to take over this ticket. The reason is in the agent summary above "
+                "and in the escalation note.")
+    return "The run ended without resolving or escalating. Please review the timeline and take over manually."
+
+
+def build_report(run: dict, full: bool = True) -> str:
+    """The verbose, plain-English work note posted to ServiceNow when a run ends.
+
+    full=True: includes the step-by-step timeline.
+    full=False: same sections without the timeline, because the checker posts the consolidated note.
+    """
+    events = run.get("events", [])
+    outcome = _outcome(run)
+    server = run.get("server") or "unknown"
+    skill = run.get("skill") or "none"
+    final = next((str(e.get("text", "")).strip() for e in events if e.get("type") == "final"), "")
+    findings, actions, problems = [], [], []
+    last_decision, pending_call = None, None
+    for e in events:
+        t, name = e.get("type"), e.get("name")
+        if t == "decision":
+            last_decision = e
+            if not e.get("approve"):
+                actions.append(f"{_clock(e.get('ts'))}  The proposed change was rejected by {e.get('by', 'an engineer')}.")
+        elif t == "tool_call" and name in _ACTION:
+            pending_call = e
+        elif t == "tool_result":
+            res = _result(name, e.get("content"))
+            if not res:
+                continue
+            if name in _DIAG:
+                findings.append(res)
+            elif name in _ACTION:
+                args = dict((pending_call or {}).get("args") or {})
+                if server != "unknown":
+                    args["target"] = server
+                line = f"{_clock(e.get('ts'))}  {_fmt_call(name, args)}. Result: {res}"
+                if last_decision and last_decision.get("approve"):
+                    line += f" (approved by {last_decision.get('by', 'an engineer')} at {_clock(last_decision.get('ts'))} UTC)"
+                actions.append(line)
+                pending_call = None
+        elif t in ("error", "warning"):
+            d = describe(e)
+            if d:
+                problems.append(d)
+
+    where = f"on {server}" if server != "unknown" else "(server not identified)"
+    how = f"using the {skill} playbook" if skill != "none" else "without a matching playbook"
+    summary = [f"TRIAGE-1 worked {run.get('ticket', 'this ticket')} {where} {how}."]
+    if findings:
+        summary.append(f"It ran {_plural(len(findings), 'diagnostic check')} first.")
+    done = sum(1 for a in actions if "was rejected" not in a)
+    if done:
+        summary.append(f"It then made {_plural(done, 'change')} on the server.")
+    if len(actions) > done:
+        summary.append("An engineer rejected a proposed change.")
+    summary.append(f"Outcome: {outcome}.")
+
+    checker_will_run = not full
+    lines = ["TRIAGE-1 INCIDENT REPORT", "=" * 24, "",
+             f"Ticket:    {run.get('ticket', '')}",
+             f"Server:    {server}",
+             f"Playbook:  {skill}",
+             f"Outcome:   {outcome}"]
+    if _span(run):
+        lines.append(f"Duration:  {_span(run)}")
+    lines += ["", "SUMMARY", " ".join(summary)]
+    if final:
+        lines += ["", "Agent's own summary:", final[:1200]]
+    lines += ["", "WHAT TRIAGE-1 FOUND"]
+    lines += [f"  - {f}" for f in findings] or ["  - No diagnostic results were recorded."]
+    lines += ["", "WHAT TRIAGE-1 DID"]
+    lines += [f"  - {a}" for a in actions] or ["  - No changes were made to any system."]
+    ctx = run.get("service_context") or {}
+    if ctx.get("found") and ctx.get("summary"):
+        lines += ["", "SERVICE IMPACT (from the CMDB)", f"  {str(ctx['summary']).strip()[:800]}"]
+    if problems:
+        lines += ["", "PROBLEMS DURING THE RUN"] + [f"  - {p}" for p in problems]
+    lines += ["", "NEXT STEPS", f"  {_next_steps(outcome, checker_will_run)}"]
+    if full:
+        lines += ["", "TIMELINE (times in UTC)"]
+        n = 0
+        for e in events:
+            if e.get("type") == "final":
+                continue
+            d = describe(e)
+            if d:
+                n += 1
+                lines.append(f"  {n}. {_clock(e.get('ts'))}  {d}")
+    return "\n".join(lines)[:30000]
 
 def outcome_code(run: dict) -> str:
     """'resolved', 'escalated' or 'incomplete', for the chat UI."""
