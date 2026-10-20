@@ -1,5 +1,23 @@
 const $ = (id) => document.getElementById(id);
 
+// Small non-blocking message, bottom-right
+function toast(msg, ok = true) {
+    let box = document.getElementById('toasts');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'toasts';
+        box.setAttribute('role', 'status');
+        box.setAttribute('aria-live', 'polite');
+        box.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:80;display:flex;flex-direction:column;gap:8px;max-width:380px';
+        document.body.appendChild(box);
+    }
+    const t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = 'padding:10px 14px;border-radius:10px;font-size:15px;background:var(--panel-raised);color:var(--text);box-shadow:0 6px 20px rgba(16,24,40,.18);border:1px solid ' + (ok ? 'var(--green)' : 'var(--danger)');
+    box.appendChild(t);
+    setTimeout(() => t.remove(), ok ? 4000 : 7000);
+}
+
 // All dynamic text goes through textContent: ticket text and tool output are untrusted.
 function el(tag, cls, text) {
     const n = document.createElement(tag);
@@ -34,19 +52,19 @@ async function loadQueue() {
     try {
         const rows = await api('/api/agent/queue');
         box.replaceChildren();
-        if (!rows.length) box.append(el('p', 'text-[13px] text-gray-500', 'Queue is empty.'));
+        if (!rows.length) box.append(el('p', 'text-[14px] text-gray-500', 'Queue is empty.'));
         rows.forEach((t) => {
             const row = el('div', 'flex items-center gap-3 p-3 rounded-lg bg-[#12161C] border border-[#232B33]');
             const txt = el('div', 'min-w-0 flex-1');
-            txt.append(el('div', 'mono text-[13px] text-[#FFB000]', t.number),
-                       el('div', 'text-[13px] text-gray-300 truncate', t.short_description));
-            const btn = el('button', 'px-3 py-1.5 rounded-md bg-[#0084FF] hover:bg-[#0073E6] text-[13px] font-semibold', 'Work');
+            txt.append(el('div', 'mono text-[14px] text-[#FFB000]', t.number),
+                       el('div', 'text-[14px] text-gray-300 truncate', t.short_description));
+            const btn = el('button', 'px-3 py-1.5 rounded-md bg-[#0084FF] hover:bg-[#0073E6] text-white text-[14px] font-semibold', 'Work');
             btn.onclick = () => startRun(t.number);
             row.append(txt, btn);
             box.append(row);
         });
     } catch (e) {
-        box.replaceChildren(el('p', 'text-[13px] text-red-400', e.message));
+        box.replaceChildren(el('p', 'text-[14px] text-red-400', e.message));
     }
 }
 
@@ -55,12 +73,12 @@ async function loadRuns() {
         const runs = await api('/api/agent/runs');
         const box = $('runs');
         box.replaceChildren();
-        if (!runs.length) box.append(el('p', 'text-[13px] text-gray-500', 'No runs yet.'));
+        if (!runs.length) box.append(el('p', 'text-[14px] text-gray-500', 'No runs yet.'));
         runs.forEach((r) => {
             const border = r.id === runId ? 'border-[#FFB000]' : 'border-[#232B33]';
             const row = el('button', `text-left p-3 rounded-lg bg-[#12161C] border ${border} hover:border-[#FFB000]`);
-            row.append(el('div', 'mono text-[13px] text-[#FFB000]', r.ticket),
-                       el('div', 'text-[12px] text-gray-400',
+            row.append(el('div', 'mono text-[14px] text-[#FFB000]', r.ticket),
+                       el('div', 'text-[13px] text-gray-400',
                           `${(STATUS[r.status] || [r.status])[0]}${r.server ? ' · ' + r.server : ''}`));
             row.onclick = () => attach(r.id);
             box.append(row);
@@ -78,13 +96,13 @@ async function loadPending() {
         $('pending-count').textContent = `(${rows.length})`;
         const box = $('pending');
         box.replaceChildren();
-        if (!rows.length) box.append(el('p', 'text-[13px] text-gray-500', 'Nothing waiting.'));
+        if (!rows.length) box.append(el('p', 'text-[14px] text-gray-500', 'Nothing waiting.'));
         rows.forEach((p) => {
             const mins = Math.max(0, Math.round((Date.now() / 1000 - p.requested_at) / 60));
             const row = el('button', 'text-left p-3 rounded-lg bg-[#1A130A] border border-[#FF8A00] hover:bg-[#241A0D]');
-            row.append(el('div', 'mono text-[13px] text-[#FF8A00]', p.ticket + (p.server ? ' \u00b7 ' + p.server : '')));
-            p.actions.forEach((a) => row.append(el('div', 'text-[12px] text-gray-300', `${a.text} (${a.risk})`)));
-            row.append(el('div', 'text-[11px] text-gray-500 mt-1', `waiting ${mins} min`));
+            row.append(el('div', 'mono text-[14px] text-[#FF8A00]', p.ticket + (p.server ? ' \u00b7 ' + p.server : '')));
+            p.actions.forEach((a) => row.append(el('div', 'text-[13px] text-gray-300', `${a.text} (${a.risk})`)));
+            row.append(el('div', `text-[13px] mt-1 ${mins >= 20 ? 'text-red-400 font-semibold' : 'text-gray-500'}`, `waiting ${mins} min`));
             row.onclick = () => attach(p.run_id);
             box.append(row);
         });
@@ -95,8 +113,9 @@ async function loadPending() {
 async function startRun(ticket) {
     try {
         const r = await post('/api/agent/run', { ticket });
+        if (!r.run_id) { toast(`Queued at position ${r.position}. It starts automatically when the current run finishes.`); return; }
         attach(r.run_id);
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message, false); }
 }
 
 function attach(id) {
@@ -119,7 +138,7 @@ async function poll() {
 }
 
 function chip(text) {
-    return el('span', 'mono text-[12px] px-2.5 py-1 rounded-md bg-[#171C24] border border-[#2E3744] text-gray-300', text);
+    return el('span', 'mono text-[13px] px-2.5 py-1 rounded-md bg-[#171C24] border border-[#2E3744] text-gray-300', text);
 }
 
 function render(d) {
@@ -134,7 +153,7 @@ function render(d) {
     const [label, cls] = STATUS[d.status] || [d.status, 'text-gray-400 border-gray-600'];
     const pill = $('run-status');
     pill.textContent = label;
-    pill.className = `mono text-[12px] px-3 py-1 rounded-full border ${cls}`;
+    pill.className = `mono text-[13px] px-3 py-1 rounded-full border ${cls}`;
     d.events.forEach(addEvent);
     showApproval(d.status === 'awaiting_approval' ? d.pending : null);
     showP1(d.p1);
@@ -144,10 +163,10 @@ function render(d) {
 
 function stepRow(icon, iconCls, title, detail) {
     const row = el('div', 'flex gap-3 p-3 rounded-lg bg-[#12161C] border border-[#232B33]');
-    row.append(el('span', `mono text-[13px] mt-0.5 ${iconCls}`, icon));
+    row.append(el('span', `mono text-[14px] mt-0.5 ${iconCls}`, icon));
     const body = el('div', 'min-w-0 flex-1');
-    body.append(el('div', 'mono text-[13px] text-[#E8ECF1]', title));
-    if (detail) body.append(el('pre', 'mono text-[12px] text-gray-400 whitespace-pre-wrap break-all max-h-28 overflow-y-auto mt-1', detail));
+    body.append(el('div', 'mono text-[14px] text-[#E8ECF1]', title));
+    if (detail) body.append(el('pre', 'mono text-[13px] text-gray-400 whitespace-pre-wrap break-all max-h-28 overflow-y-auto mt-1', detail));
     row.append(body);
     return row;
 }
@@ -162,8 +181,8 @@ function addEvent(ev) {
     else if (ev.type === 'error') row = stepRow('✖', 'text-red-400', 'Error', ev.message);
     else if (ev.type === 'final') {
         row = el('div', 'p-4 rounded-lg bg-[#0F1A14] border border-[#1F9D55]');
-        row.append(el('div', 'mono text-[12px] uppercase tracking-[0.14em] text-[#3DDC84] mb-1', 'Summary'),
-                   el('div', 'text-[14px] text-gray-200 whitespace-pre-wrap', ev.text));
+        row.append(el('div', 'mono text-[13px] uppercase tracking-[0.14em] text-[#3DDC84] mb-1', 'Summary'),
+                   el('div', 'text-[15px] text-gray-200 whitespace-pre-wrap', ev.text));
     }
     if (row) $('steps').append(row);
 }
@@ -177,8 +196,8 @@ function showApproval(actions) {
     list.replaceChildren();
     actions.forEach((a) => {
         const row = el('div', 'p-3 rounded-lg bg-[#0A0D10] border border-[#3A2A14]');
-        row.append(el('div', 'mono text-[13px] text-[#FF8A00]', `${a.name}  (${a.risk})`),
-                   el('pre', 'mono text-[12px] text-gray-300 whitespace-pre-wrap break-all mt-1', JSON.stringify(a.args)));
+        row.append(el('div', 'mono text-[14px] text-[#FF8A00]', `${a.name}  (${a.risk})`),
+                   el('pre', 'mono text-[13px] text-gray-300 whitespace-pre-wrap break-all mt-1', JSON.stringify(a.args)));
         list.append(row);
     });
     $('approve').disabled = $('reject').disabled = false;
@@ -187,7 +206,7 @@ function showApproval(actions) {
 
 async function decide(approve) {
     const feedback = $('comment').value.trim();
-    if (!approve && !feedback) { $('comment').focus(); alert('Add a comment explaining the rejection.'); return; }
+    if (!approve && !feedback) { $('comment').focus(); toast('Add a comment explaining the rejection.', false); return; }
     $('approve').disabled = $('reject').disabled = true;
     try {
         await post(`/api/agent/runs/${runId}/decision`, { approve, feedback });
@@ -197,7 +216,7 @@ async function decide(approve) {
         poll();
         loadPending();
     } catch (e) {
-        alert(e.message);
+        toast(e.message, false);
         $('approve').disabled = $('reject').disabled = false;
     }
 }
@@ -207,7 +226,7 @@ $('reject').onclick = () => decide(false);
 // ---------- P1 declaration ----------
 function showP1(p) {
     const box = $('p1box');
-    if (!p || p.status === 'dismissed' || p.status === 'declared') { box.classList.add('hidden'); return; }
+    if (!p || ['dismissed', 'declared', 'withdrawn'].includes(p.status)) { box.classList.add('hidden'); return; }
     $('p1-reason').textContent = 'Reason: ' + p.reason;
     $('p1-to').textContent = 'To: ' + (p.to.join(', ') || 'NOT CONFIGURED') + (p.cc.length ? ' | Cc: ' + p.cc.join(', ') : '') + ' | Bridge: ' + (p.bridge || 'NOT CONFIGURED');
     $('p1-err').textContent = p.notice_error ? 'Notice not sent: ' + p.notice_error : '';
@@ -220,9 +239,9 @@ async function p1Decide(approve) {
     try {
         const p = await post(`/api/agent/runs/${runId}/p1`, { approve, body: $('p1-body').value });
         showP1(p);
-        if (approve && p.status === 'declared') alert('P1 declared and notice sent.');
+        if (approve && p.status === 'declared') toast('P1 declared and notice sent.');
         loadPending();
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message, false); }
 }
 $('p1-go').onclick = () => p1Decide(true);
 $('p1-no').onclick = () => p1Decide(false);
@@ -230,7 +249,7 @@ $('p1-no').onclick = () => p1Decide(false);
 // ---------- auto mode and startup ----------
 $('auto').onchange = async (e) => {
     try { await post('/api/agent/auto', { enabled: e.target.checked }); }
-    catch (err) { e.target.checked = !e.target.checked; alert(err.message); }
+    catch (err) { e.target.checked = !e.target.checked; toast(err.message, false); }
 };
 $('refresh').onclick = loadQueue;
 

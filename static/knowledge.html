@@ -3,13 +3,15 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#0a0d10">
+    <meta name="theme-color" content="var(--bg)">
     <title>Knowledge Manager · TRIAGE-1</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="/static/css/knowledge.css?v=5">    
+    <link rel="stylesheet" href="/static/css/knowledge.css?v=8">
+    <link rel="stylesheet" href="/static/css/theme.css?v=6">
+    <script src="/static/js/theme.js?v=6"></script>   
 </head>
 <body class="km-body">
 <header class="km-header">
@@ -17,7 +19,7 @@
         <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
         <span class="brand-copy"><span class="brand-title">TRIAGE-1 <span class="brand-divider">/</span> Knowledge</span><span class="brand-subtitle">RUNBOOKS · INFRASTRUCTURE GRAPH</span></span>
     </a>
-    <div class="header-actions"><span class="header-tag"><span class="header-tag-dot"></span> KNOWLEDGE CONTROLS</span><a href="/" class="back-link"><span aria-hidden="true">←</span> Back to chat</a></div>
+    <div class="header-actions"><span class="header-tag"><span class="header-tag-dot"></span> KNOWLEDGE CONTROLS</span><a href="/" class="back-link"><span aria-hidden="true">←</span> Back to chat</a><span id="theme-slot"></span></div>
 </header>
 
 <main class="km-main">
@@ -91,6 +93,16 @@
 
     <footer class="km-footer"><span>TRIAGE-1 / KNOWLEDGE OPERATIONS</span><span>Runbooks ground responses; graph edges describe relationships.</span></footer>
 </main>
-<script src="/static/js/knowledge.js?v=4"></script>
+<dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+    <div class="confirm-box">
+        <h2 id="confirm-title">Delete?</h2>
+        <p id="confirm-body"></p>
+        <div class="confirm-actions">
+            <button type="button" id="confirm-cancel" class="button button-secondary">Cancel</button>
+            <button type="button" id="confirm-ok" class="button button-danger">Delete</button>
+        </div>
+    </div>
+</dialog>
+<script src="/static/js/knowledge.js?v=5"></script>
 </body>
 </html>

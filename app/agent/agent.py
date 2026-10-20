@@ -160,7 +160,7 @@ def start(ticket_number: str, thread_id: str = ""):
     short, desc = ticket.get("short_description", ""), ticket.get("description", "")
     text = f"{short} {desc}"
     inst, why = resolve_server(text)
-    playbook, skill, allowed_tools = build_playbook(text, inst["platform"] if inst else None)
+    playbook, skill, allowed_tools, skill_version = build_playbook(text, inst["platform"] if inst else None)
 
     if not inst and skill == "ad-account-locked":
         inst = resolve_default_windows()
@@ -179,7 +179,7 @@ def start(ticket_number: str, thread_id: str = ""):
     THREAD_TOOLS[thread_id] = tool_tuple
 
     yield {"type": "start", "thread_id": thread_id, "ticket": ticket_number,
-           "skill": skill, "server": label, "tools": list(tool_tuple)}
+           "skill": skill, "skill_version": skill_version, "server": label, "tools": list(tool_tuple)}
     msg = (f"Work incident {ticket_number}.\nShort description: {short}\nDescription: {desc}\n"
            f"{server}\n\nPLAYBOOK:\n{playbook}")
     yield from _run_guarded(get_agent(tool_tuple), {"messages": [{"role": "user", "content": msg}]},

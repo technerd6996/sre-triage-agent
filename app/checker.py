@@ -214,9 +214,66 @@ def verify_run(run: dict, emit=lambda text, verdict=None: None):
     emit("Checker: verifying the fix independently")
     ok, notes = _run_checks(kind, args)
     evidence = "; ".join(notes)
+    reopen_count, closed = 0, False
     try:
         if ok is True:
             verdict = "pass"
             comment = ("Fix confirmed by an independent re-check. "
                        + ("Moving the ticket from Resolved to Closed." if md == "on"
-                          else "Would move the ticket fromd
+                          else "Would move the ticket from Resolved to Closed."))
+            report = _report(run, kind, notes, verdict, comment, shadow)
+            if md == "on":
+                _set_state(ticket, sys_id, STATE_CLOSED, report)
+                closed = True
+            else:
+                _note(sys_id, report)
+        elif ok is False:
+            verdict = "fail"
+            reopen_count = _reopens(ticket) + 1 if md == "on" else 0
+            comment = ("The fix did not hold: " + evidence + ". "
+                       + ("Reopening the ticket and assigning it to the escalation group." if md == "on"
+                          else "Would reopen the ticket and assign it to the escalation group."))
+            report = _report(run, kind, notes, verdict, comment, shadow)
+            if md == "on":
+                fields = {}
+                grp = os.getenv("SNOW_ESCALATION_GROUP", "").strip()
+                if grp:
+                    fields["assignment_group"] = _sys_id("sys_user_group", f"name={grp}")
+                _set_state(ticket, sys_id, STATE_IN_PROGRESS, report, **fields)
+            else:
+                _note(sys_id, report)
+        else:
+            verdict = "unverified"
+            comment = ("The checker could not verify the fix (" + evidence + "). "
+                       "The ticket is left in Resolved for a person to confirm.")
+            _note(sys_id, _report(run, kind, notes, verdict, comment, shadow))
+    except Exception as e:
+        _audit(run, "verify_error", str(e)[:300])
+        log.warning("Checker failed for %s: %s", ticket, str(e)[:200])
+        emit(f"Checker could not complete: {str(e)[:150]}")
+        try:   # best effort: a person reading the ticket must not assume it was verified
+            _note(sys_id, f"{shadow}{ACTOR}: could not complete the verification of this fix "
+                          f"({str(e)[:150]}). The ticket was not closed. Please confirm the fix by hand.")
+        except Exception:
+            pass
+        return None
+
+    # Record first, so a failure in the follow-ups below can never lose the verification row.
+    _record(run, md, verdict, notes, reopen_count, closed)
+    _audit(run, f"verify_{verdict}", f"mode={md}; {evidence}"[:500])
+    emit(f"Checker verdict: {verdict.upper()}. {evidence}", tag + verdict)
+
+    if verdict == "fail" and md == "on":
+        try:
+            from app import escalation                      # lazy: avoids a circular import
+            escalation.propose(run, f"Verification failed after the fix: {evidence}")
+        except Exception as e:
+            log.warning("P1 proposal failed for %s: %s", ticket, str(e)[:200])
+        if reopen_count >= 2:
+            try:
+                from app.tools.aws_tools import escalate_l3
+                escalate_l3.invoke({"number": ticket, "reason":
+                                    f"Fix failed verification {reopen_count} times: {evidence}"[:300]})
+            except Exception as e:
+                log.warning("L3 notify failed for %s: %s", ticket, str(e)[:200])
+    return tag + verdict

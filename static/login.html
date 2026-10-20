@@ -1,72 +1,127 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <link rel="stylesheet" href="/static/css/theme.css?v=6">
+    <script src="/static/js/theme.js?v=6"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login · TRIAGE-1</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'IBM Plex Sans', sans-serif; background-color: #0A0D10; color: #E8ECF1; }
-        .glass-panel { background: rgba(18, 22, 28, 0.65); backdrop-filter: blur(16px); border: 1px solid rgba(46, 55, 68, 0.8); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4); }
+        body { font-family: var(--font-ui); background: var(--bg); color: var(--text); }
+        .login-card { background: var(--panel); border: 1px solid var(--border); box-shadow: 0 12px 40px rgba(0, 0, 0, .25); }
+        .logo-mark { background: var(--grad); color: var(--on-accent); }
+        .field-label { display: block; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: var(--muted); }
+        .field-input { width: 100%; padding: 11px 14px; border-radius: 10px; font-size: 16px; color: var(--text);
+            background: var(--bg); border: 1px solid var(--border-strong); outline: none; }
+        .field-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+        .field-input[aria-invalid="true"] { border-color: var(--danger); }
+        .pw-toggle { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); padding: 6px 10px;
+            border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+        .pw-toggle:hover { color: var(--text); background: var(--panel-soft); }
+        .pw-toggle:focus-visible, .login-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .login-btn { background: var(--accent); color: var(--on-accent); }
+        .login-btn:hover:not(:disabled) { background: var(--accent-strong); }
+        .login-btn:disabled { opacity: .7; cursor: wait; }
+        .login-error { background: var(--danger-bg); color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); }
     </style>
 </head>
 <body class="h-screen flex items-center justify-center p-4">
-    <div class="glass-panel p-8 rounded-2xl w-full max-w-sm">
+    <div class="login-card p-8 rounded-2xl w-full max-w-sm">
         <div class="flex items-center gap-4 mb-8">
-            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-[#FFC533] to-[#FF9500] flex items-center justify-center text-[#0A0D10] font-bold">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            <div class="logo-mark w-11 h-11 rounded-xl flex items-center justify-center" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
             </div>
-            <h1 class="text-xl font-bold tracking-tight">TRIAGE-1</h1>
+            <div>
+                <h1 class="text-[22px] font-bold tracking-tight leading-tight">TRIAGE-1</h1>
+                <p class="text-[14px]" style="color: var(--muted)">Sign in to continue</p>
+            </div>
         </div>
         
-        <form id="login-form" class="flex flex-col gap-4">
+        <form id="login-form" class="flex flex-col gap-5">
             <div>
-                <label class="block text-[12px] font-mono uppercase tracking-wider text-gray-400 mb-1.5">Username</label>
-                <input type="text" id="username" required class="w-full rounded-lg bg-[#0A0D10] border border-[#2E3744] px-3 py-2.5 text-[14px] outline-none focus:border-[#FFB000]">
+                <label for="username" class="field-label">Username</label>
+                <input type="text" id="username" name="username" required autofocus autocomplete="username" autocapitalize="none" spellcheck="false" class="field-input">
             </div>
             <div>
-                <label class="block text-[12px] font-mono uppercase tracking-wider text-gray-400 mb-1.5">Password</label>
-                <input type="password" id="password" required class="w-full rounded-lg bg-[#0A0D10] border border-[#2E3744] px-3 py-2.5 text-[14px] outline-none focus:border-[#FFB000]">
+                <label for="password" class="field-label">Password</label>
+                <div class="relative">
+                    <input type="password" id="password" name="password" required autocomplete="current-password" class="field-input" style="padding-right: 72px">
+                    <button type="button" id="pw-toggle" class="pw-toggle" aria-controls="password" aria-label="Show password" aria-pressed="false">Show</button>
+                </div>
+                <p id="caps-hint" class="text-[13px] mt-1.5 hidden" style="color: var(--warn)">Caps Lock is on.</p>
             </div>
-            <div id="error-msg" class="text-red-400 text-[13px] hidden"></div>
-            <button type="submit" id="submit-btn" class="mt-2 w-full py-2.5 rounded-lg bg-[#FFB000] hover:bg-[#E6A000] text-black font-semibold text-[14px] transition-colors">Sign In</button>
+            <div id="error-msg" role="alert" class="login-error rounded-lg px-3 py-2.5 text-[14px] hidden"></div>
+            <button type="submit" id="submit-btn" class="login-btn mt-1 w-full py-3 rounded-lg font-semibold text-[16px] transition-colors">Sign in</button>
         </form>
+        <p class="mt-6 text-center text-[13px]" style="color: var(--subtle)">Access is limited to authorised users. Contact your administrator if you need an account.</p>
     </div>
 
     <script>
-        document.getElementById('login-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const btn = document.getElementById('submit-btn');
-            const err = document.getElementById('error-msg');
-            btn.disabled = true;
-            btn.textContent = 'Signing in...';
-            err.classList.add('hidden');
+        const form = document.getElementById('login-form');
+        const btn = document.getElementById('submit-btn');
+        const err = document.getElementById('error-msg');
+        const user = document.getElementById('username');
+        const pass = document.getElementById('password');
+        const toggle = document.getElementById('pw-toggle');
+        const caps = document.getElementById('caps-hint');
 
+        function showError(msg, field) {
+            err.textContent = msg;
+            err.classList.remove('hidden');
+            [user, pass].forEach((i) => i.removeAttribute('aria-invalid'));
+            if (field) { field.setAttribute('aria-invalid', 'true'); field.focus(); }
+        }
+
+        toggle.addEventListener('click', () => {
+            const show = pass.type === 'password';
+            pass.type = show ? 'text' : 'password';
+            toggle.textContent = show ? 'Hide' : 'Show';
+            toggle.setAttribute('aria-pressed', String(show));
+            toggle.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+        });
+        pass.addEventListener('keyup', (e) => {
+            caps.classList.toggle('hidden', !(e.getModifierState && e.getModifierState('CapsLock')));
+        });
+        pass.addEventListener('blur', () => caps.classList.add('hidden'));
+        [user, pass].forEach((i) => i.addEventListener('input', () => {
+            err.classList.add('hidden');
+            i.removeAttribute('aria-invalid');
+        }));
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            err.classList.add('hidden');
+            btn.disabled = true;
+            btn.textContent = 'Signing in…';
+            let redirecting = false;
             try {
                 const res = await fetch('/api/auth/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        username: document.getElementById('username').value.trim(),
-                        password: document.getElementById('password').value
-                    })
+                    body: JSON.stringify({ username: user.value.trim(), password: pass.value })
                 });
-                
+                const data = await res.json().catch(() => ({}));
                 if (res.ok) {
-                    const data = await res.json();
+                    redirecting = true;   // keep the button disabled while the page changes
                     window.location.href = data.role === 'admin' ? '/admin' : '/';
+                    return;
+                }
+                if (res.status === 429) {
+                    showError(typeof data.detail === 'string' ? data.detail : 'Too many failed attempts. Wait a few minutes and try again.');
+                } else if (res.status === 401) {
+                    pass.value = '';
+                    showError('Incorrect username or password. If you are sure they are right, the account may be disabled. Contact your administrator.', pass);
+                } else if (res.status >= 500) {
+                    showError('The service had a problem. Try again in a moment.');
                 } else {
-                    const errorData = await res.json();
-                    err.textContent = errorData.detail || 'Login failed';
-                    err.classList.remove('hidden');
+                    showError(typeof data.detail === 'string' ? data.detail : 'Sign in failed. Please try again.');
                 }
             } catch (error) {
-                err.textContent = 'Network error. Please try again.';
-                err.classList.remove('hidden');
+                showError('Cannot reach the server. Check your connection and try again.');
             } finally {
-                btn.disabled = false;
-                btn.textContent = 'Sign In';
+                if (!redirecting) { btn.disabled = false; btn.textContent = 'Sign in'; }
             }
         });
     </script>

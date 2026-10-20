@@ -31,13 +31,49 @@ def touches_critical(run: dict) -> bool:
                for e in run.get("events", []) if e.get("type") == "tool_call")
 
 
+def _services(run: dict) -> list:
+    """Service names the agent touched in this run (for the notice), in order, without repeats."""
+    names = []
+    for e in run.get("events", []):
+        n = (e.get("args") or {}).get("service_name") if e.get("type") == "tool_call" else None
+        if n and str(n).lower() not in names:
+            names.append(str(n).lower())
+    return names
+
+
 def draft(run: dict) -> str:
     c = conf()
-    started = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(run.get("started", time.time())))
-    return (f"Incident {run['ticket']} has been declared a P1.\n\n"
-            f"Affected server: {run.get('server') or 'see ticket'}\nStarted: {started}\n"
-            f"Bridge: {c['bridge'] or '(not configured)'}\nNext update: within {UPDATE_MIN} minutes.\n\n"
-            "This notice states confirmed facts only. Cause and ETA will follow once known.")
+    detected = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(run.get("started", time.time())))
+    affected = run.get("server") or "see ticket"
+    svc = ", ".join(_services(run))
+    if svc:
+        affected += f" ({svc})"
+    bridge = c["bridge"] or "The bridge link will follow in the next update."
+    ctx = run.get("service_context") or {}
+    svc_line = ""
+    if ctx.get("found"):
+        svc_line = "  Services  : " + ", ".join(s["name"] for s in ctx["services"]) + "\n"
+    return (
+        f"P1 INCIDENT DECLARED  |  {run['ticket']}\n"
+        f"{'=' * 58}\n\n"
+        "WHAT HAPPENED\n"
+        "  A priority 1 incident has been declared and the on-call\n"
+        "  team is working on it.\n\n"
+        "DETAILS\n"
+        f"  Incident  : {run['ticket']}\n"
+        f"  Affected  : {affected}\n{svc_line}"
+        f"  Detected  : {detected}\n"
+        "  Priority  : P1 - Critical\n"
+        "  Status    : Under investigation\n\n"
+        "JOIN THE BRIDGE\n"
+        f"  {bridge}\n\n"
+        "NEXT UPDATE\n"
+        f"  Within {UPDATE_MIN} minutes of this notice.\n\n"
+        f"{'-' * 58}\n"
+        "This notice states confirmed facts only. The cause and\n"
+        "the estimated time to fix will follow once known.\n"
+        "Sent by TRIAGE-1 on behalf of the SRE team."
+    )
 
 
 def propose(run: dict, reason: str) -> None:
@@ -128,7 +164,7 @@ def declare(run: dict, approver: str, body: str) -> None:
     try:
         if not c["to"]:
             raise RuntimeError("No notice recipients configured (Admin page)")
-        mid = _send(c["to"], c["cc"], f"[P1] {inc} - major incident declared", body)
+        mid = _send(c["to"], c["cc"], f"[P1] {inc} - Service disruption on {run.get('server') or 'production'}", body)
         store.supabase.table("notices").insert({
             "id": uuid.uuid4().hex[:12], "incident": inc, "run_id": run["id"], "type": "p1_declared",
             "sent_at": time.time(), "approver": approver, "message_id": mid,

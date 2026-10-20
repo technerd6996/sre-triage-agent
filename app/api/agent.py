@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from app.agent import policy
 from app import store
+from app import jobs
 from app.llm import usage
 from app.agent.agent import THREAD_TOOLS, resume, start
 from app.agent.policy import RISK
@@ -32,7 +33,6 @@ for _r in RUNS.values():            # rebuild what resume() needs after a restar
 _lock = threading.Lock()
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "15"))
 APPROVAL_TIMEOUT = int(os.getenv("APPROVAL_TIMEOUT_MIN", "30")) * 60   # no answer -> auto-reject -> escalate
-P1_BUDGET = int(os.getenv("P1_TIME_BUDGET_MIN", "15")) * 60            # run longer than this -> propose a P1
 P1_BUDGET = int(os.getenv("P1_TIME_BUDGET_MIN", "15")) * 60            # run longer than this -> propose a P1
 RUN_STALL_TIMEOUT = int(os.getenv("RUN_STALL_TIMEOUT_MIN", "10")) * 60  # no progress -> run marked failed
 
@@ -75,7 +75,10 @@ def _post_report(run: dict):
         return
     run["reported"] = True
     try:
-        add_work_note.invoke({"number": run["ticket"], "note": build_report(run)[:30000]})
+        checker_will_run = (checker.mode() != "off" and outcome_code(run) == "resolved"
+                            and checker._spec(run) is not None)
+        add_work_note.invoke({"number": run["ticket"],
+                              "note": build_report(run, full=not checker_will_run)[:30000]})
     except Exception as e:
         log.warning("Could not post the run report to %s: %s", run["ticket"], str(e)[:200])
 
@@ -91,6 +94,28 @@ def _finalize_metrics(run: dict):
         except Exception:
             run["outcome"] = None
 
+def _post_service_context(run: dict, actions) -> None:
+    """Once per run: which services depend on the one being restarted, as a ServiceNow work note."""
+    if run.get("service_context") is not None:
+        return
+    act = next((a for a in actions if a.get("name") == "start_service"), None)
+    if not act:
+        return
+    svc = str((act.get("args") or {}).get("service_name", ""))
+    host = str(run.get("server") or "").split(" (")[0]
+    run["service_context"] = {}                      # set first, so a failure is not retried in a loop
+    try:
+        from app.tools import cmdb
+        ctx = cmdb.service_context(host, svc)
+        run["service_context"] = ctx
+        if ctx.get("found"):
+            add_work_note.invoke({"number": run["ticket"], "note": ctx["summary"]})
+        else:
+            store.audit(run["id"], run["ticket"], "system", "service_context_none",
+                        ctx.get("error") or "no dependent service in the CMDB")
+    except Exception as e:
+        log.warning("Service context failed for %s: %s", run["ticket"], str(e)[:200])
+
 def _consume(run: dict, events, kind: str = "triage"):
     """Runs in a background thread: copies agent events into the run and tracks its status."""
     run["status"] = "running"
@@ -101,10 +126,12 @@ def _consume(run: dict, events, kind: str = "triage"):
     try:
         for ev in events:
             if ev["type"] == "start":
-                run.update(thread_id=ev["thread_id"], skill=ev["skill"], server=ev["server"])
+                run.update(thread_id=ev["thread_id"], skill=ev["skill"], server=ev["server"],
+                           skill_version=ev.get("skill_version"))
             _add_event(run, ev)
             if ev["type"] == "approval_required":
-                ok, why = policy.autonomous_restore(ev["actions"])
+                _post_service_context(run, ev["actions"])
+                ok, why = policy.autonomous_restore(ev["actions"], str(run.get("server") or "").split(" (")[0])
                 if why:
                     store.audit(run["id"], run["ticket"], "policy", "autonomy_check", why)
                 if ok:
@@ -147,6 +174,12 @@ def _consume(run: dict, events, kind: str = "triage"):
         except Exception as e:
             log.warning("Checker error for %s: %s", run["ticket"], str(e)[:200])
         run["status"] = "done"
+        p1 = run.get("p1")
+        unverified = any(e.get("type") == "verification" and "unverified" in str(e.get("verdict"))
+                         for e in run["events"])
+        if p1 and p1["status"] == "proposed" and outcome_code(run) == "resolved" and not unverified:
+            p1["status"] = "withdrawn"      # fixed and verified: nothing left to escalate
+            store.audit(run["id"], run["ticket"], "system", "p1_withdrawn", p1["reason"])
     usage.unbind_run(run["id"])
     _finalize_metrics(run)
     store.save_run(run)
@@ -187,10 +220,13 @@ def queue():
 
 @router.post("/run")
 def run_ticket(req: RunRequest, request: Request):
-    run = start_run(req.ticket, source="manual", actor=_actor(request))
-    if not run:
-        raise HTTPException(409, "Another ticket is being worked. Finish it (or reject its approval) first.")
-    return {"run_id": run["id"]}
+    actor = _actor(request)
+    if not jobs.queued():                       # nobody waiting ahead of this one
+        run = start_run(req.ticket, source="manual", actor=actor)
+        if run:
+            return {"run_id": run["id"]}
+    job, pos = jobs.enqueue(req.ticket, "manual", actor, 1)
+    return {"run_id": None, "queued": True, "position": pos}
 
 
 @router.get("/runs")
@@ -305,7 +341,7 @@ def p1_decision(run_id: str, req: P1Request, request: Request):
     if not r or not r.get("p1"):
         raise HTTPException(404, "No P1 proposal for this run")
     p, who = r["p1"], _actor(request)
-    if p["status"] in ("declared", "dismissed"):
+    if p["status"] in ("declared", "dismissed", "withdrawn"):
         raise HTTPException(409, f"Already {p['status']}")
     if not req.approve:
         p["status"] = "dismissed"
@@ -325,36 +361,38 @@ _auto = {"enabled": False, "thread": None, "tried": set()}
 
 AUTO_MAX_FAILS = int(os.getenv("AUTO_MAX_FAILS", "3"))
 
+_AUTO_RUNS: list = []          # run ids started from auto-intake, judged by the circuit breaker
+
 
 def _auto_loop():
-    fails, last = 0, None
+    fails = 0
     while _auto["enabled"]:
         try:
-            # circuit breaker: judge the previous auto-started run once it has finished
-            lr = RUNS.get(last) if last else None
-            if lr and lr["status"] not in ("running", "awaiting_approval"):
+            for rid in list(_AUTO_RUNS):               # circuit breaker: judge finished auto runs
+                lr = RUNS.get(rid)
+                if lr and lr["status"] in ("running", "awaiting_approval"):
+                    continue
+                _AUTO_RUNS.remove(rid)
+                if not lr:
+                    continue
                 bad = lr["status"] in ("error", "interrupted") or lr.get("outcome") == "incomplete"
                 fails = fails + 1 if bad else 0
-                last = None
                 if fails >= AUTO_MAX_FAILS:
                     _auto["enabled"] = False
                     store.set_setting("auto_enabled", False, "circuit-breaker")
                     store.audit(None, None, "auto-mode", "auto_mode_tripped", f"{fails} failed runs in a row")
                     log.error("Auto mode switched off: %d failed runs in a row", fails)
                     break
-            if not _active():
-                worked = {r["ticket"] for r in RUNS.values()}    # never re-work a ticket that already has a run
-                for n in list_queue():                           # already ordered by priority, then age
-                    if n in worked:
-                        continue
-                    run = start_run(n, source="auto", actor="auto-mode")
-                    if run:
-                        last = run["id"]
-                    break
+            if not _auto["enabled"]:
+                break
+            if len(jobs.queued()) < 5:                  # keep the backlog short; the queue is already ordered
+                worked = {r["ticket"] for r in RUNS.values()} | {j["ticket"] for j in jobs.queued()}
+                for n in list_queue():
+                    if n not in worked:
+                        jobs.enqueue(n, "auto", "auto-mode", 3)
         except Exception as e:
             log.warning("Auto-poll error: %s", str(e)[:200])
         time.sleep(POLL_SECONDS)
-
 
 @router.get("/auto")
 def get_auto():
@@ -418,6 +456,33 @@ def _fail_stalled(r: dict):
     _post_report(r)
 
 
+def cancel_run(run_id: str, who: str) -> str:
+    """Admin cancel: frees the single run slot. Returns ok | missing | finished."""
+    r = RUNS.get(run_id)
+    if not r:
+        return "missing"
+    with _lock:
+        if r["status"] not in ("running", "awaiting_approval"):
+            return "finished"
+        r["status"], r["pending"] = "error", None
+    _add_event(r, {"type": "error", "message": f"Cancelled by {who}. The slot was released; check the ticket and re-run if needed."})
+    usage.unbind_run(r["id"])
+    _finalize_metrics(r)
+    r["outcome"] = "cancelled"
+    store.save_run(r)
+    try:
+        store.supabase.table("approvals").update({"decided_at": time.time(), "decided_by": who, "decision": False,
+            "comment": "Run cancelled by admin"}).eq("run_id", r["id"]).is_("decided_at", "null").execute()
+    except Exception as e:
+        log.warning("Could not close approvals for cancelled run %s: %s", r["id"], str(e)[:200])
+    store.audit(r["id"], r["ticket"], who, "run_cancelled")
+    return "ok"
+
+
+def _approval_timeout() -> int:
+    return int(store.get_setting("approval_timeout_min", APPROVAL_TIMEOUT // 60)) * 60
+
+
 def _watchdog():
     while True:
         time.sleep(30)
@@ -427,7 +492,7 @@ def _watchdog():
                 if r["status"] in ("running", "awaiting_approval") and now - r.get("started", now) > P1_BUDGET:
                     escalation.propose(r, f"time budget of {P1_BUDGET // 60} min exceeded")                
                 idle = now - r.get("last_event", r.get("created", now))
-                if r["status"] == "awaiting_approval" and idle > APPROVAL_TIMEOUT:
+                if r["status"] == "awaiting_approval" and idle > _approval_timeout():
                     _expire_approval(r)
                 elif r["status"] == "running" and idle > RUN_STALL_TIMEOUT:
                     _fail_stalled(r)
@@ -436,3 +501,117 @@ def _watchdog():
 
 
 threading.Thread(target=_watchdog, daemon=True, name="run-watchdog").start()
+
+
+def _dispatcher():
+    """Starts the best queued job whenever the single run slot is free."""
+    while True:
+        time.sleep(2)
+        try:
+            if _active():
+                continue
+            job = jobs.pick_next(jobs.queued())
+            if not job:
+                continue
+            run = start_run(job["ticket"], source=job["source"], actor=job["actor"])
+            if run:
+                jobs.set_status(job["id"], "started")
+                if job["source"] == "auto":
+                    _AUTO_RUNS.append(run["id"])
+        except Exception as e:
+            log.warning("Dispatcher error: %s", str(e)[:200])
+
+
+threading.Thread(target=_dispatcher, daemon=True, name="job-dispatcher").start()
+
+# ---- agent status (for the Agent status pane on the Agent Console and the admin page) ----
+_MODEL = {"at": 0.0, "ok": False}
+_QUEUE = {"at": 0.0, "n": None}
+
+
+def _model_online() -> bool:
+    if time.time() - _MODEL["at"] < 15:
+        return _MODEL["ok"]
+    import requests
+    try:
+        base = os.getenv("COLAB_API_URL", "").rsplit("/", 1)[0]
+        _MODEL["ok"] = requests.get(f"{base}/health", timeout=2).status_code == 200
+    except Exception:
+        _MODEL["ok"] = False
+    _MODEL["at"] = time.time()
+    return _MODEL["ok"]
+
+
+def _queue_len():
+    if time.time() - _QUEUE["at"] < 20:
+        return _QUEUE["n"]
+    try:
+        _QUEUE["n"] = len(list_queue())
+    except Exception:
+        _QUEUE["n"] = None
+    _QUEUE["at"] = time.time()
+    return _QUEUE["n"]
+
+
+@router.get("/status")
+def agent_status():
+    r = _active()
+    model = _model_online()
+    _q = _queue_len()
+    out = {"state": "busy" if r else ("online" if model else "offline"),
+           "model": model, "auto": bool(_auto["enabled"]),
+           "ticket_mode": store.get_setting("ticket_mode", "confirm"),
+           "autonomy": store.get_setting("autonomy_mode", "shadow"),
+           "queue": _q, "queue_capped": _q == 10, "run": None, "last_run": None,
+           "pending_approvals": sum(1 for x in list(RUNS.values()) if x["status"] == "awaiting_approval")}
+    if r:
+        out["run"] = {"ticket": r["ticket"], "server": r["server"], "status": r["status"],
+                      "seconds": int(time.time() - r.get("started", time.time())), "source": r.get("source")}
+    done = [x for x in list(RUNS.values()) if x["status"] not in ("running", "awaiting_approval")]
+    if done:
+        last = max(done, key=lambda x: x.get("ended") or x.get("started") or 0)
+        out["last_run"] = {"ticket": last["ticket"], "outcome": last.get("outcome")}
+    return out
+
+@router.get("/llm-stats")
+def llm_stats():
+    """Aggregate LLM call stats for the admin bot performance panel."""
+    now = time.time()
+    cutoff_7d = now - 7 * 86400
+    cutoff_24h = now - 86400
+    try:
+        rows = store.supabase.table("llm_calls") \
+            .select("ts,kind,tokens_in,tokens_out,gen_s,wait_s") \
+            .gte("ts", cutoff_7d).execute().data
+    except Exception:
+        return {"error": "unavailable"}
+    if not rows:
+        return {"calls": 0, "tokens_in": 0, "tokens_out": 0,
+                "avg_gen_s": None, "avg_wait_s": None, "by_kind": {}, "last_24h": 0}
+    by_kind: dict = {}
+    for r in rows:
+        k = r["kind"] or "other"
+        s = by_kind.setdefault(k, {"calls": 0, "tokens_in": 0, "tokens_out": 0, "gen_s": 0.0})
+        s["calls"] += 1
+        s["tokens_in"] += r["tokens_in"] or 0
+        s["tokens_out"] += r["tokens_out"] or 0
+        s["gen_s"] += r["gen_s"] or 0.0
+    for s in by_kind.values():
+        s["avg_gen_s"] = round(s.pop("gen_s") / s["calls"], 2) if s["calls"] else None
+    gen_times = [r["gen_s"] for r in rows if r.get("gen_s") is not None]
+    wait_times = [r["wait_s"] for r in rows if r.get("wait_s") is not None]
+    return {
+        "calls": sum(s["calls"] for s in by_kind.values()),
+        "tokens_in": sum(s["tokens_in"] for s in by_kind.values()),
+        "tokens_out": sum(s["tokens_out"] for s in by_kind.values()),
+        "avg_gen_s": round(sum(gen_times) / len(gen_times), 2) if gen_times else None,
+        "avg_wait_s": round(sum(wait_times) / len(wait_times), 2) if wait_times else None,
+        "by_kind": by_kind,
+        "last_24h": sum(1 for r in rows if r["ts"] >= cutoff_24h),
+    }
+
+@router.get("/skills-status")
+def skills_status():
+    """KB source status for the admin Configuration panel."""
+    from app.agent.skills import status as _sk_status
+    return _sk_status()

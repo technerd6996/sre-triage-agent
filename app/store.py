@@ -7,9 +7,12 @@ from supabase import create_client, Client
 
 load_dotenv()   # must run before create_client: main.py imports this module before it calls load_dotenv()
 
+from app.secret_check import require_secret_key
+
 _url, _key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY")
 if not _url or not _key:
     raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
+_key = require_secret_key(_key)
 supabase: Client = create_client(_url, _key)
 
 import logging
@@ -126,3 +129,7 @@ def set_setting(key: str, value, by: str = "system") -> None:
     supabase.table("settings").upsert({"key": key, "value_json": value, "updated_by": by,
                                        "updated_at": time.time()}).execute()
     _SET_CACHE.pop(key, None)
+
+@_safe
+def add_rag_event(row: dict) -> None:
+    supabase.table("rag_events").insert({"ts": time.time(), **row}).execute()

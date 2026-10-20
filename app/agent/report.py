@@ -115,18 +115,27 @@ def _clock(ts) -> str:
     return time.strftime("%H:%M:%S", time.gmtime(ts)) if ts else "--:--:--"
 
 
-def build_report(run: dict) -> str:
-    """The structured work note posted to ServiceNow when a run finishes."""
+def build_report(run: dict, full: bool = True) -> str:
+    """The structured work note posted to ServiceNow when a run finishes.
+
+    full=True (default): include the step-by-step list.
+    full=False: short summary only — used when the checker will post the full consolidated note.
+    """
     lines = ["TRIAGE-1 AUTOMATED TRIAGE REPORT", "",
              f"Ticket:   {run['ticket']}",
              f"Server:   {run.get('server') or 'unknown'}",
              f"Playbook: {run.get('skill') or 'none'}",
-             f"Outcome:  {_outcome(run)}", "",
-             "What happened (times in UTC):"]
-    n, final = 0, ""
+             f"Outcome:  {_outcome(run)}"]
+    final = next((str(e.get("text", "")) for e in run["events"] if e.get("type") == "final"), "")
+    if not full:
+        if final:
+            lines += ["", "Agent summary:", final.strip()[:800]]
+        lines += ["", "(Full step list and independent verification in the next note from triage-checker.)"]
+        return "\n".join(lines)
+    lines += ["", "What happened (times in UTC):"]
+    n = 0
     for e in run["events"]:
         if e.get("type") == "final":
-            final = str(e.get("text", ""))
             continue
         d = describe(e)
         if d:

@@ -5,6 +5,7 @@ systems: [windows]
 risk: medium
 keywords: [windows service, service, stopped, not running, failed, iis, w3svc, spooler, print spooler, dns, dhcp, wuauserv, windows update, termservice, w32time]
 allowed_tools: [check_reachability, check_service_status, start_service, add_work_note, resolve_incident, escalate_incident]
+verify: check_service_status(service) x2 soak=VERIFY_SOAK_SECONDS expect=active
 ---
 
 # Windows service down

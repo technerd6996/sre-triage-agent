@@ -1,12 +1,50 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><title>TRIAGE-1</title>
-<style>body{background:#0A0D10;color:#E5E7EB;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-.box{text-align:center;max-width:420px}h2{margin:0 0 8px}p{color:#9CA3AF}a,button{color:#FFB000;background:none;border:0;font-size:14px;cursor:pointer;text-decoration:underline}</style></head>
-<body><div class="box">
-  <h2>Chat is currently disabled</h2>
-  <p>This service has been disabled by your administrator. Please contact your IT team to raise or track an issue.</p>
-  <p><a id="agent" href="/agent" style="display:none">Open Agent Console</a></p>
-  <button onclick="fetch('/api/auth/logout',{method:'POST'}).then(()=>location.href='/static/login.html')">Log out</button>
-</div>
-<script>fetch('/api/auth/me').then(r=>r.json()).then(m=>{if(m.role==='approver')document.getElementById('agent').style.display='inline'})</script>
-</body></html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Chat unavailable · TRIAGE-1</title>
+        <link rel="stylesheet" href="/static/css/theme.css?v=6">
+        <script src="/static/js/theme.js?v=6"></script>
+        <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+        <style>
+            body { margin: 0; min-height: 100vh; box-sizing: border-box; padding: 16px; display: flex; align-items: center; justify-content: center;
+                background: var(--bg); color: var(--text); font-family: var(--font-ui); }
+            .card { width: 100%; max-width: 440px; padding: 32px; text-align: center; background: var(--panel);
+                border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, .2); }
+            .icon { width: 48px; height: 48px; margin: 0 auto 16px; display: grid; place-items: center; border-radius: 12px;
+                background: var(--accent-soft); color: var(--accent); }
+            h1 { margin: 0 0 8px; font-size: 22px; font-weight: 700; }
+            p { margin: 0 0 24px; color: var(--muted); font-size: 16px; line-height: 1.6; }
+            .actions { display: flex; flex-direction: column; gap: 10px; }
+            .btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 16px;
+                border-radius: 10px; border: 1px solid var(--border-strong); background: transparent; color: var(--text);
+                font: 600 16px var(--font-ui); text-decoration: none; cursor: pointer; }
+            .btn:hover { background: var(--panel-soft); }
+            .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+            .btn-primary:hover { background: var(--accent-strong); }
+            .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+            .hidden { display: none; }
+        </style>
+    </head>
+    <body>
+        <main class="card">
+            <div class="icon" aria-hidden="true">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>
+            </div>
+            <h1>Chat is currently disabled</h1>
+            <p>Your administrator has turned chat off. Contact your IT team to raise or track an issue.</p>
+            <div class="actions">
+                <a id="agent" href="/agent" class="btn btn-primary hidden">Open Agent Console</a>
+                <button id="logout" type="button" class="btn">Log out</button>
+            </div>
+        </main>
+        <script>
+            fetch('/api/auth/me').then((r) => r.json()).then((m) => {
+                if (m.role === 'approver') document.getElementById('agent').classList.remove('hidden');
+            }).catch(() => {});
+            document.getElementById('logout').onclick = () =>
+                fetch('/api/auth/logout', { method: 'POST' }).finally(() => { location.href = '/static/login.html'; });
+        </script>
+    </body>
+</html>

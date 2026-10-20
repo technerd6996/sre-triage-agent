@@ -38,15 +38,20 @@ def _critical() -> set[str]:
     return {s.strip().lower() for s in os.getenv("CRITICAL_SERVICES", "").split(",") if s.strip()}
 
 
-def autonomous_restore(actions) -> tuple[bool, str]:
+def autonomous_restore(actions, host: str = "") -> tuple[bool, str]:
     """(run without a human?, reason). Only a single start_service on a critical service that is really stopped."""
     mode = autonomy_mode()
     if mode == "off" or len(actions) != 1 or actions[0].get("name") != "start_service":
         return False, ""
     args = actions[0].get("args") or {}
     svc, target = str(args.get("service_name", "")).lower(), args.get("target", "")
-    if svc not in _critical():
-        return False, ""
+    if svc in _critical():
+        crit_why = "listed in CRITICAL_SERVICES"
+    else:
+        from app.tools import cmdb                            # lazy import avoids a circular import
+        is_crit, crit_why = cmdb.critical_by_cmdb(host, svc)
+        if not is_crit:
+            return False, ""
     now = time.time()
     recent = [t for t in _RESTORES.get(svc, []) if now - t < 3600]
     if len(recent) >= FLAP_LIMIT:
@@ -55,7 +60,13 @@ def autonomous_restore(actions) -> tuple[bool, str]:
     res = check_service_status.invoke({"target": target, "service_name": svc})
     if res.get("status") not in ("inactive", "failed", "stopped"):
         return False, f"preflight: {svc} is '{res.get('status') or res.get('error', 'unknown')}', not clearly stopped"
+    if svc == "nginx" and target == "linux":
+        from app.tools.infra import _linux
+        try:
+            _linux("sudo -n nginx -t")                        # a broken config would make the restart fail
+        except Exception as e:
+            return False, f"preflight: nginx config test failed or could not run ({str(e)[:150]}), needs a human"
     if mode == "shadow":
-        return False, f"shadow mode: would have auto-restored {svc} on {target}"
+        return False, f"shadow mode: would have auto-restored {svc} on {target} ({crit_why})"
     _RESTORES[svc] = recent + [now]
-    return True, f"auto-restoring critical service {svc} on {target}"
+    return True, f"auto-restoring critical service {svc} on {target} ({crit_why})"

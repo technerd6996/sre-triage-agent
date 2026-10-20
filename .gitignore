@@ -10,3 +10,9 @@ triage_checkpoints.db-shm
 triage_checkpoints.db-wal
 project_code.txt
 "code exrtration command.txt"
+.env
+venv/
+.venv/
+__pycache__/
+*.bak
+triage_checkpoints.db

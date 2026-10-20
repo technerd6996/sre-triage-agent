@@ -24,8 +24,11 @@ function setStatus(element, message, kind = 'info', visible = true) {
     element.hidden = !visible;
 }
 
+let noticeTimer;
 function showNotice(message, kind = 'info') {
     setStatus($('page-notice'), message, kind, true);
+    clearTimeout(noticeTimer);
+    if (kind === 'success') noticeTimer = setTimeout(() => { $('page-notice').hidden = true; }, 6000);
 }
 
 function formatBytes(bytes) {
@@ -37,6 +40,24 @@ function formatBytes(bytes) {
 
 function formatNumber(value) {
     return Number(value || 0).toLocaleString();
+}
+
+// In-page replacement for window.confirm. Cancel is focused first so Enter never deletes by accident.
+function confirmDialog({ title, body, okLabel = 'Delete' }) {
+    return new Promise((resolve) => {
+        const dialog = $('confirm-dialog');
+        let result = false;
+        $('confirm-title').textContent = title;
+        $('confirm-body').textContent = body;
+        $('confirm-ok').textContent = okLabel;
+        const onClose = () => { dialog.removeEventListener('close', onClose); resolve(result); };
+        dialog.addEventListener('close', onClose);
+        $('confirm-ok').onclick = () => { result = true; dialog.close(); };
+        $('confirm-cancel').onclick = () => dialog.close();
+        dialog.onclick = (event) => { if (event.target === dialog) dialog.close(); };
+        dialog.showModal();
+        $('confirm-cancel').focus();
+    });
 }
 
 function setBusy(isBusy) {
@@ -94,7 +115,7 @@ function renderDocuments() {
     syncSearchClear('document-search', 'clear-document-search');
 
     if (!filtered.length) {
-        body.innerHTML = `<tr><td colspan="4" class="table-state">${searchTerms(query).length ? 'No documents match your search. Try fewer keywords or clear the search.' : 'No documents indexed yet. Choose files above to start building your runbook library.'}</td></tr>`;
+        body.innerHTML = `<tr><td colspan="4" class="table-state">${searchTerms(query).length ? 'No documents match your search. Try fewer keywords or clear the search.' : 'No documents indexed yet.<br><button type="button" class="text-button" data-action="empty-browse">Browse files</button> to start building your runbook library.'}</td></tr>`;
     } else {
         body.innerHTML = filtered.map((document) => `
             <tr>
@@ -117,7 +138,7 @@ function renderGraph() {
     const body = $('graph-list');
     syncSearchClear('graph-search', 'clear-graph-search');
     if (!filtered.length) {
-        body.innerHTML = `<tr><td colspan="5" class="table-state">${searchTerms(query).length ? 'No relationships match your search. Try fewer keywords or clear the search.' : 'No graph relationships found. Add a manual relationship or import a CSV to populate the graph.'}</td></tr>`;
+        body.innerHTML = `<tr><td colspan="5" class="table-state">${searchTerms(query).length ? 'No relationships match your search. Try fewer keywords or clear the search.' : 'No graph relationships found.<br><button type="button" class="text-button" data-action="empty-add-edge">Add a relationship</button> or import a CSV to populate the graph.'}</td></tr>`;
     } else {
         body.innerHTML = filtered.map((edge) => {
             const owner = String(edge.source || 'seed / manual');
@@ -134,6 +155,18 @@ function renderGraph() {
     $('graph-list-footer').textContent = searchTerms(query).length
         ? `Showing ${filtered.length} of ${state.edges.length} relationships · Search covers source, relation, destination and owner`
         : `${formatNumber(state.edges.length)} relationships in the current graph`;
+}
+
+function markLoadFailed(results) {
+    const [docs, graph] = results;
+    if (docs.status === 'rejected') {
+        if (!state.documents.length) $('doc-list').innerHTML = '<tr><td colspan="4" class="table-state">Could not load documents. Use “Refresh data” to try again.</td></tr>';
+        $('document-list-footer').textContent = 'Document list unavailable';
+    }
+    if (graph.status === 'rejected') {
+        if (!state.edges.length) $('graph-list').innerHTML = '<tr><td colspan="5" class="table-state">Could not load relationships. Use “Refresh data” to try again.</td></tr>';
+        $('graph-list-footer').textContent = 'Relationship list unavailable';
+    }
 }
 
 async function fetchDocuments() {
@@ -159,6 +192,7 @@ async function refreshAll() {
     try {
         const results = await Promise.allSettled([fetchDocuments(), fetchGraph()]);
         const errors = results.filter((result) => result.status === 'rejected').map((result) => result.reason.message || 'Unable to refresh data.');
+        markLoadFailed(results);
         if (errors.length) showNotice(errors.join(' '), 'error');
         else showNotice('Knowledge base data refreshed.', 'success');
     } finally {
@@ -186,11 +220,17 @@ function selectFiles(files) {
     const OK_EXT = /\.(md|markdown|txt|text|log|json|ya?ml|csv)$/i;
     const all = Array.from(files || []);
     const rejected = all.filter((file) => !OK_EXT.test(file.name));
-    if (rejected.length) setStatus($('upload-status'), `Skipped unsupported: ${rejected.map((f) => f.name).join(', ')}`, 'error');
+    const skipped = rejected.length
+        ? `Skipped ${rejected.length} unsupported ${rejected.length === 1 ? 'file' : 'files'}: ${rejected.map((f) => f.name).join(', ')}.\nSupported types: MD, TXT, LOG, JSON, YAML, CSV.`
+        : '';
     const additions = all.filter((file) => OK_EXT.test(file.name) && !existing.has(`${file.name}:${file.size}:${file.lastModified}`));
     state.selectedFiles = [...state.selectedFiles, ...additions];
     renderSelectedFiles();
-    if (additions.length) setStatus($('upload-status'), `${state.selectedFiles.length} file(s) ready to ingest. Files with an existing name replace that indexed version.`, 'info');
+    const count = state.selectedFiles.length;
+    const ready = additions.length
+        ? `${count} ${count === 1 ? 'file is' : 'files are'} ready. Click “Ingest files” to add ${count === 1 ? 'it' : 'them'}. A file with an existing name replaces the indexed version.`
+        : '';
+    if (skipped || ready) setStatus($('upload-status'), [ready, skipped].filter(Boolean).join('\n\n'), skipped ? 'error' : 'info');
     $('file-upload').value = '';
 }
 
@@ -231,7 +271,10 @@ async function uploadDocument() {
 
 async function deleteDocument(filename) {
     if (state.busy) return;
-    const confirmed = window.confirm(`Delete “${filename}”?\n\nThis removes its vector chunks and graph edges that belong only to this document. Shared edges, seed edges and manual edges are kept.`);
+    const confirmed = await confirmDialog({
+        title: `Delete “${filename}”?`,
+        body: 'This removes its vector chunks and any graph edges that belong only to this document. Shared, seed and manual edges are kept.'
+    });
     if (!confirmed) return;
     setBusy(true);
     setStatus($('upload-status'), `Deleting ${filename}…`, 'info');
@@ -320,7 +363,7 @@ async function uploadGraphCsv() {
 
 async function deleteGraphEdge(src, rel, dst) {
     if (state.busy) return;
-    if (!window.confirm(`Delete this relationship?\n\n${src} → ${rel} → ${dst}`)) return;
+    if (!await confirmDialog({ title: 'Delete this relationship?', body: `${src} → ${rel} → ${dst}` })) return;
     setBusy(true);
     setStatus($('graph-status'), 'Deleting relationship…', 'info');
     try {
@@ -412,10 +455,12 @@ dropZone.addEventListener('drop', (event) => {
 });
 
 $('doc-list').addEventListener('click', (event) => {
+    if (event.target.closest('[data-action="empty-browse"]')) { $('file-upload').click(); return; }
     const button = event.target.closest('[data-action="delete-doc"]');
     if (button) deleteDocument(decodeURIComponent(button.dataset.name));
 });
 $('graph-list').addEventListener('click', (event) => {
+    if (event.target.closest('[data-action="empty-add-edge"]')) { $('g-src').scrollIntoView({ block: 'center' }); $('g-src').focus(); return; }
     const button = event.target.closest('[data-action="delete-edge"]');
     if (button) deleteGraphEdge(decodeURIComponent(button.dataset.s), decodeURIComponent(button.dataset.r), decodeURIComponent(button.dataset.d));
 });
@@ -423,5 +468,6 @@ $('graph-list').addEventListener('click', (event) => {
 renderSelectedFiles();
 Promise.allSettled([fetchDocuments(), fetchGraph()]).then((results) => {
     const errors = results.filter((result) => result.status === 'rejected').map((result) => result.reason.message || 'Could not load knowledge base data.');
+    markLoadFailed(results);
     if (errors.length) showNotice(errors.join(' '), 'error');
 });

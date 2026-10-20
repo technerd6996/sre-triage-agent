@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File
 from fastapi.concurrency import run_in_threadpool
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
@@ -71,7 +71,9 @@ app.include_router(admin_router)
 # --- Infrastructure Clients ---
 COLAB_API_URL = os.getenv("COLAB_API_URL")
 embedder = SentenceTransformer('all-MiniLM-L6-v2')
-supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+from app.secret_check import require_secret_key
+
+supabase: Client = create_client(os.getenv("SUPABASE_URL"), require_secret_key(os.getenv("SUPABASE_KEY")))
 neo4j_driver = GraphDatabase.driver(
     os.getenv("NEO4J_URI"),
     auth=(os.getenv("NEO4J_USER"), os.getenv("NEO4J_PASS")),
@@ -741,7 +743,11 @@ OFFTOPIC_REPLY = ("I'm a triage assistant, so I can only help with error logs, s
 # Plain 'def' (not 'async def'): everything inside is blocking I/O (Neo4j, Supabase, embeddings),
 # so FastAPI runs it in a worker thread instead of freezing the event loop.
 @app.post("/api/chat")
-def chat_endpoint(req: ChatRequest):
+def chat_endpoint(req: ChatRequest, request: Request):
+    import hashlib
+    from app.api.issues import redact
+    _t_start = time.time()
+    _uh = hashlib.sha256(str(getattr(request.state, "user", "")).encode()).hexdigest()[:12]
     if not store.get_setting("chat_enabled", True):
         raise HTTPException(403, "Chat is switched off by an administrator.")
     # 1. Truncate massive pasted logs or attached files immediately
@@ -761,6 +767,7 @@ def chat_endpoint(req: ChatRequest):
                 if incident_info["description"] else
                 "Sure, I can raise a ticket. Click **Create incident**, pick the caller and the affected server, "
                 "and describe what is going wrong.")
+        store.add_rag_event({"user_hash": _uh, "query": redact(safe_query)[:300], "kind": "canned"})
         return canned_stream(text, incident_info)
 
     # 2. Retrieve Subgraph (Graph RAG). A failure here must not kill the chat.
@@ -773,6 +780,7 @@ def chat_endpoint(req: ChatRequest):
     LIMIT 10
     """
     graph_ctx = []
+    _t = time.time()
     try:
         with neo4j_driver.session() as session:
             for rec in session.run(cypher, query_text=safe_query):
@@ -781,7 +789,9 @@ def chat_endpoint(req: ChatRequest):
         log.warning("Graph retrieval failed, continuing without it: %s", e)
 
     # 3. Retrieve Runbooks (Hybrid RAG). Same rule: degrade gracefully.
-    supa_ctx, raw_chunks = [], []
+    t_graph = time.time() - _t
+    _t = time.time()
+    supa_ctx, raw_chunks, rag_scores = [], [], []
     try:
         res = supabase.rpc("hybrid_search", {
             "query_text": safe_query,
@@ -789,11 +799,14 @@ def chat_endpoint(req: ChatRequest):
             "match_count": 3
         }).execute()
         raw_chunks = [d['content'] for d in res.data] if res.data else []
+        rag_scores = [{k: v for k, v in d.items() if k != 'content' and isinstance(v, (int, float))}
+                      for d in (res.data or [])]
         supa_ctx = [format_chunk(c) for c in raw_chunks]
     except Exception as e:
         log.warning("Hybrid retrieval failed, continuing without it: %s", e)
 
     # Document IDs that retrieval really returned (the UI uses these for the source label)
+    t_vec = time.time() - _t
     sources = retrieved_doc_ids(graph_ctx, raw_chunks)
 
     # 4. Combine Context and Augment Prompt
@@ -854,6 +867,14 @@ def chat_endpoint(req: ChatRequest):
                             sent.append(text)
                             yield f"data: {json.dumps({'text': text})}\n\n"
             usage.log_call("chat", None, tokens_in, usage.count_tokens("".join(sent)), time.time() - t0, waited)
+            _ans = "".join(sent)
+            _cited = list(dict.fromkeys(i.upper() for i in DOC_ID_RE.findall(_ans)))
+            _kind = ("offtopic" if OFFTOPIC_RE.match(_ans) else
+                     "kb" if set(_cited) & set(sources) else "general")
+            store.add_rag_event({"user_hash": _uh, "query": redact(safe_query)[:300], "kind": _kind,
+                "retrieved": sources, "scores": rag_scores, "graph_hits": len(graph_ctx),
+                "cited": _cited, "phantom": [c for c in _cited if c not in sources],
+                "t_graph": round(t_graph, 2), "t_vec": round(t_vec, 2), "t_total": round(time.time() - _t_start, 2)})
         except LLMBusy:
             yield f"data: {json.dumps({'error': 'The AI model is busy with another task. Please try again in a moment.'})}\n\n"
         except Exception as e:

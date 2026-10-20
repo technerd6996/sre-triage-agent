@@ -5,6 +5,7 @@ systems: [linux]
 risk: medium
 keywords: [disk, space, full, no space, storage, filesystem, df, partition, low disk]
 allowed_tools: [check_reachability, check_disk_usage, clear_temp_files, add_work_note, resolve_incident, escalate_incident]
+verify: check_disk_usage(target) x1 expect=under_threshold
 ---
 
 # Linux disk full

@@ -1,29 +1,736 @@
 <!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>TRIAGE-1 Admin</title>
-<style>body{background:#0A0D10;color:#E5E7EB;font-family:system-ui;padding:40px}label{display:block;margin:14px 0}button,select{padding:6px 12px;border-radius:8px}</style></head>
-<body>
-  <h2>TRIAGE-1 Admin Console</h2>
-  <label><input id="chat" type="checkbox"> Chat enabled for users</label>
-  <label><input id="auto" type="checkbox"> Auto-work the L1 queue (persists across restarts)</label>
-  <label>Autonomous restore of critical services:
-    <select id="aut"><option value="off">off</option><option value="shadow">shadow (log only)</option><option value="on">on</option></select></label>
-  <h3>P1 notice settings</h3>
-  <label>Bridge link (https) <input id="br" size="50"></label>
-  <label>To (comma-separated) <input id="to" size="50"></label>
-  <label>Cc (comma-separated) <input id="cc" size="50"></label>
-  <button id="p1save">Save P1 settings</button>
-  <p id="msg" style="color:#9CA3AF"></p>
-  <p><a href="/agent" style="color:#FFB000">Agent Console</a> &middot; <a href="/knowledge" style="color:#FFB000">KB Management</a></p>
-  <button onclick="fetch('/api/auth/logout',{method:'POST'}).then(()=>location.href='/static/login.html')">Log out</button>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin · TRIAGE-1</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: var(--font-ui); }
+    .mono { font-family: var(--font-ui); }
+    .nav-item { display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:8px;
+      font-size:14px; color:var(--muted); cursor:pointer; transition:background 0.15s,color 0.15s; }
+    .nav-item:hover { background:var(--panel-raised); color:var(--text); }
+    .nav-item.active { background:var(--panel-raised); color:var(--accent-text); }
+    .nav-item svg { flex-shrink:0; opacity:0.6; }
+    .nav-item.active svg { opacity:1; }
+    .section { display:none; }
+    .section.active { display:block; }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; }
+    .field label { display:block; font-size:13px; color:var(--subtle); margin-bottom:6px; }
+    .field input, .field select {
+      width:100%; background:var(--bg); border:1px solid var(--border); border-radius:8px;
+      padding:8px 12px; color:var(--text); font-size:14px; }
+    .field input:focus, .field select:focus { outline:none; border-color:var(--accent-text); }
+    .toggle-row { display:flex; align-items:center; justify-content:space-between;
+      padding:12px 0; border-bottom:1px solid var(--panel-raised); }
+    .toggle-row:last-child { border-bottom:none; }
+    .pill { font-size:12px; font-family:var(--font-ui); padding:2px 8px;
+      border-radius:20px; background:var(--panel-raised); color:var(--muted); }
+    .tbl-wrap { max-height:calc(100vh - 260px); overflow:auto; }
+    .dtbl { width:100%; font-size:14px; text-align:left; border-collapse:separate; border-spacing:0; }
+    .dtbl th { position:sticky; top:0; z-index:1; background:var(--panel); color:var(--muted);
+      font-size:13px; font-weight:600; padding:10px 12px; border-bottom:1px solid var(--border); white-space:nowrap; }
+    .dtbl td { padding:10px 12px; border-bottom:1px solid var(--border); vertical-align:top; }
+    .dtbl tbody tr:hover td { background:var(--panel-raised); }
+    .dtbl tbody tr:last-child td { border-bottom:none; }
+    .dtbl button { padding:2px 6px; border-radius:6px; }
+    .dtbl button:hover { background:var(--panel-raised); }
+    .dlg { width:min(440px, calc(100vw - 32px)); padding:0; border:1px solid var(--border); border-radius:12px;
+      background:var(--panel); color:var(--text); box-shadow:0 24px 60px rgba(0,0,0,.35); }
+    .dlg::backdrop { background:rgba(0,0,0,.5); }
+    .dlg-btn { padding:8px 16px; border-radius:8px; font-size:14px; font-weight:600; border:1px solid transparent; }
+    .dlg-ghost { border-color:var(--border); color:var(--text); }
+    .dlg-accent { background:var(--accent); color:var(--on-accent); }
+    .dlg-danger { background:var(--danger-fill); color:#fff; }
+    @media print { aside, header, .no-print { display:none !important; } body { height:auto !important; overflow:visible !important; } main { overflow:visible !important; } .tbl-wrap { max-height:none !important; overflow:visible !important; } }
+  </style>
+<link rel="stylesheet" href="/static/css/theme.css?v=7">
+<script src="/static/js/theme.js?v=6"></script>
+</head>
+<body class="h-screen flex flex-col bg-[#0A0D10] text-[#E8ECF1] overflow-hidden">
+
+<!-- Header -->
+<header class="h-[52px] shrink-0 flex items-center justify-between px-6 border-b border-[#232B33] bg-[#0E1217]">
+  <span class="mono font-bold text-[16px]">TRIAGE-1 <span class="text-gray-600">/</span> Admin</span>
+  <div class="flex items-center gap-6 text-[14px] text-gray-400">
+    <a href="/agent" class="hover:text-[#FFB000]">Agent Console</a>
+    <a href="/knowledge" class="hover:text-[#FFB000]">KB Management</a>
+    <span id="theme-slot"></span>
+    <button id="logout-btn" class="hover:text-red-400">Log out</button>
+  </div>
+</header>
+
+<!-- Body -->
+<div class="flex flex-1 min-h-0">
+
+  <!-- Left sidebar -->
+  <aside class="w-[240px] shrink-0 flex flex-col border-r border-[#232B33] bg-[#0E1217]">
+
+    <!-- Agent status -->
+    <div class="p-4 border-b border-[#232B33]">
+      <p class="mono text-[12px] tracking-[0.14em] uppercase text-gray-600 mb-3">Agent</p>
+      <div id="agent-status-pane"></div>
+    </div>
+
+    <!-- Nav -->
+    <nav class="flex-1 overflow-y-auto p-3 flex flex-col gap-0.5">
+      <button class="nav-item active" data-section="overview">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Summary
+      </button>
+      <button class="nav-item" data-section="controls">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+        Controls
+      </button>
+      <button class="nav-item" data-section="performance">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        AI performance
+      </button>
+      <button class="nav-item" data-section="configuration">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v2m0 16v2M4.22 4.22l1.42 1.42m12.72 12.72 1.42 1.42M2 12h2m16 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        Settings
+      </button>
+      <button class="nav-item" data-section="users">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87m-4-12a4 4 0 0 1 0 7.75"/></svg>
+        Users
+      </button>
+      <button class="nav-item" data-section="audit">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        Activity log
+      </button>
+      <button class="nav-item" data-section="runs">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Runs
+      </button>
+      <button class="nav-item" data-section="health">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Health
+      </button>
+      <button class="nav-item" data-section="rag">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+        Knowledge answers
+      </button>
+    </nav>
+  </aside>
+
+  <!-- Main panel -->
+  <main class="flex-1 overflow-y-auto p-8">
+
+    <!-- Toast -->
+    <div id="toast" class="hidden fixed top-4 right-6 z-50 px-4 py-3 rounded-lg border text-[14px] shadow-lg"></div>
+
+    <!-- OVERVIEW -->
+    <div id="section-overview" class="section active max-w-4xl">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-[19px] font-semibold">Executive summary</h1>
+        <div class="flex gap-3 items-center no-print">
+          <select id="sm-days" aria-label="Summary period" class="bg-[#0A0D10] border border-[#232B33] rounded-lg px-3 py-1.5 text-[14px]">
+            <option value="7">Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option>
+          </select>
+          <button onclick="window.print()" class="px-3 py-1.5 rounded-lg border border-[#232B33] text-[14px] hover:text-[#FFB000]">Print / PDF</button>
+        </div>
+      </div>
+      <div id="sm-panel" class="mb-8"><p class="text-[14px] text-gray-500">Loading…</p></div>
+      <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-gray-600 mb-3">Live now</h2>
+      <div class="grid grid-cols-2 gap-4 mb-6">
+        <div class="card p-5">
+          <p class="text-[12px] text-gray-500 mb-1">ServiceNow queue</p>
+          <p id="ov-queue" class="mono text-[29px] font-bold">—</p>
+          <p class="text-[13px] text-gray-500 mt-1">tickets waiting</p>
+        </div>
+        <div class="card p-5">
+          <p class="text-[12px] text-gray-500 mb-1">Pending approvals</p>
+          <p id="ov-approvals" class="mono text-[29px] font-bold">—</p>
+          <p class="text-[13px] text-gray-500 mt-1">awaiting decision</p>
+        </div>
+      </div>
+      <div class="card p-5">
+        <p class="text-[13px] text-gray-500 mb-4">Active run</p>
+        <div id="ov-run" class="text-[14px] text-gray-400">No run in progress.</div>
+      </div>
+    </div>
+
+    <!-- CONTROLS -->
+    <div id="section-controls" class="section max-w-xl">
+      <h1 class="text-[19px] font-semibold mb-6">Controls</h1>
+
+      <div class="card px-5 py-2 mb-6">
+        <div class="toggle-row">
+          <span class="text-[14px]">Chat enabled for users</span>
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input id="chat" type="checkbox" role="switch" aria-label="Chat enabled for users" class="sr-only peer">
+            <div class="w-9 h-5 bg-[#232B33] peer-checked:bg-[#FFB000] rounded-full transition-colors"></div>
+            <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4"></div>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <span class="text-[14px]">Auto-work the L1 queue</span>
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input id="auto" type="checkbox" role="switch" aria-label="Auto-work the L1 queue" class="sr-only peer">
+            <div class="w-9 h-5 bg-[#232B33] peer-checked:bg-[#FFB000] rounded-full transition-colors"></div>
+            <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4"></div>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <span class="text-[14px]">Autonomous restore</span>
+          <select id="aut" aria-label="Autonomous restore mode" class="bg-[#0A0D10] border border-[#232B33] rounded-lg px-3 py-1.5 text-[14px] focus:outline-none focus:border-[#FFB000]">
+            <option value="off">Off</option>
+            <option value="shadow">Shadow (log only)</option>
+            <option value="on">On</option>
+          </select>
+        </div>
+        <div class="toggle-row">
+          <span class="text-[14px]">Tickets from chat</span>
+          <select id="tm" aria-label="How tickets are created from chat" class="bg-[#0A0D10] border border-[#232B33] rounded-lg px-3 py-1.5 text-[14px] focus:outline-none focus:border-[#FFB000]">
+            <option value="confirm">Confirm (one tap)</option>
+            <option value="auto">Auto (30 s undo)</option>
+          </select>
+        </div>
+      </div>
+
+      <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">P1 notice</h2>
+      <div class="card p-5 flex flex-col gap-4">
+        <div class="field"><label for="br">Bridge link</label><input id="br" type="url" placeholder="https://…"></div>
+        <div class="field"><label for="to">To (comma-separated)</label><input id="to" type="text" placeholder="ops@example.com, …"></div>
+        <div class="field"><label for="cc">Cc (comma-separated)</label><input id="cc" type="text" placeholder="mgmt@example.com, …"></div>
+        <button id="p1save" class="self-start px-4 py-2 rounded-lg bg-[#FFB000] text-[#0A0D10] font-semibold text-[14px] hover:bg-[#E0A000]">Save</button>
+      </div>
+    </div>
+
+    <!-- PERFORMANCE -->
+    <div id="section-performance" class="section max-w-2xl">
+      <h1 class="text-[19px] font-semibold mb-6">Performance <span class="text-gray-600 font-normal text-[15px]">— last 7 days</span></h1>
+      <div id="perf-panel" class="card p-5">
+      <div id="bot-panel" class="card p-5 mt-4"></div>        
+        <p class="text-[14px] text-gray-500">Loading…</p>
+      </div>
+    </div>
+
+    <!-- CONFIGURATION -->
+    <div id="section-configuration" class="section max-w-2xl">
+      <h1 class="text-[19px] font-semibold mb-6">Settings</h1>
+
+      <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">Appearance</h2>
+      <div class="card p-5 mb-6">
+        <div class="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <p class="text-[15px] font-medium">Theme</p>
+            <p class="text-[13px] text-gray-500 mt-0.5">Applies to this browser only. System follows your device setting.</p>
+          </div>
+          <div id="theme-choice" class="seg" role="radiogroup" aria-label="Theme">
+            <button type="button" role="radio" data-mode="light">Light</button>
+            <button type="button" role="radio" data-mode="dark">Dark</button>
+            <button type="button" role="radio" data-mode="system">System</button>
+          </div>
+        </div>
+      </div>
+
+      <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">Playbook source</h2>
+      <div id="kb-status" class="card p-5 mb-6">
+        <p class="text-[14px] text-gray-500">Loading…</p>
+      </div>
+
+      <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">Operational settings</h2>
+      <div class="card p-5 mb-6 flex flex-col gap-4">
+        <div class="field"><label for="op-appr">Approval timeout (minutes, then auto-reject and escalate)</label><input id="op-appr" type="number" min="1" max="240"></div>
+        <div class="field"><label for="op-min">Minutes a person takes per ticket (used for the “time saved” estimate)</label><input id="op-min" type="number" min="1" max="600"></div>
+        <div class="field"><label for="op-ret">Knowledge-answer log retention (days)</label><input id="op-ret" type="number" min="7" max="365"></div>
+        <button id="op-save" class="self-start px-4 py-2 rounded-lg bg-[#FFB000] text-[#0A0D10] font-semibold text-[14px] hover:bg-[#E0A000]">Save</button>
+      </div>
+
+      <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-gray-600 mb-4">Coming next</h2>
+      <div class="card p-5 text-[14px] text-gray-500">Risk table, SLA fallbacks, service allowlist.</div>
+    </div>
+
+    <!-- USERS -->
+    <div id="section-users" class="section max-w-4xl">
+      <h1 class="text-[19px] font-semibold mb-6">Users</h1>
+      <div class="card p-5 mb-6">
+        <p class="text-[13px] text-gray-500 mb-3">Add user (search ServiceNow to fill name and email)</p>
+        <div class="field mb-3 relative"><input id="nuq" aria-label="Search ServiceNow users" placeholder="Search ServiceNow users…" autocomplete="off">
+          <div id="nures" class="absolute z-10 w-full bg-[#0E1217] border border-[#232B33] rounded-lg mt-1 empty:hidden"></div></div>
+        <div class="grid grid-cols-4 gap-3">
+          <div class="field"><label for="nuem">Email</label><input id="nuem"></div>
+          <div class="field"><label for="nunm">Name</label><input id="nunm"></div>
+          <div class="field"><label for="nurole">Role</label><select id="nurole"><option>viewer</option><option>approver</option><option>admin</option></select></div>
+          <div class="field"><label for="nupw">Temp password</label><input id="nupw" type="password"></div>
+        </div>
+        <button id="nuadd" class="mt-4 px-4 py-2 rounded-lg bg-[#FFB000] text-[#0A0D10] font-semibold text-[14px]">Add user</button>
+      </div>
+      <div class="card tbl-wrap"><table class="dtbl">
+        <thead><tr><th>User</th><th>Name</th><th>Role</th><th>Status</th><th>Last login</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody id="ubody"></tbody></table></div>
+    </div>
+
+    <!-- AUDIT -->
+    <div id="section-audit" class="section max-w-4xl">
+      <h1 class="text-[19px] font-semibold mb-6">Activity log</h1>
+      <div class="card p-4 mb-4 flex flex-wrap gap-3 items-end">
+        <div class="field"><label for="af-actor">Actor</label><input id="af-actor"></div>
+        <div class="field"><label for="af-action">Action</label><input id="af-action"></div>
+        <div class="field"><label for="af-ticket">Ticket</label><input id="af-ticket"></div>
+        <div class="field"><label for="af-days">Period</label><select id="af-days"><option value="1">24 h</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="0">All</option></select></div>
+        <button id="af-go" class="px-4 py-2 rounded-lg bg-[#FFB000] text-[#0A0D10] font-semibold text-[14px]">Filter</button>
+        <a id="af-csv" class="px-4 py-2 rounded-lg border border-[#232B33] text-[14px] hover:text-[#FFB000]">CSV</a>
+      </div>
+      <div class="card tbl-wrap"><table class="dtbl">
+        <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Ticket</th><th>Detail</th></tr></thead>
+        <tbody id="abody"></tbody></table></div>
+    </div>
+
+    <!-- RUNS -->
+    <div id="section-runs" class="section max-w-6xl">
+      <h1 class="text-[19px] font-semibold mb-6">Runs</h1>
+      <div id="jobs-panel" class="card p-4 mb-4 text-[13px] text-gray-500">No queued jobs.</div>
+      <div class="field mb-4 w-48"><select id="rf-outcome" aria-label="Filter runs by outcome"><option value="">All outcomes</option><option>resolved</option><option>escalated</option><option>incomplete</option><option>error</option><option>interrupted</option></select></div>
+      <div class="card tbl-wrap"><table class="dtbl">
+        <thead><tr><th>Ticket</th><th>Skill</th><th>Outcome</th><th>Status</th><th>Steps</th><th>Tokens</th><th>Started</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody id="rbody"></tbody></table></div>
+    </div>
+
+    <!-- HEALTH -->
+    <div id="section-health" class="section max-w-2xl">
+      <h1 class="text-[19px] font-semibold mb-6">System health</h1>
+      <button id="hl-go" class="mb-4 px-4 py-2 rounded-lg bg-[#FFB000] text-[#0A0D10] font-semibold text-[14px]">Check now</button>
+      <div id="api-pill" class="card px-5 py-3 mb-4 text-[14px]">API health: press “Check now”.</div>
+      <div id="hl-panel" class="card p-5 text-[14px] text-gray-500">Press “Check now”.</div>
+    </div>
+
+    <!-- RAG -->
+    <div id="section-rag" class="section max-w-4xl">
+      <h1 class="text-[19px] font-semibold mb-6">Knowledge answers <span class="text-gray-600 font-normal text-[15px]">— last 30 days</span></h1>
+      <div id="rag-panel" class="card p-5 text-[14px] text-gray-500">Loading…</div>
+    </div>
+
+  </main>
+</div>
+
+<dialog id="dlg" class="dlg" aria-labelledby="dlg-title" aria-describedby="dlg-body">
+  <div class="p-5">
+    <h2 id="dlg-title" class="text-[18px] font-semibold mb-2"></h2>
+    <p id="dlg-body" class="text-[15px] text-gray-400 mb-4"></p>
+    <div id="dlg-field" class="field mb-4 hidden"><label for="dlg-input">New password</label><input id="dlg-input" type="password" autocomplete="new-password"></div>
+    <p id="dlg-err" class="text-[13px] text-red-400 mb-3 empty:hidden"></p>
+    <div class="flex justify-end gap-3">
+      <button type="button" id="dlg-cancel" class="dlg-btn dlg-ghost">Cancel</button>
+      <button type="button" id="dlg-ok" class="dlg-btn"></button>
+    </div>
+  </div>
+</dialog>
+<script src="/static/js/agent_status.js"></script>
 <script>
-const j=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()});
+// ── Nav ──────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.nav-item').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('section-' + btn.dataset.section).classList.add('active');
+    if (btn.dataset.section === 'performance' && !perfLoaded) loadPerf();
+    if (btn.dataset.section === 'configuration' && !kbLoaded) loadKbStatus();
+    const s = btn.dataset.section;
+    if (s === 'users' && !usersLoaded) loadUsers();
+    if (s === 'audit') loadAudit();
+    if (s === 'runs') loadRuns();
+    if (s === 'health') loadHealth();
+    if (s === 'rag') loadRag();
+  });
+});
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const j = (p, b) => fetch(p, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(b)})
+  .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+
+function toast(msg, ok = true) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `fixed top-4 right-6 z-50 px-4 py-3 rounded-lg border text-[14px] shadow-lg ${ok
+    ? 'bg-[#0D1F14] border-[#1F9D55] text-green-300'
+    : 'bg-[#1A0A0A] border-[#7A2A32] text-red-300'}`;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.className = 'hidden fixed top-4 right-6 z-50 px-4 py-3 rounded-lg border text-[14px] shadow-lg', ok ? 3000 : 7000);
+}
+
+// In-page replacement for confirm() and prompt(). Resolves true (or the typed password), or null if cancelled.
+function askDialog({ title, body = '', okLabel = 'Confirm', cancelLabel = 'Cancel', danger = false, password = false }) {
+  return new Promise(resolve => {
+    const d = document.getElementById('dlg'), inp = document.getElementById('dlg-input');
+    const err = document.getElementById('dlg-err'), ok = document.getElementById('dlg-ok');
+    let result = null;
+    document.getElementById('dlg-title').textContent = title;
+    document.getElementById('dlg-body').textContent = body;
+    document.getElementById('dlg-field').classList.toggle('hidden', !password);
+    document.getElementById('dlg-cancel').textContent = cancelLabel;
+    inp.value = ''; err.textContent = '';
+    ok.textContent = okLabel;
+    ok.className = 'dlg-btn ' + (danger ? 'dlg-danger' : 'dlg-accent');
+    const onClose = () => { d.removeEventListener('close', onClose); resolve(result); };
+    d.addEventListener('close', onClose);
+    ok.onclick = () => {
+      if (password) {
+        if (inp.value.length < 8) { err.textContent = 'Use at least 8 characters.'; inp.focus(); return; }
+        result = inp.value;
+      } else result = true;
+      d.close();
+    };
+    inp.onkeydown = e => { if (e.key === 'Enter') ok.click(); };
+    document.getElementById('dlg-cancel').onclick = () => d.close();
+    d.onclick = e => { if (e.target === d) d.close(); };
+    d.showModal();
+    (password ? inp : document.getElementById('dlg-cancel')).focus();
+  });
+}
+
+// ── Overview ─────────────────────────────────────────────────────────────────
+function loadOverview() {
+  fetch('/api/agent/status').then(r=>r.json()).then(d => {
+    document.getElementById('ov-queue').textContent = d.queue === null ? '?' : d.queue;
+    document.getElementById('ov-approvals').textContent = d.pending_approvals;
+    const runEl = document.getElementById('ov-run');
+    if (d.run) {
+      const waiting = d.run.status === 'awaiting_approval';
+      const mins = Math.floor(d.run.seconds / 60), secs = d.run.seconds % 60;
+      runEl.innerHTML = `
+        <div class="flex items-center gap-3">
+          <span class="mono font-bold text-[#FFB000]">${d.run.ticket}</span>
+          <span class="pill">${waiting ? 'awaiting approval' : 'running'}</span>
+        </div>
+        <p class="text-[13px] text-gray-500 mt-1">${d.run.server} · ${mins > 0 ? mins+'m ' : ''}${secs}s elapsed</p>`;
+    } else {
+      runEl.textContent = 'No run in progress.';
+    }
+  }).catch(() => {});
+}
+loadOverview();
+setInterval(loadOverview, 5000);
+
+// ── Controls ─────────────────────────────────────────────────────────────────
 fetch('/api/chat/status').then(r=>r.json()).then(d=>chat.checked=d.enabled);
 fetch('/api/agent/auto').then(r=>r.json()).then(d=>auto.checked=d.enabled);
 fetch('/api/admin/autonomy').then(r=>r.json()).then(d=>aut.value=d.mode);
-chat.onchange=()=>j('/api/admin/chat',{enabled:chat.checked}).then(()=>msg.textContent='Chat '+(chat.checked?'on':'off')).catch(e=>{chat.checked=!chat.checked;msg.textContent=e.message});
-auto.onchange=()=>j('/api/agent/auto',{enabled:auto.checked}).then(()=>msg.textContent='Auto mode '+(auto.checked?'on':'off')).catch(e=>{auto.checked=!auto.checked;msg.textContent=e.message});
-aut.onchange=()=>j('/api/admin/autonomy',{mode:aut.value}).then(()=>msg.textContent='Autonomy: '+aut.value).catch(e=>msg.textContent=e.message);
-const split=s=>s.split(',').map(x=>x.trim()).filter(Boolean);
-fetch('/api/admin/p1').then(r=>r.json()).then(d=>{br.value=d.bridge_link||'';to.value=(d.to||[]).join(', ');cc.value=(d.cc||[]).join(', ')});
-p1save.onclick=()=>fetch('/api/admin/p1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bridge_link:br.value.trim(),to:split(to.value),cc:split(cc.value)})}).then(async r=>{const d=await r.json();msg.textContent=r.ok?'P1 settings saved':(d.detail||'Error')});
-</script></body></html>
+fetch('/api/admin/ticket-mode').then(r=>r.json()).then(d=>tm.value=d.mode);
+
+chat.onchange = () => j('/api/admin/chat', {enabled:chat.checked})
+  .then(() => toast('Chat ' + (chat.checked ? 'on' : 'off')))
+  .catch(e => { chat.checked = !chat.checked; toast(e.message, false); });
+auto.onchange = () => j('/api/agent/auto', {enabled:auto.checked})
+  .then(() => toast('Auto-work ' + (auto.checked ? 'on' : 'off')))
+  .catch(e => { auto.checked = !auto.checked; toast(e.message, false); });
+aut.onchange = () => j('/api/admin/autonomy', {mode:aut.value})
+  .then(() => toast('Autonomous restore: ' + aut.value))
+  .catch(e => toast(e.message, false));
+tm.onchange = () => j('/api/admin/ticket-mode', {mode:tm.value})
+  .then(() => toast('Ticket mode: ' + tm.value))
+  .catch(e => toast(e.message, false));
+
+const split = s => s.split(',').map(x=>x.trim()).filter(Boolean);
+fetch('/api/admin/p1').then(r=>r.json()).then(d => {
+  br.value = d.bridge_link || '';
+  to.value = (d.to || []).join(', ');
+  cc.value = (d.cc || []).join(', ');
+});
+p1save.onclick = () => fetch('/api/admin/p1', {method:'POST',
+  headers:{'Content-Type':'application/json'},
+  body: JSON.stringify({bridge_link:br.value.trim(), to:split(to.value), cc:split(cc.value)})
+}).then(async r => {
+  const d = await r.json();
+  toast(r.ok ? 'P1 settings saved' : (d.detail || 'Error'), r.ok);
+});
+
+// ── Performance ───────────────────────────────────────────────────────────────
+let perfLoaded = false;
+function fmt(n) { return n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n); }
+
+function loadPerf() {
+  perfLoaded = true;
+  fetch('/api/agent/llm-stats').then(r=>r.json()).then(d => {
+    if (d.error) { document.getElementById('perf-panel').innerHTML = '<p class="text-[14px] text-red-400">Stats unavailable</p>'; return; }
+    const kinds = Object.entries(d.by_kind).sort((a,b) => b[1].calls - a[1].calls);
+    const maxCalls = Math.max(...kinds.map(([,s]) => s.calls), 1);
+    const kindRows = kinds.map(([k, s]) => `
+      <div class="flex items-center gap-3 text-[13px]">
+        <span class="w-14 text-gray-400 shrink-0">${k}</span>
+        <div class="flex-1 bg-[#1A2028] rounded-full h-1.5">
+          <div class="h-full bg-[#FFB000] rounded-full" style="width:${Math.round(s.calls/maxCalls*100)}%"></div>
+        </div>
+        <span class="w-6 text-right text-gray-300">${s.calls}</span>
+        <span class="w-20 text-right text-gray-500">${fmt(s.tokens_in+s.tokens_out)} tok</span>
+        <span class="w-14 text-right text-gray-500">${s.avg_gen_s != null ? s.avg_gen_s+'s' : '—'}</span>
+      </div>`).join('');
+    document.getElementById('perf-panel').innerHTML = `
+      <div class="grid grid-cols-4 gap-4 mb-6">
+        ${[['Calls (7d)', fmt(d.calls)], ['Tokens in', fmt(d.tokens_in)], ['Tokens out', fmt(d.tokens_out)], ['Calls (24h)', fmt(d.last_24h)]]
+          .map(([l,v]) => `<div><p class="text-[12px] text-gray-500 mb-1">${l}</p><p class="mono text-[23px] font-bold">${v}</p></div>`).join('')}
+      </div>
+      <div class="border-t border-[#1A2028] pt-4">
+        <div class="flex justify-between text-[12px] text-gray-500 mb-3">
+          <span>By kind</span>
+          <span>avg gen ${d.avg_gen_s != null ? d.avg_gen_s+'s' : '—'} · avg wait ${d.avg_wait_s != null ? d.avg_wait_s+'s' : '—'}</span>
+        </div>
+        <div class="flex flex-col gap-2.5">${kindRows}</div>
+      </div>`;
+  }).catch(() => {
+    document.getElementById('perf-panel').innerHTML = '<p class="text-[14px] text-red-400">Could not load stats.</p>';
+  });
+  loadBot();
+}
+
+let kbLoaded = false;
+function loadKbStatus() {
+  kbLoaded = true;
+  fetch('/api/agent/skills-status').then(r => r.json()).then(d => {
+    const src = d.source === 'kb' ? '🟢 ServiceNow KB' : '🟡 Local files (SKILLS_SOURCE=file)';
+    const err = d.error ? `<p class="text-[13px] text-red-400 mt-2">${d.error}</p>` : '';
+    const rows = Object.entries(d.skills || {}).map(([name, ver]) =>
+      `<div class="flex justify-between text-[13px] py-1 border-b border-[#1A2028] last:border-0">
+        <span class="text-gray-300">${name}</span>
+        <span class="text-gray-500 font-mono">${ver}</span>
+      </div>`).join('');
+    document.getElementById('kb-status').innerHTML = `
+      <div class="flex justify-between items-center mb-4">
+        <span class="text-[14px] text-gray-200">Active source</span>
+        <span class="text-[14px] font-semibold">${src}</span>
+      </div>
+      ${err}
+      <div class="mt-2">${rows || '<p class="text-[14px] text-gray-500">No skills loaded.</p>'}</div>`;
+  }).catch(() => {
+    document.getElementById('kb-status').innerHTML =
+      '<p class="text-[14px] text-red-400">Could not load playbook status.</p>';
+  });
+}
+
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const api = (m, p, b) => fetch(p, {method:m, headers:{'Content-Type':'application/json'}, body:b ? JSON.stringify(b) : undefined})
+  .then(async r => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status); return d; });
+const when = t => t ? new Date(t * 1000).toLocaleString() : '—';
+const TD = '';
+
+// Users
+let usersLoaded = false;
+function loadUsers() {
+  usersLoaded = true;
+  api('GET', '/api/admin/users').then(rows => {
+    ubody.innerHTML = rows.map(u => `<tr>
+      <td ${TD}>${esc(u.user_id)}</td><td ${TD}>${esc(u.name)}</td>
+      <td ${TD}><select data-u="${esc(u.user_id)}" class="ur bg-[#0A0D10] border border-[#232B33] rounded px-2 py-1">
+        ${['viewer','approver','admin'].map(r => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
+      <td ${TD}><span class="pill">${esc(u.status)}</span></td><td ${TD}>${when(u.last_login)}</td>
+      <td ${TD}><button data-u="${esc(u.user_id)}" data-s="${u.status}" class="ut text-[#FFB000] mr-3">${u.status === 'active' ? 'Disable' : 'Enable'}</button>
+        <button data-u="${esc(u.user_id)}" class="up text-gray-400">Reset pw</button></td></tr>`).join('');
+  }).catch(e => toast(e.message, false));
+}
+ubody.onchange = e => { if (e.target.classList.contains('ur'))
+  api('PATCH', '/api/admin/users/' + encodeURIComponent(e.target.dataset.u), {role:e.target.value})
+    .then(() => toast('Role updated')).catch(x => { toast(x.message, false); loadUsers(); }); };
+ubody.onclick = async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const u = encodeURIComponent(b.dataset.u);
+  if (b.classList.contains('ut')) {
+    const disabling = b.dataset.s === 'active';
+    if (disabling && !await askDialog({ title: `Disable ${b.dataset.u}?`, body: 'This user will lose access until the account is enabled again.', okLabel: 'Disable user', danger: true })) return;
+    api('PATCH', '/api/admin/users/' + u, {status: disabling ? 'disabled' : 'active'})
+      .then(() => { toast(disabling ? 'User disabled' : 'User enabled'); loadUsers(); }).catch(x => toast(x.message, false));
+  }
+  if (b.classList.contains('up')) {
+    const p = await askDialog({ title: `Reset password for ${b.dataset.u}`, body: 'Enter a new password. Minimum 8 characters.', okLabel: 'Reset password', password: true });
+    if (p) api('PATCH', '/api/admin/users/' + u, {password: p}).then(() => toast('Password reset')).catch(x => toast(x.message, false));
+  }
+};
+let nuT;
+nuq.oninput = () => { clearTimeout(nuT); nuT = setTimeout(() => {
+  if (nuq.value.trim().length < 2) { nures.innerHTML = ''; return; }
+  fetch('/api/users?q=' + encodeURIComponent(nuq.value.trim())).then(r => r.json()).then(L => {
+    nures.innerHTML = (Array.isArray(L) ? L : []).map(u =>
+      `<button type="button" data-name="${esc(u.name)}" data-email="${esc(u.email || u.user_name || '')}"
+        class="block w-full text-left px-3 py-1.5 text-[13px] hover:bg-[#1A2028]">${esc(u.name)} · ${esc(u.email || u.user_name || '')}</button>`).join('');
+  }).catch(() => {});
+}, 300); };
+nures.addEventListener('mousedown', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  e.preventDefault();
+  nuem.value = b.dataset.email.toLowerCase();
+  nunm.value = b.dataset.name;
+  nuq.value = b.dataset.name;
+  nures.innerHTML = '';
+});
+nuadd.onclick = () => api('POST', '/api/admin/users', {user_id:nuem.value, name:nunm.value, role:nurole.value, password:nupw.value})
+  .then(() => { toast('User added'); nuem.value = nunm.value = nupw.value = nuq.value = ''; loadUsers(); }).catch(e => toast(e.message, false));
+
+// Audit
+const afQs = () => `actor=${encodeURIComponent(af-actor.value)}`; // placeholder replaced below
+function auditQs() {
+  const g = id => encodeURIComponent(document.getElementById(id).value.trim());
+  return `actor=${g('af-actor')}&action=${g('af-action')}&ticket=${g('af-ticket')}&days=${g('af-days')}`;
+}
+function loadAudit() {
+  document.getElementById('af-csv').href = '/api/admin/audit.csv?' + auditQs();
+  api('GET', '/api/admin/audit?' + auditQs()).then(rows => {
+    abody.innerHTML = rows.map(r => `<tr><td ${TD}>${when(r.ts)}</td><td ${TD}>${esc(r.actor)}</td>
+      <td ${TD}><span class="pill">${esc(r.action)}</span></td><td ${TD}>${esc(r.ticket || '')}</td>
+      <td class="text-gray-500 break-all">${esc(r.detail || '')}</td></tr>`).join('') ||
+      '<tr><td colspan="5" class="text-center text-gray-500">No entries for this filter. Try a longer period.</td></tr>';
+  }).catch(e => toast(e.message, false));
+}
+document.getElementById('af-go').onclick = loadAudit;
+
+// Runs
+function loadJobs() {
+  api('GET', '/api/admin/jobs').then(rows => {
+    const el = document.getElementById('jobs-panel');
+    el.innerHTML = rows.length ? `<p class="mb-2">Queued (${rows.length}), next first</p>` + rows.map(j =>
+      `<div class="flex justify-between py-1 border-t border-[#1A2028]"><span><span class="mono text-[#FFB000]">${esc(j.ticket)}</span>
+        <span class="pill ml-2">${esc(j.source)} · P${j.priority}</span></span>
+        <button data-job="${esc(j.id)}" class="text-red-400">Remove</button></div>`).join('') : 'No queued jobs.';
+    el.onclick = async e => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (!await askDialog({ title: 'Remove this job from the queue?', body: 'The job will not be worked unless it is queued again.', okLabel: 'Remove job', danger: true })) return;
+      api('POST', '/api/admin/jobs/' + b.dataset.job + '/cancel').then(loadJobs).catch(x => toast(x.message, false));
+    };
+  }).catch(() => {});
+}
+
+function loadRuns() {
+  loadJobs();
+  api('GET', '/api/admin/runs?outcome=' + encodeURIComponent(document.getElementById('rf-outcome').value)).then(rows => {
+    rbody.innerHTML = rows.map(r => {
+      const live = r.status === 'running' || r.status === 'awaiting_approval';
+      return `<tr><td ${TD}><span class="mono text-[#FFB000]">${esc(r.ticket)}</span></td>
+      <td ${TD}>${esc(r.skill || '—')}</td><td ${TD}>${esc(r.outcome || '—')}</td><td ${TD}>${esc(r.status)}</td>
+      <td ${TD}>${r.steps || 0}</td><td ${TD}>${fmt((r.tokens_in || 0) + (r.tokens_out || 0))}</td><td ${TD}>${when(r.started)}</td>
+      <td ${TD}>${live ? `<button data-id="${esc(r.id)}" data-a="cancel" class="text-red-400">Cancel</button>`
+                        : `<button data-id="${esc(r.id)}" data-a="rerun" class="text-[#FFB000]">Re-run</button>`}</td></tr>`;
+    }).join('') || '<tr><td colspan="8" class="text-center text-gray-500">No runs match this filter.</td></tr>';
+  }).catch(e => toast(e.message, false));
+}
+rbody.onclick = async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.a === 'cancel' && !await askDialog({ title: 'Cancel this run?', body: 'The ticket is left as it is.', okLabel: 'Cancel run', cancelLabel: 'Keep running', danger: true })) return;
+  b.disabled = true;
+  api('POST', `/api/admin/runs/${encodeURIComponent(b.dataset.id)}/${b.dataset.a}`)
+    .then(() => { toast(b.dataset.a === 'cancel' ? 'Run cancelled' : 'Re-run started'); loadRuns(); })
+    .catch(x => { toast(x.message, false); b.disabled = false; });
+};
+document.getElementById('rf-outcome').onchange = loadRuns;
+
+// Health
+function loadApiHealth() {
+  const el = document.getElementById('api-pill');
+  el.textContent = 'API health: checking…'; el.title = '';
+  api('GET', '/api/admin/api-health').then(d => {
+    const bad = d.results.filter(r => !r.ok), up = d.results.length - bad.length;
+    el.innerHTML = `${bad.length ? '🟡' : '🟢'} API health: <b>${up}/${d.results.length}</b> online`;
+    el.title = bad.length ? 'Offline:\n' + bad.map(r => `${r.path} (${r.status ?? 'no response'})`).join('\n') : 'All APIs responding';
+    el.style.cursor = 'help';
+  }).catch(() => { el.textContent = 'API health: unavailable'; });
+}
+
+function loadHealth() {
+  loadApiHealth();
+  const p = document.getElementById('hl-panel'); p.textContent = 'Checking…';
+  Promise.all([fetch('/api/ready').then(r => r.json()), fetch('/api/agent/status').then(r => r.json()).catch(() => ({}))]).then(([h, s]) => {
+    const rows = Object.entries(h.checks || {}).map(([k, c]) => `<div class="flex justify-between py-1.5 border-b border-[#1A2028]">
+      <span>${c.ok ? '🟢' : '🔴'} ${k}</span><span class="text-gray-500 text-[13px]">${c.ms} ms · ${esc(c.detail)}</span></div>`).join('');
+    p.innerHTML = rows + `<div class="mt-3 text-[13px] text-gray-500">Queue: ${s.queue ?? '?'} · Auto-work: ${s.auto ? 'on' : 'off'} · Autonomy: ${esc(s.autonomy)} · Active run: ${s.run ? esc(s.run.ticket) : 'none'}</div>`;
+  }).catch(() => p.textContent = 'Health check failed.');
+}
+document.getElementById('hl-go').onclick = loadHealth;
+
+// Bot performance
+function loadBot() {
+  api('GET', '/api/admin/bot-stats').then(d => {
+    const kv = (l, v) => `<div><p class="text-[12px] text-gray-500 mb-1">${l}</p><p class="mono text-[21px] font-bold">${v ?? '—'}</p></div>`;
+    const list = o => Object.entries(o || {}).map(([k, v]) => `<span class="pill mr-1">${esc(k)}: ${typeof v === 'object' ? v.approved + '✓/' + v.rejected + '✗' : v}</span>`).join('') || '—';
+    document.getElementById('bot-panel').innerHTML = `<div class="grid grid-cols-4 gap-4 mb-5">
+      ${kv('Runs', d.runs)}${kv('Auto-resolved', d.resolved_pct + '%')}${kv('Escalated', d.escalated_pct + '%')}${kv('Failed', d.failed_pct + '%')}
+      ${kv('MTTR (min)', d.mttr_min)}${kv('Steps/run', d.avg_steps)}${kv('Nudges/run', d.avg_nudges)}${kv('Chat tickets (undone)', d.chat_tickets + ' (' + d.chat_undone + ')')}${kv('Approval wait avg/p90 (min)', (d.approval_wait_avg_min ?? '—') + ' / ' + (d.approval_wait_p90_min ?? '—'))}</div>
+      <div class="text-[13px] text-gray-400 space-y-2"><p>Skills: ${list(d.skills)}</p><p>Approvers: ${list(d.approvers)}</p><p>Checker verdicts: ${list(d.checker)}</p></div>`;
+  }).catch(() => {});
+}
+
+// ── Misc ──────────────────────────────────────────────────────────────────────
+api('GET', '/api/admin/settings').then(d => {
+  document.getElementById('op-appr').value = d.approval_timeout_min;
+  document.getElementById('op-min').value = d.manual_minutes_per_ticket;
+  document.getElementById('op-ret').value = d.rag_retention_days;
+}).catch(() => {});
+document.getElementById('op-save').onclick = () => api('POST', '/api/admin/settings', {
+  approval_timeout_min: document.getElementById('op-appr').value,
+  manual_minutes_per_ticket: document.getElementById('op-min').value,
+  rag_retention_days: document.getElementById('op-ret').value
+}).then(d => { toast(d.changed ? 'Settings saved' : 'No changes'); loadSummary(); }).catch(e => toast(e.message, false));
+
+function loadSummary() {
+  const days = document.getElementById('sm-days').value;
+  api('GET', '/api/admin/summary?days=' + days).then(d => {
+    const delta = (a, b) => b ? (a === b ? 'same as previous period' : (a > b ? '▲ ' : '▼ ') + Math.abs(Math.round(100 * (a - b) / b)) + '% vs previous period') : 'no earlier data';
+    const card = (t, v, s) => `<div class="card p-5"><p class="text-[12px] text-gray-500 mb-1">${t}</p><p class="mono text-[27px] font-bold">${v ?? '—'}</p><p class="text-[13px] text-gray-500 mt-1">${s}</p></div>`;
+    const bad = d.attention.length > 0 || (d.pending || 0) > 0;
+    const max = Math.max(...Object.values(d.daily), 1);
+    const bars = Object.entries(d.daily).map(([k, v]) => `<div class="flex flex-col items-center gap-1 flex-1 min-w-0">
+      <span class="text-[12px] text-gray-400">${v}</span><div class="w-full max-w-[28px] bg-[#FFB000] rounded-t" style="height:${Math.max(4, Math.round(v / max * 80))}px"></div>
+      <span class="text-[12px] text-gray-600 truncate">${esc(k)}</span></div>`).join('') || '<p class="text-[13px] text-gray-500">No tickets in this period.</p>';
+    document.getElementById('sm-panel').innerHTML = `
+      <div class="card px-5 py-3 mb-4 flex items-center gap-3 ${bad ? 'border-[#7A5A12]' : 'border-[#1F9D55]'}">
+        <span>${bad ? '🟡' : '🟢'}</span>
+        <span class="text-[14px]">${bad ? `${d.pending || 0} decision(s) waiting, ${d.attention.length} ticket(s) needing attention` : 'All clear: nothing waiting on a person and no failed tickets.'}</span></div>
+      <div class="grid grid-cols-4 gap-4 mb-4">
+        ${card('Unique tickets handled', d.cur.handled, delta(d.cur.handled, d.prev.handled))}
+        ${card('Resolved by the agent', d.resolved_pct != null ? d.resolved_pct + '%' : null, d.cur.resolved + ' of ' + d.cur.finished + ' finished')}
+        ${card('Time saved (estimate)', d.hours_saved + ' h', 'resolved × (' + d.manual_minutes + ' min by hand − agent time)')}
+        ${card('Average fix time', d.cur.mttr_min != null ? d.cur.mttr_min + ' min' : null, 'resolved tickets only')}
+        ${card('Escalated to people', d.cur.escalated, delta(d.cur.escalated, d.prev.escalated))}
+        ${card('Awaiting approval', d.pending, 'decisions needed now')}
+        ${card('Fix verified by checker', d.checker_pass != null ? d.checker_pass + '%' : null, 'recent resolved tickets that stayed fixed')}
+        ${card('Chat answered from KB', d.kb_rate != null ? d.kb_rate + '%' : null, 'knowledge-base coverage')}
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div class="card p-5"><p class="text-[13px] text-gray-500 mb-3">Tickets per day</p><div class="flex items-end gap-1 h-[120px]">${bars}</div></div>
+        <div class="card p-5"><p class="text-[13px] text-gray-500 mb-3">Top issue types</p>
+          ${d.skills.map(([k, v]) => `<div class="flex justify-between text-[14px] py-1 border-b border-[#1A2028]"><span>${esc(k)}</span><span class="text-gray-400">${v}</span></div>`).join('') || '<p class="text-[13px] text-gray-500">None yet.</p>'}
+          <p class="text-[13px] text-gray-500 mt-4 mb-2">Needs attention</p>
+          ${d.attention.map(a => `<div class="text-[13px] py-1"><span class="mono text-[#FFB000]">${esc(a.ticket)}</span> <span class="pill">${esc(a.outcome)}</span></div>`).join('') || '<p class="text-[13px] text-gray-500">Nothing.</p>'}
+        </div></div>`;
+  }).catch(e => { document.getElementById('sm-panel').innerHTML = '<p class="text-[14px] text-red-400">Could not load summary.</p>'; });
+}
+document.getElementById('sm-days').onchange = loadSummary;
+loadSummary();
+
+function loadRag() {
+  api('GET', '/api/admin/rag-stats').then(d => {
+    const kv = (l, v) => `<div><p class="text-[12px] text-gray-500 mb-1">${l}</p><p class="mono text-[21px] font-bold">${v ?? '—'}</p></div>`;
+    const tbl = (rows, h) => `<table class="w-full text-[13px] text-left"><thead class="text-gray-500"><tr><th class="pb-1">${h[0]}</th><th class="w-16 text-right">${h[1]}</th></tr></thead>
+      ${rows.map(([a, b]) => `<tr class="border-t border-[#1A2028]"><td class="py-1.5 break-all">${esc(a)}</td><td class="text-right">${b}</td></tr>`).join('') || '<tr><td class="py-2 text-gray-500">None yet</td></tr>'}</table>`;
+    document.getElementById('rag-panel').innerHTML = `
+      <div class="grid grid-cols-4 gap-4 mb-5">${kv('Queries', d.queries)}${kv('KB hit rate', d.hit_rate != null ? d.hit_rate + '%' : null)}
+        ${kv('Phantom doc cites', d.phantom)}${kv('Latency avg/p90 (s)', (d.avg_total ?? '—') + ' / ' + (d.p90_total ?? '—'))}
+        ${kv('Graph avg (s)', d.avg_graph)}${kv('Vector avg (s)', d.avg_vec)}</div>
+      <p class="text-[13px] text-gray-400 mb-4">Kinds: ${Object.entries(d.kinds).map(([k, v]) => `<span class="pill mr-1">${esc(k)}: ${v}</span>`).join('') || '—'}</p>
+      <div class="grid grid-cols-2 gap-6"><div><p class="text-[13px] text-gray-500 mb-2">KB gaps (answered not from KB)</p>${tbl(d.gaps, ['Query', 'Count'])}</div>
+      <div><p class="text-[13px] text-gray-500 mb-2">Top retrieved documents</p>${tbl(d.top_docs, ['Document', 'Hits'])}</div></div>`;
+  }).catch(e => toast(e.message, false));
+}
+
+(function () {
+  var box = document.getElementById('theme-choice');
+  if (!box || !window.TriageTheme) return;
+  function sync() {
+    var m = TriageTheme.mode();
+    box.querySelectorAll('button').forEach(function (b) { b.setAttribute('aria-checked', String(b.dataset.mode === m)); });
+  }
+  box.addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (b) TriageTheme.set(b.dataset.mode);
+  });
+  document.addEventListener('triage-theme', sync);
+  sync();
+})();
+
+document.getElementById('logout-btn').onclick = () =>
+  fetch('/api/auth/logout', {method:'POST'}).then(() => location.href = '/static/login.html');
+</script>
+</body>
+</html>

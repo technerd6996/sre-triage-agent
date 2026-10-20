@@ -5,6 +5,7 @@ systems: [windows]
 risk: medium
 keywords: [disk, space, full, storage, low disk, no space, c]
 allowed_tools: [check_reachability, check_disk_usage, clear_temp_files, add_work_note, resolve_incident, escalate_incident]
+verify: check_disk_usage(target) x1 expect=under_threshold
 ---
 
 # Windows disk full
