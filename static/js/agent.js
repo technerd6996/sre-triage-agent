@@ -175,7 +175,7 @@ function addEvent(ev) {
     let row = null;
     if (ev.type === 'tool_call') row = stepRow('▶', 'text-[#0084FF]', ev.name, JSON.stringify(ev.args));
     else if (ev.type === 'tool_result') row = stepRow('✓', 'text-[#3DDC84]', `${ev.name} result`, ev.content);
-    else if (ev.type === 'decision') row = stepRow(ev.approve ? '✔' : '✖', ev.approve ? 'text-[#3DDC84]' : 'text-red-400', ev.approve ? 'Engineer approved' : 'Engineer rejected');
+    else if (ev.type === 'decision') row = stepRow(ev.approve ? '✔' : '✖', ev.approve ? 'text-[#3DDC84]' : 'text-red-400', (ev.approve ? 'Approved by ' : 'Rejected by ') + (ev.by || 'an engineer'));
     else if (ev.type === 'nudge') row = stepRow('↻', 'text-[#FFB000]', 'Nudged the agent to finish', ev.text);
     else if (ev.type === 'warning') row = stepRow('!', 'text-[#FFB000]', 'Warning', ev.message);
     else if (ev.type === 'error') row = stepRow('✖', 'text-red-400', 'Error', ev.message);

@@ -5,11 +5,11 @@ import json
 import boto3
 from langchain_core.tools import tool
 
-from app.tools import aws
+from app.tools import aws, active
 
 
 def _iid(target: str) -> str:
-    iid = aws.ACTIVE.get(target)
+    iid = active.host_id(target)
     if not iid:
         raise RuntimeError("No server was identified for this ticket.")
     return iid
@@ -84,7 +84,7 @@ def escalate_l3(number: str, reason: str) -> dict:
         lam = boto3.client("lambda", region_name=os.getenv("AWS_REGION"))
         r = lam.invoke(
             FunctionName=os.getenv("L3_LAMBDA", "triage1-l3-notify"),
-            Payload=json.dumps({"ticket": number, "reason": reason, "server": dict(aws.ACTIVE)}).encode(),
+            Payload=json.dumps({"ticket": number, "reason": reason, "server": active.snapshot()}).encode(),
         )
         if r.get("FunctionError"):
             return {"error": r["Payload"].read().decode()[:300]}

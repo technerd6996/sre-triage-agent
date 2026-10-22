@@ -10,12 +10,12 @@ import os
 import re
 import socket
 import time
-
+from app.tools import pam
 import paramiko
 import winrm
 from langchain_core.tools import tool
 
-from app.tools import aws
+from app.tools import active
 
 TARGETS = ("windows", "linux")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")  # blocks shell/PowerShell injection
@@ -34,19 +34,24 @@ def _threshold() -> float:
 
 
 def _service_allowlist() -> set[str]:
-    raw = os.getenv("SERVICE_ALLOWLIST",
-                    "nginx,docker,postgresql,postgres,sshd,ssh,apache2,httpd,mysql,mysqld,redis,redis-server,cron")
+    """Optional strict mode: only enforced when SERVICE_ALLOWLIST is set in .env. Empty = no restriction."""
+    raw = os.getenv("SERVICE_ALLOWLIST", "")
     return {s.strip().lower() for s in raw.split(",") if s.strip()}
+
+
+def _service_denylist() -> set[str]:
+    """Optional: services the agent must never start. Empty by default."""
+    return {s.strip().lower() for s in os.getenv("SERVICE_DENYLIST", "").split(",") if s.strip()}
 
 
 # ---- low-level helpers ----
 def _host(target: str) -> str:
     if target not in TARGETS:
         raise ValueError(f"target must be one of {TARGETS}")
-    ip = aws.current_host(target)  # the instance the current ticket is about, via AWS
+    ip = active.current_address(target)  # the host the current ticket is about, via the Hosts port
     if ip:
         return ip
-    if aws.STRICT:
+    if active.STRICT:
         raise RuntimeError("No server was identified for this ticket, so no server check was run.")
     host = os.getenv("WIN_HOST" if target == "windows" else "LINUX_HOST", "")
     if not host:
@@ -60,10 +65,12 @@ def _port(target: str) -> int:
 
 def _win(script: str) -> str:
     """Run a PowerShell script on the Windows server over WinRM and return stdout."""
+    host = _host("windows")
+    creds = pam.checkout(host)
     session = winrm.Session(
-        f"http://{_host('windows')}:5985/wsman",
-        auth=(os.environ["WIN_USER"], os.environ["WIN_PASSWORD"]),
-        transport=os.getenv("WIN_WINRM_TRANSPORT", "ntlm"),
+        f"http://{host}:{int(creds.get('port', 5985))}/wsman",
+        auth=(creds["username"], creds["password"]),
+        transport=creds.get("transport", "ntlm"),
         operation_timeout_sec=20,
         read_timeout_sec=30,
     )
@@ -75,15 +82,20 @@ def _win(script: str) -> str:
 
 def _linux(command: str) -> str:
     """Run a shell command on the Linux server over SSH and return stdout."""
+    host = _host("linux")
+    creds = pam.checkout(host)
+    pkey = None
+    if creds.get("private_key"):
+        pkey = pam.load_pkey(creds["private_key"], creds.get("passphrase") or None)
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
         client.connect(
-            _host("linux"),
-            port=_port("linux"),
-            username=os.environ["LINUX_USER"],
-            password=os.getenv("LINUX_PASSWORD") or None,
-            key_filename=os.getenv("LINUX_KEY_PATH") or None,
+            host,
+            port=int(creds.get("port", 22)),
+            username=creds["username"],
+            password=creds.get("password") or None,
+            pkey=pkey,
             timeout=10,
             look_for_keys=False,
             allow_agent=False,
@@ -273,8 +285,9 @@ def start_service(target: str, service_name: str) -> dict:
         if target not in TARGETS:
             raise ValueError(f"target must be one of {TARGETS}")
         svc = _safe(service_name, "service_name")
-        if svc.lower() not in _service_allowlist():
-            raise ValueError(f"Service '{svc}' is not on the allowed list (SERVICE_ALLOWLIST).")
+        low, allow = svc.lower(), _service_allowlist()
+        if low in _service_denylist() or (allow and low not in allow):
+            raise ValueError(f"Service '{svc}' is blocked by SERVICE_DENYLIST / SERVICE_ALLOWLIST.")
         if target == "windows":
             _win(f"Start-Service -Name '{svc}'")
         else:

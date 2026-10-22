@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 from sentence_transformers import SentenceTransformer
 from supabase import create_client, Client
 from neo4j import GraphDatabase
-from app.tools import aws
+from app.ports import registry
 from app import store
 from app.tools.snow import create_incident, add_work_note
 from app.api.agent import _active, start_run
@@ -717,11 +717,11 @@ def analyze_chat_for_incident(query: str, history: list[dict]) -> dict | None:
 
     if issue_text:
         try:
-            inst = aws.find_in_text(issue_text)
-            if inst:
-                suggested = inst["name"] or inst["instance_id"]
+            host = registry.get_hosts().find_in_text(issue_text)
+            if host:
+                suggested = host.name or host.id
         except Exception as e:
-            log.warning("AWS lookup in chat failed: %s", e)
+            log.warning("Host lookup in chat failed: %s", e)
 
     return {"status": "needs_server", "mode": "explicit" if explicit else "issue",
             "description": issue_text[:1800], "suggested_server": suggested}

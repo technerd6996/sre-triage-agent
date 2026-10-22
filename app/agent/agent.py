@@ -23,7 +23,8 @@ from app.tools.infra import INFRA_TOOLS
 from app.tools.snow import SNOW_TOOLS, get_incident
 from app.tools.aws_tools import AWS_TOOLS
 from app.agent.hosts import resolve_server, resolve_default_windows
-from app.tools import aws
+from app.tools import active
+active.STRICT = True  # agent runs never fall back to the static hosts in .env
 
 load_dotenv()
 
@@ -37,8 +38,6 @@ CHECKPOINTER = SqliteSaver(_checkpointer_conn)
 CHECKPOINTER.setup()
 
 THREAD_TOOLS = {}               # thread_id -> tuple of allowed tool names
-
-aws.STRICT = True  # agent runs never fall back to the static hosts in .env
 
 BASE_PROMPT = """You are TRIAGE-1, an L1 SRE agent that works ServiceNow incidents using tools.
 RULES:
@@ -178,8 +177,11 @@ def start(ticket_number: str, thread_id: str = ""):
     tool_tuple = tuple(sorted(allowed_tools))
     THREAD_TOOLS[thread_id] = tool_tuple
 
+    host_ref = ({"provider": inst["provider"], "id": inst["instance_id"],
+                 "os": inst["platform"], "name": inst["name"]} if inst else None)
     yield {"type": "start", "thread_id": thread_id, "ticket": ticket_number,
-           "skill": skill, "skill_version": skill_version, "server": label, "tools": list(tool_tuple)}
+           "skill": skill, "skill_version": skill_version, "server": label, "host": host_ref,
+           "tools": list(tool_tuple)}
     msg = (f"Work incident {ticket_number}.\nShort description: {short}\nDescription: {desc}\n"
            f"{server}\n\nPLAYBOOK:\n{playbook}")
     yield from _run_guarded(get_agent(tool_tuple), {"messages": [{"role": "user", "content": msg}]},

@@ -20,6 +20,7 @@ from app.agent.policy import RISK
 from app.agent.report import build_report, describe, outcome_code, _fmt_call
 from app.tools.snow import add_work_note, get_incident, list_queue
 from app import escalation, checker
+from app.tools import active
 
 log = logging.getLogger("uvicorn.error")
 router = APIRouter(prefix="/api/agent")
@@ -105,8 +106,8 @@ def _post_service_context(run: dict, actions) -> None:
     host = str(run.get("server") or "").split(" (")[0]
     run["service_context"] = {}                      # set first, so a failure is not retried in a loop
     try:
-        from app.tools import cmdb
-        ctx = cmdb.service_context(host, svc)
+        from app.ports import registry
+        ctx = registry.get_context().service_context(host, svc)
         run["service_context"] = ctx
         if ctx.get("found"):
             add_work_note.invoke({"number": run["ticket"], "note": ctx["summary"]})
@@ -122,12 +123,13 @@ def _consume(run: dict, events, kind: str = "triage"):
     run["pending"] = None
     store.save_run(run)
     usage.bind_run(run["id"], kind)        # model calls made while this runs are counted against this run
+    active.bind_run(run)                   # a resumed run gets its stored server back; a new run binds in resolve_server
     auto_resume = False
     try:
         for ev in events:
             if ev["type"] == "start":
                 run.update(thread_id=ev["thread_id"], skill=ev["skill"], server=ev["server"],
-                           skill_version=ev.get("skill_version"))
+                           skill_version=ev.get("skill_version"), host=ev.get("host"))
             _add_event(run, ev)
             if ev["type"] == "approval_required":
                 _post_service_context(run, ev["actions"])

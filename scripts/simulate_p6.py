@@ -11,6 +11,7 @@ load_dotenv()
 
 from app.agent import skills
 from app.tools import snow
+from app.adapters.servicenow import client as snow_client
 
 FAILS = []
 
@@ -44,7 +45,7 @@ def serve(rows=None, error=None):
         if error:
             raise RuntimeError(error)
         return rows
-    snow._request = fake
+    snow_client._request = fake
 
 
 def load(source):

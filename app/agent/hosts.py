@@ -1,28 +1,34 @@
 """Decides which server a ticket is about. The code decides, never the model."""
-from app.tools import aws
+from app.ports import registry
+from app.tools import active
+
+
+def _legacy(h) -> dict:
+    """Same dict shape the agent used with the AWS code, so callers need no change yet."""
+    return {"instance_id": h.id, "name": h.name, "platform": h.os, "state": h.state,
+            "public_ip": h.address, "private_ip": h.private_address, "provider": h.provider}
 
 
 def resolve_server(ticket_text: str):
-    """Returns (instance, reason). Also sets the active server so the infra tools use its IP."""
-    aws.ACTIVE.clear()  # never carry a previous ticket's server over
+    """Returns (instance, reason). Also sets the active server so the infra tools use its address."""
+    active.bind({})  # never carry a previous ticket's server over
     try:
-        inst = aws.find_in_text(ticket_text)
+        host = registry.get_hosts().find_in_text(ticket_text)
     except Exception as e:
-        return None, f"AWS lookup failed: {str(e)[:150]}."
-    if not inst:
+        return None, f"Host lookup failed: {str(e)[:150]}."
+    if not host:
         return None, "No known instance is named in the ticket."
-    aws.ACTIVE[inst["platform"]] = inst["instance_id"]
-    return inst, ""
+    active.bind({host.os: host.id})
+    return _legacy(host), ""
 
 
 def resolve_default_windows():
     """Fallback for AD user tickets that do not name a specific server: pick the running Windows instance."""
     try:
-        win = [i for i in aws.list_instances() if i["platform"] == "windows" and i["state"] == "running"]
+        win = [h for h in registry.get_hosts().list_hosts() if h.os == "windows" and h.state == "running"]
         if len(win) == 1:
-            inst = win[0]
-            aws.ACTIVE["windows"] = inst["instance_id"]
-            return inst
+            active.bind({**active.snapshot(), "windows": win[0].id})
+            return _legacy(win[0])
     except Exception:
         pass
     return None

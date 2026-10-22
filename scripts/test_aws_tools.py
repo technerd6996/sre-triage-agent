@@ -7,16 +7,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.tools import aws
+from app.agent import hosts
+from app.tools import active
 from app.tools.aws_tools import check_ec2_status, check_security_group, get_cloudwatch_metric
 
 name = sys.argv[1] if len(sys.argv) > 1 else "term-win-srv"
-inst = aws.find_in_text(name)
+inst, why = hosts.resolve_server(name)      # also binds the server for this thread
 if not inst:
-    raise SystemExit(f"No single instance matches '{name}'. Run: python -m scripts.test_aws")
+    raise SystemExit(f"No single instance matches '{name}': {why} Run: python -m scripts.test_aws")
 
 target = inst["platform"]
-aws.ACTIVE[target] = inst["instance_id"]
 port = 5985 if target == "windows" else 22
 print(f"Testing {inst['name']} ({target}, {inst['instance_id']})\n")
 

@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
 
 load_dotenv()
-
+from app.tools import active
 from app.tools import aws
 from app.tools import infra
 
@@ -28,7 +28,7 @@ def pick(name):
     inst = aws.find_in_text(name)
     if not inst:
         raise RuntimeError(f"No instance named '{name}' found")
-    aws.ACTIVE[inst["platform"]] = inst["instance_id"]
+    active.bind({**active.snapshot(), inst["platform"]: inst["instance_id"]})
     return inst
 
 

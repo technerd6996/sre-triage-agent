@@ -8,7 +8,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from app import store
-from app.tools import aws
+from app.ports import registry
 from app.tools.snow import _request
 
 router = APIRouter(prefix="/api")
@@ -37,7 +37,7 @@ def _snow():
 
 
 def _aws():
-    return f"{len(aws.list_instances(force=True))} instances visible"
+    return f"{len(registry.get_hosts().list_hosts(force=True))} hosts visible"
 
 
 def _db():

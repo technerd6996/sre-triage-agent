@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from app import jobs
 from app.api.agent import RUNS, _active, _actor, start_run
-from app.tools import aws
+from app.ports import registry
 from app.tools.snow import add_work_note, create_incident, search_users, get_sla
 
 router = APIRouter(prefix="/api")
@@ -84,8 +84,8 @@ def clean_transcript(turns):
 def servers(q: str = ""):
     """Type-ahead: instance names containing the text. Instances without a Name tag are not offered."""
     q = q.strip().lower()[:50]
-    rows = [{"name": i["name"], "platform": i["platform"], "state": i["state"]}
-            for i in aws.list_instances() if i["name"] and q in i["name"].lower()]
+    rows = [{"name": h.name, "platform": h.os, "state": h.state}
+            for h in registry.get_hosts().list_hosts() if h.name and q in h.name.lower()]
     return rows[:8]
 
 
@@ -112,7 +112,7 @@ def issue_sla(number: str):
 def report_issue(req: IssueRequest, request: Request):
     if len(jobs.queued()) >= QUEUE_MAX:
         raise HTTPException(503, "TRIAGE-1 has a long queue right now. Please try again in a few minutes.")
-    inst = next((i for i in aws.list_instances(force=True) if i["name"] == req.server), None)
+    inst = next((h for h in registry.get_hosts().list_hosts(force=True) if h.name == req.server), None)
     if not inst:
         raise HTTPException(422, "Pick a configuration item (server) from the list.")
 

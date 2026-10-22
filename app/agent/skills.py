@@ -81,7 +81,7 @@ def _validate(meta: dict, body: str) -> str:
 
 
 def _load_kb() -> dict:
-    from app.tools.snow import _request          # lazy: avoids a circular import
+    from app.adapters.servicenow.client import _request   # lazy: avoids a circular import
     kb = os.getenv("SKILLS_KB_NAME", "TRIAGE-1 Playbooks").replace("^", "")
     rows = _request("GET", "kb_knowledge", params={
         "sysparm_query": f"kb_knowledge_base.title={kb}^workflow_state=published^active=true",

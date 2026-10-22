@@ -28,10 +28,22 @@ def _safe(fn):
     wrapper.__name__ = fn.__name__
     return wrapper
 
+def _ticket_ref(ticket):
+    """(provider, external_id) for a bare incident number or 'provider:id'. Written next to the legacy
+    `ticket` column, which stays the source of truth until readers are switched over."""
+    if not ticket:
+        return None, None
+    from app.ports import registry
+    from app.ports.models import TicketRef
+    ref = TicketRef.parse(ticket, registry.active_provider("ticketing", "servicenow"))
+    return ref.provider, ref.external_id
+
 @_safe
 def save_run(run: dict) -> None:
+    prov, ext = _ticket_ref(run["ticket"])
     supabase.table("runs").upsert({
         "id": run["id"], "ticket": run["ticket"], "status": run["status"],
+        "ticket_provider": prov, "ticket_external_id": ext, "host": run.get("host"),
         "skill": run.get("skill"), "server": run.get("server"),
         "thread_id": run.get("thread_id"),
         "created": run.get("created", time.time()), "updated": time.time(),
@@ -47,8 +59,10 @@ def add_event(run_id: str, seq: int, ev: dict) -> None:
     }).execute()
 
 def audit(run_id: str | None, ticket: str | None, actor: str, action: str, detail: str = "") -> None:
+    prov, ext = _ticket_ref(ticket)
     supabase.table("audit").insert({
         "ts": time.time(), "run_id": run_id, "ticket": ticket,
+        "ticket_provider": prov, "ticket_external_id": ext,
         "actor": actor, "action": action, "detail": detail[:1000]
     }).execute()
 
@@ -68,7 +82,7 @@ def load_runs(limit: int = 20) -> list[dict]:
                     "requester": r.get("requester"), "steps": r.get("steps") or 0,
                     "nudges": r.get("nudges") or 0, "tokens_in": r.get("tokens_in") or 0,
                     "tokens_out": r.get("tokens_out") or 0, "llm_calls": r.get("llm_calls") or 0,
-                    "skill_version": r.get("skill_version"),
+                    "skill_version": r.get("skill_version"), "host": r.get("host"),
                     "events": evs, "pending": None, "last_event": time.time()})  # fresh approval clock after a restart
 
     for run in out:

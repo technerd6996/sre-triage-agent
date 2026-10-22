@@ -34,8 +34,9 @@ def autonomy_mode() -> str:
     return store.get_setting("autonomy_mode", "shadow")          # off | shadow | on
 
 
-def _critical() -> set[str]:
-    return {s.strip().lower() for s in os.getenv("CRITICAL_SERVICES", "").split(",") if s.strip()}
+def _never_auto() -> set[str]:
+    """Optional: services that must always go to a human. Empty by default."""
+    return {s.strip().lower() for s in os.getenv("NEVER_AUTO_SERVICES", "").split(",") if s.strip()}
 
 
 def autonomous_restore(actions, host: str = "") -> tuple[bool, str]:
@@ -45,13 +46,11 @@ def autonomous_restore(actions, host: str = "") -> tuple[bool, str]:
         return False, ""
     args = actions[0].get("args") or {}
     svc, target = str(args.get("service_name", "")).lower(), args.get("target", "")
-    if svc in _critical():
-        crit_why = "listed in CRITICAL_SERVICES"
-    else:
-        from app.tools import cmdb                            # lazy import avoids a circular import
-        is_crit, crit_why = cmdb.critical_by_cmdb(host, svc)
-        if not is_crit:
-            return False, ""
+    if svc in _never_auto():
+        return False, f"{svc} is in NEVER_AUTO_SERVICES, needs a human"
+    from app.ports import registry                            # lazy import avoids a circular import
+    _, crit_why = registry.get_context().is_critical(host, svc)   # context for the note only, not a gate
+    crit_why = crit_why or "stopped service, preflight and flap checks passed"
     now = time.time()
     recent = [t for t in _RESTORES.get(svc, []) if now - t < 3600]
     if len(recent) >= FLAP_LIMIT:
@@ -69,4 +68,4 @@ def autonomous_restore(actions, host: str = "") -> tuple[bool, str]:
     if mode == "shadow":
         return False, f"shadow mode: would have auto-restored {svc} on {target} ({crit_why})"
     _RESTORES[svc] = recent + [now]
-    return True, f"auto-restoring critical service {svc} on {target} ({crit_why})"
+    return True, f"auto-restoring {svc} on {target} ({crit_why})"

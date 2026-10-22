@@ -1,4 +1,601 @@
 ﻿
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\adapters\aws\hosts.py ===
+
+"""AWS EC2 Hosts adapter. Wraps app/tools/aws.py unchanged (boto3 stays lazy)."""
+from __future__ import annotations
+
+import importlib
+
+from app.ports.errors import AuthFailed, NotFound, PortError, Unavailable
+from app.ports.hosts import CAP_FIND_IN_TEXT, CAP_FRESH_LOOKUP
+from app.ports.manifest import Field, Manifest
+from app.ports.models import Host
+
+PROVIDER = "aws"
+
+MANIFEST = Manifest(
+    port="hosts",
+    provider=PROVIDER,
+    title="AWS EC2",
+    capabilities=frozenset({CAP_FIND_IN_TEXT, CAP_FRESH_LOOKUP}),
+    fields=(Field("region", "AWS region", required=True, live=False,
+                  help="Credentials come from the instance role or the standard AWS environment."),),
+)
+
+
+def to_host(inst: dict) -> Host:
+    return Host(id=inst["instance_id"], name=inst.get("name", ""), os=inst.get("platform", ""),
+                state=inst.get("state", ""), address=inst.get("public_ip", ""),
+                private_address=inst.get("private_ip", ""), provider=PROVIDER)
+
+
+def map_error(e: Exception) -> PortError:
+    if isinstance(e, PortError):
+        return e
+    resp = getattr(e, "response", None)
+    code = str(resp.get("Error", {}).get("Code", "")) if isinstance(resp, dict) else ""
+    name, msg = type(e).__name__, str(e)
+    if code.startswith("InvalidInstanceID") or isinstance(e, IndexError):
+        return NotFound(msg or "Instance not found")
+    if code in ("AuthFailure", "UnauthorizedOperation", "InvalidClientTokenId", "ExpiredToken") \
+            or name in ("NoCredentialsError", "PartialCredentialsError"):
+        return AuthFailed(msg)
+    if name in ("EndpointConnectionError", "ConnectTimeoutError", "ReadTimeoutError",
+                "ConnectionClosedError") or code in ("RequestLimitExceeded", "Throttling", "ServiceUnavailable"):
+        return Unavailable(msg)
+    return PortError(msg)
+
+
+class AwsHosts:
+    provider = PROVIDER
+    capabilities = MANIFEST.capabilities
+
+    @staticmethod
+    def _aws():
+        return importlib.import_module("app.tools.aws")
+
+    def _run(self, fn):
+        try:
+            return fn(self._aws())
+        except Exception as e:                      # noqa: BLE001
+            raise map_error(e) from e
+
+    def list_hosts(self, force: bool = False) -> list[Host]:
+        return [to_host(i) for i in self._run(lambda a: a.list_instances(force))]
+
+    def get_host(self, host_id: str) -> Host:
+        return to_host(self._run(lambda a: a.get_instance(host_id)))
+
+    def find_in_text(self, text: str) -> Host | None:
+        inst = self._run(lambda a: a.find_in_text(text))
+        return to_host(inst) if inst else None
+
+    def connect_address(self, host_id: str) -> str:
+        h = self.get_host(host_id)                  # fresh: a restarted instance has a new IP
+        label = h.name or h.id
+        if h.state != "running":
+            raise Unavailable(f"Instance {label} is {h.state}")
+        if not h.address:
+            raise Unavailable(f"Instance {label} has no public IP")
+        return h.address
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\adapters\aws\__init__.py ===
+
+from app.ports import registry
+from app.adapters.aws.hosts import MANIFEST, AwsHosts
+
+registry.register(MANIFEST, AwsHosts)
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\adapters\servicenow\client.py ===
+
+"""ServiceNow tools for the triage agent.
+
+Each function decorated with @tool is something the LangChain agent can call.
+The docstring is what the LLM reads to decide when to use it, so keep it short.
+"""
+import os
+import requests
+from langchain_core.tools import tool
+import time
+from datetime import datetime, timezone
+
+STATE_IN_PROGRESS = 2  # "WIP"
+STATE_RESOLVED = 6
+
+# Only return these fields so we don't waste tokens on the 80+ others
+FIELDS = "number,short_description,description,state,priority,caller_id,assignment_group,assigned_to,contact_type,work_notes"
+
+
+# ---- config (read at call time so load_dotenv() has already run) ----
+def _caller() -> str:
+    return os.getenv("SNOW_CALLER", "sre_triage_agent")
+
+
+def _group() -> str:
+    return os.getenv("SNOW_ASSIGNMENT_GROUP", "L1-SRE-Agent")
+
+
+def _assignee() -> str:
+    return os.getenv("SNOW_ASSIGNEE", "svc_triage_01")
+
+
+RETRY_METHODS = {"GET", "PATCH", "PUT"}  # POST (create) is never retried: it could duplicate a ticket
+
+
+def _request(method: str, path: str, identity: str = "agent", **kwargs):
+    """Single place that talks to SNOW. Retries transient failures on safe methods.
+    Raises with the response body on errors."""
+    base = os.environ["SNOW_INSTANCE"].strip().rstrip("/")
+    if not base.startswith("http"):
+        base = f"https://{base}.service-now.com" if "." not in base else f"https://{base}"
+    if identity == "checker":
+        auth = (os.environ["SNOW_CHECKER_USER"], os.environ["SNOW_CHECKER_PASSWORD"])
+    else:
+        auth = (os.environ["SNOW_USER"], os.environ["SNOW_PASSWORD"])
+    attempts = 3 if method.upper() in RETRY_METHODS else 1
+    resp = None
+    for i in range(attempts):
+        try:
+            resp = requests.request(
+                method,
+                f"{base}/api/now/table/{path}",
+                auth=auth,
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                timeout=(5, 20),
+                **kwargs,
+            )
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if i == attempts - 1:
+                raise RuntimeError(f"SNOW unreachable: {str(e)[:200]}")
+            time.sleep(2 ** i)
+            continue
+        if resp.status_code in (429, 502, 503, 504) and i < attempts - 1:
+            time.sleep(2 ** i)
+            continue
+        break
+    if not resp.ok:
+        raise RuntimeError(f"SNOW {resp.status_code} on {method} {path}: {resp.text[:500]}")
+    return resp.json()["result"]
+
+def _lookup_sys_id(table: str, query: str, label: str) -> str:
+    rows = _request(
+        "GET", table, params={"sysparm_query": query, "sysparm_limit": 1, "sysparm_fields": "sys_id"}
+    )
+    if not rows:
+        raise ValueError(f"{label} not found in SNOW")
+    return rows[0]["sys_id"]
+
+
+def _user_id(user: str) -> str:
+    """Caller can be a ServiceNow user_name or an email address."""
+    user = user.replace("^", "")
+    return _lookup_sys_id("sys_user", f"user_name={user}^ORemail={user}", f"User '{user}'")
+
+def _group_id(name: str) -> str:
+    return _lookup_sys_id("sys_user_group", f"name={name}", f"Group '{name}'")
+
+
+def _incident_id(number: str) -> str:
+    return _lookup_sys_id("incident", f"number={number}", f"Incident {number}")
+
+
+def _flatten(record: dict) -> dict:
+    """Reference fields come back as {'display_value':..., 'link':...}. Keep just the readable value."""
+    return {k: (v.get("display_value") if isinstance(v, dict) else v) for k, v in record.items()}
+
+
+def _fetch(number: str, identity: str = "agent") -> dict:
+    rows = _request(
+        "GET",
+        "incident",
+        identity=identity,
+        params={
+            "sysparm_query": f"number={number}",
+            "sysparm_limit": 1,
+            "sysparm_fields": FIELDS,
+            "sysparm_display_value": "true",
+        },
+    )
+    if not rows:
+        return {"error": f"Incident {number} not found"}
+    return _flatten(rows[0])
+
+
+# ---- tools the agent can call ----
+@tool
+def get_incident(number: str) -> dict:
+    """Fetch a ServiceNow incident by number (e.g. INC0010001). Returns its key fields."""
+    return _fetch(number)
+
+def search_users(text: str, limit: int = 8) -> list[dict]:
+    """Type-ahead for the Caller field: active users matching name, user name or email."""
+    text = text.replace("^", " ").strip()[:50]
+    rows = _request("GET", "sys_user", params={
+        "sysparm_query": f"active=true^nameLIKE{text}^ORuser_nameLIKE{text}^ORemailLIKE{text}",
+        "sysparm_limit": limit,
+        "sysparm_fields": "user_name,name,email",
+    })
+    return [{"user_name": r.get("user_name", ""), "name": r.get("name", ""), "email": r.get("email", "")}
+            for r in rows]
+
+
+def find_ci_id(name: str) -> str | None:
+    """sys_id of the CMDB configuration item with this name, or None if there is none."""
+    try:
+        rows = _request("GET", "cmdb_ci", params={
+            "sysparm_query": f"name={name.replace('^', ' ')}", "sysparm_limit": 1, "sysparm_fields": "sys_id"})
+        return rows[0]["sys_id"] if rows else None
+    except Exception:
+        return None
+
+
+@tool
+def create_incident(short_description: str, description: str, urgency: int = 3, impact: int = 3,
+                    caller: str = "", ci: str = "") -> dict:
+    """Create a ServiceNow incident, assign it to the triage agent in the L1 group, and move it to
+    In Progress. urgency and impact: 1=high, 2=medium, 3=low. caller is a ServiceNow user_name
+    (defaults to the integration user). ci is the configuration item (server) name.
+    Returns the incident as it now stands."""
+    body = {
+        "short_description": short_description,
+        "description": description,
+        "urgency": str(urgency),
+        "impact": str(impact),
+        "contact_type": os.getenv("SNOW_CHANNEL", "virtual_agent"),
+        "caller_id": _user_id(caller or _caller()),
+        "assignment_group": _group_id(_group()),
+        "assigned_to": _user_id(_assignee()),
+    }
+    if ci:
+        ci_id = find_ci_id(ci)
+        if ci_id:
+            body["cmdb_ci"] = ci_id
+    created = _request("POST", "incident", json=body)
+    # Assignment is done. Now move to WIP as a separate step.
+    _request(
+        "PATCH",
+        f"incident/{created['sys_id']}",
+        json={"state": str(STATE_IN_PROGRESS), "work_notes": "Assigned to triage agent. Work started."},
+    )
+    return _fetch(created["number"])
+
+CLAIM_NOTE = ("TRIAGE-1 picked up this ticket and has started automated triage.\n\n"
+              "What happens next: it chooses a playbook, runs read-only diagnostics, and asks a human to "
+              "approve any change that carries risk. A full report is added to this ticket when it finishes.")
+
+
+@tool
+def claim_incident(number: str, work_note: str = CLAIM_NOTE) -> dict:
+    """Take ownership of an existing incident: assign it to the triage agent and move it to In Progress.
+    Use this first when a ticket arrives in the L1 queue."""
+    sys_id = _incident_id(number)
+    _request("PATCH", f"incident/{sys_id}", json={"assigned_to": _user_id(_assignee())})
+    _request(
+        "PATCH",
+        f"incident/{sys_id}",
+        json={"state": str(STATE_IN_PROGRESS), "work_notes": work_note},
+    )
+    return _fetch(number)
+
+
+@tool
+def resolve_incident(number: str, close_notes: str) -> dict:
+    """Resolve an incident. close_notes must describe what was fixed. Only call after the underlying issue is fixed."""
+    sys_id = _incident_id(number)
+    close_code = os.getenv("SNOW_CLOSE_CODE", "Solution provided")
+
+    # Save the resolution fields first, then change the state.
+    saved = _request(
+        "PATCH",
+        f"incident/{sys_id}",
+        params={"sysparm_fields": "close_code"},
+        json={"close_code": close_code, "close_notes": close_notes},
+    )
+    # SNOW silently ignores invalid choice values, so check the write really stuck.
+    if not saved.get("close_code"):
+        raise RuntimeError(
+            f"SNOW did not accept close_code '{close_code}'. "
+            "Use a value from the Resolution code dropdown and set SNOW_CLOSE_CODE."
+        )
+
+    _request("PATCH", f"incident/{sys_id}", json={"state": str(STATE_RESOLVED)})
+    return _fetch(number)
+
+@tool
+def add_work_note(number: str, note: str) -> dict:
+    """Add a work note to an incident. Use it to record checks done, findings, and actions taken."""
+    _request("PATCH", f"incident/{_incident_id(number)}", json={"work_notes": note})
+    return {"number": number, "note_added": True}
+
+@tool
+def escalate_incident(number: str, reason: str) -> dict:
+    """Hand an incident to the human L2 team when it is beyond L1, could not be fixed, or needs approval.
+    Unassigns the agent and records the reason. The L2 team is fixed by configuration: do not pass a group."""
+    group = os.getenv("SNOW_ESCALATION_GROUP", "")
+    if not group:
+        raise RuntimeError("SNOW_ESCALATION_GROUP is not set in .env")
+    _request(
+        "PATCH",
+        f"incident/{_incident_id(number)}",
+        json={
+            "assignment_group": _group_id(group),
+            "assigned_to": "",
+            "work_notes": f"Escalated by triage agent. Reason: {reason}",
+        },
+    )
+    return _fetch(number)
+
+def list_queue() -> list:
+    """Ticket numbers waiting in the L1 queue: New, unassigned, oldest first."""
+    rows = _request(
+        "GET",
+        "incident",
+        params={
+            "sysparm_query": f"active=true^state=1^assigned_toISEMPTY"
+                             f"^assignment_group.name={_group()}^ORDERBYpriority^ORDERBYsys_created_on",
+            "sysparm_fields": "number",
+            "sysparm_limit": 10,
+        },
+    )
+    return [r["number"] for r in rows]
+
+# Used only when ServiceNow has no SLA records on the ticket. (response_min, resolution_min) by priority.
+# These numbers are placeholders. Replace them with your real SLAs.
+SLA_FALLBACK = {"1": (15, 240), "2": (30, 480), "3": (120, 1440), "4": (240, 4320)}
+
+
+def _human(minutes: float) -> str:
+    m = max(int(round(minutes)), 1)
+    if m < 60:
+        return f"{m} minute{'s' if m != 1 else ''}"
+    h, rem = divmod(m, 60)
+    if h < 24:
+        return f"{h} hour{'s' if h != 1 else ''}" + (f" {rem} minutes" if rem else "")
+    d, h = divmod(h, 24)
+    return f"{d} day{'s' if d != 1 else ''}" + (f" {h} hours" if h else "")
+
+
+def get_sla(number: str) -> dict:
+    """Response and resolution targets as readable text. Reads the ticket's task_sla records
+    (SLA names containing 'response' / 'resolution'); falls back to SLA_FALLBACK by priority."""
+    out = {"response": None, "resolution": None, "source": "servicenow"}
+    try:
+        rows = _request("GET", "task_sla", params={
+            "sysparm_query": f"task={_incident_id(number)}",
+            "sysparm_fields": "sla.name,planned_end_time",
+            "sysparm_limit": 10,
+        })
+        now = datetime.now(timezone.utc)
+        for r in rows:
+            name = str(r.get("sla.name", "")).lower()
+            end = r.get("planned_end_time")
+            if not end:
+                continue
+            due = datetime.strptime(end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            if due <= now:
+                continue
+            text = _human((due - now).total_seconds() / 60)
+            if "response" in name and not out["response"]:
+                out["response"] = text
+            elif "resolution" in name and not out["resolution"]:
+                out["resolution"] = text
+    except Exception:
+        pass
+    if not (out["response"] and out["resolution"]):
+        try:
+            prio = (_fetch(number).get("priority") or "3")[:1]
+        except Exception:
+            prio = "3"
+        resp_m, reso_m = SLA_FALLBACK.get(prio, SLA_FALLBACK["3"])
+        out["response"] = out["response"] or _human(resp_m)
+        out["resolution"] = out["resolution"] or _human(reso_m)
+        out["source"] = "fallback"
+    return out
+
+# The agent will import this list in Phase 3
+SNOW_TOOLS = [get_incident, create_incident, claim_incident, add_work_note, escalate_incident, resolve_incident]
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\adapters\servicenow\context.py ===
+
+"""ServiceNow CMDB Context adapter. Wraps app/tools/cmdb.py unchanged."""
+from __future__ import annotations
+
+import importlib
+
+from app.ports.manifest import Field, Manifest
+
+PROVIDER = "servicenow"
+
+MANIFEST = Manifest(
+    port="context",
+    provider=PROVIDER,
+    title="ServiceNow CMDB",
+    capabilities=frozenset({"parents", "criticality", "owner", "health_url"}),
+    fields=(
+        Field("criticality_fields", "Criticality fields (in order)",
+              default="business_criticality,busines_criticality,criticality"),
+        Field("url_fields", "Health-check URL fields (in order)", default="u_health_check_url,url"),
+        Field("walk_depth", "Relationship levels to walk", kind="number", default="3"),
+    ),
+)
+
+
+class ServiceNowContext:
+    provider = PROVIDER
+    capabilities = MANIFEST.capabilities
+
+    @staticmethod
+    def _cmdb():
+        return importlib.import_module("app.tools.cmdb")
+
+    def service_context(self, host: str, service: str = "") -> dict:
+        return self._cmdb().service_context(host, service)     # never raises; found=False + error text
+
+    def is_critical(self, host: str, service: str) -> tuple[bool, str]:
+        try:
+            return self._cmdb().critical_by_cmdb(host, service)
+        except Exception:                                      # noqa: BLE001
+            return False, ""
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\adapters\servicenow\ticketing.py ===
+
+"""ServiceNow Ticketing adapter. Wraps the existing app/tools/snow.py with no behaviour
+change: every call goes through the same functions the agent uses today.
+snow.py is imported lazily so this module loads without langchain installed."""
+from __future__ import annotations
+
+import re
+
+from app.ports.errors import AuthFailed, NotFound, PortError, Unavailable, Unsupported
+from app.ports.manifest import Field, Manifest
+from app.ports.models import Ticket, TicketState
+from app.ports.ticketing import CAP_CALLER_SEARCH, CAP_CREATE, CAP_REVIEW, CAP_SLA, CAP_WORK_NOTES
+
+PROVIDER = "servicenow"
+capabilities=frozenset({CAP_WORK_NOTES, CAP_CREATE, CAP_CALLER_SEARCH, CAP_SLA, CAP_REVIEW}),
+
+REVIEWER_ACTOR = "triage-checker"
+_CODE = {"in_progress": "2", "closed": "7", "canceled": "8"}
+
+MANIFEST = Manifest(
+    port="ticketing",
+    provider=PROVIDER,
+    title="ServiceNow",
+    capabilities=frozenset({CAP_WORK_NOTES, CAP_CREATE, CAP_CALLER_SEARCH, CAP_SLA}),
+    fields=(
+        Field("instance", "Instance (name or URL)", required=True, live=False),
+        Field("user", "Integration user", required=True),
+        Field("password", "Integration password", kind="secret", required=True),
+        Field("checker_user", "Checker user"),
+        Field("checker_password", "Checker password", kind="secret"),
+        Field("caller", "Default caller", default="sre_triage_agent"),
+        Field("assignment_group", "L1 assignment group", default="L1-SRE-Agent"),
+        Field("assignee", "Agent assignee", default="svc_triage_01"),
+        Field("escalation_group", "L2 escalation group", required=True),
+        Field("close_code", "Resolution code", default="Solution provided"),
+        Field("channel", "Contact type", default="virtual_agent"),
+    ),
+)
+
+# ServiceNow state labels (display_value) and numeric codes -> normalized state
+_STATE = {
+    "new": TicketState.NEW, "1": TicketState.NEW,
+    "in progress": TicketState.IN_PROGRESS, "2": TicketState.IN_PROGRESS,
+    "on hold": TicketState.ON_HOLD, "3": TicketState.ON_HOLD,
+    "resolved": TicketState.RESOLVED, "6": TicketState.RESOLVED,
+    "closed": TicketState.CLOSED, "7": TicketState.CLOSED,
+    "canceled": TicketState.CLOSED, "cancelled": TicketState.CLOSED, "8": TicketState.CLOSED,
+}
+_CORE = {"number", "short_description", "description", "state", "priority", "caller_id",
+         "assignment_group", "assigned_to", "work_notes", "cmdb_ci"}
+
+
+def to_ticket(rec: dict) -> Ticket:
+    raw_state = str(rec.get("state", "")).strip()
+    state = _STATE.get(raw_state.lower(), TicketState.UNKNOWN)
+    extras = {k: v for k, v in rec.items() if k not in _CORE}
+    if state is TicketState.UNKNOWN:
+        extras["raw_state"] = raw_state
+    return Ticket(
+        id=str(rec.get("number", "")),
+        title=rec.get("short_description") or "",
+        description=rec.get("description") or "",
+        state=state,
+        priority=str(rec.get("priority") or ""),
+        group=rec.get("assignment_group") or "",
+        assignee=rec.get("assigned_to") or "",
+        caller=rec.get("caller_id") or "",
+        host=rec.get("cmdb_ci") or "",
+        work_notes=rec.get("work_notes") or "",
+        provider=PROVIDER,
+        extras=extras,
+    )
+
+
+def map_error(e: Exception) -> PortError:
+    """Translate snow.py failures into the uniform port errors."""
+    if isinstance(e, PortError):
+        return e
+    msg = str(e)
+    low = msg.lower()
+    if "snow unreachable" in low or re.search(r"snow (429|5\d\d) ", low):
+        return Unavailable(msg)
+    if re.search(r"snow (401|403) ", low):
+        return AuthFailed(msg)
+    if "not found" in low:
+        return NotFound(msg)
+    if "is not set" in low or "did not accept close_code" in low:
+        return Unsupported(msg)
+    if isinstance(e, KeyError) and e.args and str(e.args[0]).startswith("SNOW_"):
+        return Unsupported(f"ServiceNow is not configured: {e.args[0]} is missing")
+    return PortError(msg)
+
+
+class ServiceNowTicketing:
+    provider = PROVIDER
+    capabilities = MANIFEST.capabilities
+
+    @staticmethod
+    def _snow():
+        import importlib
+        return importlib.import_module("app.adapters.servicenow.client")
+
+    def _run(self, fn):
+        try:
+            return fn(self._snow())
+        except Exception as e:                      # noqa: BLE001
+            raise map_error(e) from e
+
+    def list_queue(self) -> list[str]:
+        return self._run(lambda s: s.list_queue())
+
+    def get(self, ticket_id: str) -> Ticket:
+        rec = self._run(lambda s: s._fetch(ticket_id))
+        if "error" in rec:
+            raise NotFound(rec["error"])
+        return to_ticket(rec)
+
+    def claim(self, ticket_id: str, note: str | None = None) -> Ticket:
+        args = {"number": ticket_id}
+        if note:
+            args["work_note"] = note
+        return to_ticket(self._run(lambda s: s.claim_incident.invoke(args)))
+
+    def add_note(self, ticket_id: str, note: str) -> None:
+        self._run(lambda s: s.add_work_note.invoke({"number": ticket_id, "note": note}))
+
+    def resolve(self, ticket_id: str, close_notes: str) -> Ticket:
+        return to_ticket(self._run(
+            lambda s: s.resolve_incident.invoke({"number": ticket_id, "close_notes": close_notes})))
+
+    def escalate(self, ticket_id: str, reason: str) -> Ticket:
+        return to_ticket(self._run(
+            lambda s: s.escalate_incident.invoke({"number": ticket_id, "reason": reason})))
+
+    def create(self, title: str, description: str, urgency: int = 3, impact: int = 3,
+               caller: str = "", host: str = "") -> Ticket:
+        args = {"short_description": title, "description": description, "urgency": urgency,
+                "impact": impact, "caller": caller, "ci": host}
+        return to_ticket(self._run(lambda s: s.create_incident.invoke(args)))
+
+    def search_callers(self, text: str, limit: int = 8) -> list[dict]:
+        return self._run(lambda s: s.search_users(text, limit))
+
+    def get_sla(self, ticket_id: str) -> dict:
+        return self._run(lambda s: s.get_sla(ticket_id))
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\adapters\servicenow\__init__.py ===
+
+from app.ports import registry
+from app.adapters.servicenow.ticketing import MANIFEST, ServiceNowTicketing
+from app.adapters.servicenow.context import MANIFEST as CONTEXT_MANIFEST, ServiceNowContext
+
+registry.register(MANIFEST, ServiceNowTicketing)
+registry.register(CONTEXT_MANIFEST, ServiceNowContext)
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\adapters\__init__.py ===
+
+
 === FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\agent\agent.py ===
 
 """TRIAGE-1 agent: one LangChain agent, the Colab model via ColabChat, SNOW + infra tools,
@@ -26,7 +623,8 @@ from app.tools.infra import INFRA_TOOLS
 from app.tools.snow import SNOW_TOOLS, get_incident
 from app.tools.aws_tools import AWS_TOOLS
 from app.agent.hosts import resolve_server, resolve_default_windows
-from app.tools import aws
+from app.tools import active
+active.STRICT = True  # agent runs never fall back to the static hosts in .env
 
 load_dotenv()
 
@@ -40,8 +638,6 @@ CHECKPOINTER = SqliteSaver(_checkpointer_conn)
 CHECKPOINTER.setup()
 
 THREAD_TOOLS = {}               # thread_id -> tuple of allowed tool names
-
-aws.STRICT = True  # agent runs never fall back to the static hosts in .env
 
 BASE_PROMPT = """You are TRIAGE-1, an L1 SRE agent that works ServiceNow incidents using tools.
 RULES:
@@ -181,8 +777,11 @@ def start(ticket_number: str, thread_id: str = ""):
     tool_tuple = tuple(sorted(allowed_tools))
     THREAD_TOOLS[thread_id] = tool_tuple
 
+    host_ref = ({"provider": inst["provider"], "id": inst["instance_id"],
+                 "os": inst["platform"], "name": inst["name"]} if inst else None)
     yield {"type": "start", "thread_id": thread_id, "ticket": ticket_number,
-           "skill": skill, "skill_version": skill_version, "server": label, "tools": list(tool_tuple)}
+           "skill": skill, "skill_version": skill_version, "server": label, "host": host_ref,
+           "tools": list(tool_tuple)}
     msg = (f"Work incident {ticket_number}.\nShort description: {short}\nDescription: {desc}\n"
            f"{server}\n\nPLAYBOOK:\n{playbook}")
     yield from _run_guarded(get_agent(tool_tuple), {"messages": [{"role": "user", "content": msg}]},
@@ -200,30 +799,36 @@ def resume(thread_id: str, approve: bool, feedback: str = ""):
 === FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\agent\hosts.py ===
 
 """Decides which server a ticket is about. The code decides, never the model."""
-from app.tools import aws
+from app.ports import registry
+from app.tools import active
+
+
+def _legacy(h) -> dict:
+    """Same dict shape the agent used with the AWS code, so callers need no change yet."""
+    return {"instance_id": h.id, "name": h.name, "platform": h.os, "state": h.state,
+            "public_ip": h.address, "private_ip": h.private_address, "provider": h.provider}
 
 
 def resolve_server(ticket_text: str):
-    """Returns (instance, reason). Also sets the active server so the infra tools use its IP."""
-    aws.ACTIVE.clear()  # never carry a previous ticket's server over
+    """Returns (instance, reason). Also sets the active server so the infra tools use its address."""
+    active.bind({})  # never carry a previous ticket's server over
     try:
-        inst = aws.find_in_text(ticket_text)
+        host = registry.get_hosts().find_in_text(ticket_text)
     except Exception as e:
-        return None, f"AWS lookup failed: {str(e)[:150]}."
-    if not inst:
+        return None, f"Host lookup failed: {str(e)[:150]}."
+    if not host:
         return None, "No known instance is named in the ticket."
-    aws.ACTIVE[inst["platform"]] = inst["instance_id"]
-    return inst, ""
+    active.bind({host.os: host.id})
+    return _legacy(host), ""
 
 
 def resolve_default_windows():
     """Fallback for AD user tickets that do not name a specific server: pick the running Windows instance."""
     try:
-        win = [i for i in aws.list_instances() if i["platform"] == "windows" and i["state"] == "running"]
+        win = [h for h in registry.get_hosts().list_hosts() if h.os == "windows" and h.state == "running"]
         if len(win) == 1:
-            inst = win[0]
-            aws.ACTIVE["windows"] = inst["instance_id"]
-            return inst
+            active.bind({**active.snapshot(), "windows": win[0].id})
+            return _legacy(win[0])
     except Exception:
         pass
     return None
@@ -266,8 +871,9 @@ def autonomy_mode() -> str:
     return store.get_setting("autonomy_mode", "shadow")          # off | shadow | on
 
 
-def _critical() -> set[str]:
-    return {s.strip().lower() for s in os.getenv("CRITICAL_SERVICES", "").split(",") if s.strip()}
+def _never_auto() -> set[str]:
+    """Optional: services that must always go to a human. Empty by default."""
+    return {s.strip().lower() for s in os.getenv("NEVER_AUTO_SERVICES", "").split(",") if s.strip()}
 
 
 def autonomous_restore(actions, host: str = "") -> tuple[bool, str]:
@@ -277,13 +883,11 @@ def autonomous_restore(actions, host: str = "") -> tuple[bool, str]:
         return False, ""
     args = actions[0].get("args") or {}
     svc, target = str(args.get("service_name", "")).lower(), args.get("target", "")
-    if svc in _critical():
-        crit_why = "listed in CRITICAL_SERVICES"
-    else:
-        from app.tools import cmdb                            # lazy import avoids a circular import
-        is_crit, crit_why = cmdb.critical_by_cmdb(host, svc)
-        if not is_crit:
-            return False, ""
+    if svc in _never_auto():
+        return False, f"{svc} is in NEVER_AUTO_SERVICES, needs a human"
+    from app.ports import registry                            # lazy import avoids a circular import
+    _, crit_why = registry.get_context().is_critical(host, svc)   # context for the note only, not a gate
+    crit_why = crit_why or "stopped service, preflight and flap checks passed"
     now = time.time()
     recent = [t for t in _RESTORES.get(svc, []) if now - t < 3600]
     if len(recent) >= FLAP_LIMIT:
@@ -301,7 +905,7 @@ def autonomous_restore(actions, host: str = "") -> tuple[bool, str]:
     if mode == "shadow":
         return False, f"shadow mode: would have auto-restored {svc} on {target} ({crit_why})"
     _RESTORES[svc] = recent + [now]
-    return True, f"auto-restoring critical service {svc} on {target} ({crit_why})"
+    return True, f"auto-restoring {svc} on {target} ({crit_why})"
 
 === FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\agent\prompts.py ===
 
@@ -973,7 +1577,7 @@ def _validate(meta: dict, body: str) -> str:
 
 
 def _load_kb() -> dict:
-    from app.tools.snow import _request          # lazy: avoids a circular import
+    from app.adapters.servicenow.client import _request   # lazy: avoids a circular import
     kb = os.getenv("SKILLS_KB_NAME", "TRIAGE-1 Playbooks").replace("^", "")
     rows = _request("GET", "kb_knowledge", params={
         "sysparm_query": f"kb_knowledge_base.title={kb}^workflow_state=published^active=true",
@@ -1535,6 +2139,7 @@ from app.agent.policy import RISK
 from app.agent.report import build_report, describe, outcome_code, _fmt_call
 from app.tools.snow import add_work_note, get_incident, list_queue
 from app import escalation, checker
+from app.tools import active
 
 log = logging.getLogger("uvicorn.error")
 router = APIRouter(prefix="/api/agent")
@@ -1620,8 +2225,8 @@ def _post_service_context(run: dict, actions) -> None:
     host = str(run.get("server") or "").split(" (")[0]
     run["service_context"] = {}                      # set first, so a failure is not retried in a loop
     try:
-        from app.tools import cmdb
-        ctx = cmdb.service_context(host, svc)
+        from app.ports import registry
+        ctx = registry.get_context().service_context(host, svc)
         run["service_context"] = ctx
         if ctx.get("found"):
             add_work_note.invoke({"number": run["ticket"], "note": ctx["summary"]})
@@ -1637,12 +2242,13 @@ def _consume(run: dict, events, kind: str = "triage"):
     run["pending"] = None
     store.save_run(run)
     usage.bind_run(run["id"], kind)        # model calls made while this runs are counted against this run
+    active.bind_run(run)                   # a resumed run gets its stored server back; a new run binds in resolve_server
     auto_resume = False
     try:
         for ev in events:
             if ev["type"] == "start":
                 run.update(thread_id=ev["thread_id"], skill=ev["skill"], server=ev["server"],
-                           skill_version=ev.get("skill_version"))
+                           skill_version=ev.get("skill_version"), host=ev.get("host"))
             _add_event(run, ev)
             if ev["type"] == "approval_required":
                 _post_service_context(run, ev["actions"])
@@ -2261,7 +2867,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from app import store
-from app.tools import aws
+from app.ports import registry
 from app.tools.snow import _request
 
 router = APIRouter(prefix="/api")
@@ -2290,7 +2896,7 @@ def _snow():
 
 
 def _aws():
-    return f"{len(aws.list_instances(force=True))} instances visible"
+    return f"{len(registry.get_hosts().list_hosts(force=True))} hosts visible"
 
 
 def _db():
@@ -2318,7 +2924,7 @@ from pydantic import BaseModel, Field
 
 from app import jobs
 from app.api.agent import RUNS, _active, _actor, start_run
-from app.tools import aws
+from app.ports import registry
 from app.tools.snow import add_work_note, create_incident, search_users, get_sla
 
 router = APIRouter(prefix="/api")
@@ -2393,8 +2999,8 @@ def clean_transcript(turns):
 def servers(q: str = ""):
     """Type-ahead: instance names containing the text. Instances without a Name tag are not offered."""
     q = q.strip().lower()[:50]
-    rows = [{"name": i["name"], "platform": i["platform"], "state": i["state"]}
-            for i in aws.list_instances() if i["name"] and q in i["name"].lower()]
+    rows = [{"name": h.name, "platform": h.os, "state": h.state}
+            for h in registry.get_hosts().list_hosts() if h.name and q in h.name.lower()]
     return rows[:8]
 
 
@@ -2421,7 +3027,7 @@ def issue_sla(number: str):
 def report_issue(req: IssueRequest, request: Request):
     if len(jobs.queued()) >= QUEUE_MAX:
         raise HTTPException(503, "TRIAGE-1 has a long queue right now. Please try again in a few minutes.")
-    inst = next((i for i in aws.list_instances(force=True) if i["name"] == req.server), None)
+    inst = next((h for h in registry.get_hosts().list_hosts(force=True) if h.name == req.server), None)
     if not inst:
         raise HTTPException(422, "Pick a configuration item (server) from the list.")
 
@@ -2918,8 +3524,331 @@ def log_call(kind: str, run_id, tokens_in: int, tokens_out: int, seconds: float,
 === FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\llm\__init__.py ===
 
 
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\ports\context.py ===
+
+"""Context port: which business services depend on a host, and how critical they are (today: CMDB)."""
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class ContextPort(Protocol):
+    provider: str
+    capabilities: frozenset
+
+    def service_context(self, host: str, service: str = "") -> dict: ...   # never raises
+    def is_critical(self, host: str, service: str) -> tuple[bool, str]: ...
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\ports\errors.py ===
+
+"""Uniform errors for every port. The agent maps any of them to:
+add a work note, then escalate."""
+
+
+class PortError(RuntimeError):
+    """Base class. Anything an adapter cannot classify is wrapped in this."""
+
+class NotFound(PortError):
+    pass
+
+class AuthFailed(PortError):
+    pass
+
+
+class Unavailable(PortError):
+    pass
+
+
+class Unsupported(PortError):
+    """The adapter lacks this capability, or it is not configured."""
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\ports\hosts.py ===
+
+"""Hosts port: which servers exist and how to reach them (today: AWS EC2)."""
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+from app.ports.models import Host
+
+CAP_FIND_IN_TEXT = "find_in_text"
+CAP_FRESH_LOOKUP = "fresh_lookup"      # get_host bypasses caches (addresses change on restart)
+
+
+@runtime_checkable
+class HostsPort(Protocol):
+    provider: str
+    capabilities: frozenset
+
+    def list_hosts(self, force: bool = False) -> list[Host]: ...
+    def get_host(self, host_id: str) -> Host: ...
+    def find_in_text(self, text: str) -> Host | None: ...       # exactly one match, else None
+    def connect_address(self, host_id: str) -> str: ...         # raises Unavailable if not reachable
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\ports\manifest.py ===
+
+"""An adapter ships a Manifest. The Configuration pane renders its form from it,
+so a new adapter needs no UI work."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Field:
+    key: str
+    label: str
+    kind: str = "text"            # text | secret | number | bool | select
+    required: bool = False
+    default: str | None = None
+    help: str = ""
+    options: tuple = ()
+    live: bool = True             # False = needs a restart to apply
+
+
+@dataclass(frozen=True)
+class Manifest:
+    port: str                     # "ticketing", "inventory", ...
+    provider: str                 # "servicenow", ...
+    title: str
+    fields: tuple = ()
+    capabilities: frozenset = frozenset()
+
+    @property
+    def secret_keys(self) -> list:
+        return [f.key for f in self.fields if f.kind == "secret"]
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\ports\models.py ===
+
+"""Vendor-neutral data shapes shared by the core and all adapters."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class TicketState(str, Enum):
+    NEW = "new"
+    IN_PROGRESS = "in_progress"
+    ON_HOLD = "on_hold"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
+    UNKNOWN = "unknown"      # adapter could not map it; raw value is in extras["raw_state"]
+
+
+@dataclass(frozen=True)
+class TicketRef:
+    """What runs and audit rows store instead of a bare incident number."""
+    provider: str
+    external_id: str
+
+    def __str__(self) -> str:
+        return f"{self.provider}:{self.external_id}"
+
+    @classmethod
+    def parse(cls, text: str, default_provider: str = "servicenow") -> "TicketRef":
+        # Old rows hold a bare number such as INC0010001; treat those as the default provider.
+        if ":" in text:
+            provider, ext = text.split(":", 1)
+            return cls(provider, ext)
+        return cls(default_provider, text)
+
+
+@dataclass
+class Ticket:
+    id: str
+    title: str = ""
+    description: str = ""
+    state: TicketState = TicketState.UNKNOWN
+    priority: str = ""
+    group: str = ""
+    assignee: str = ""
+    caller: str = ""
+    host: str = ""
+    work_notes: str = ""
+    provider: str = ""
+    extras: dict = field(default_factory=dict)   # vendor fields pass through here
+    raw: dict = field(default_factory=dict, repr=False)   # vendor record, for legacy callers
+    
+    @property
+    def ref(self) -> TicketRef:
+        return TicketRef(self.provider, self.id)
+
+
+@dataclass
+class Host:
+    id: str
+    name: str = ""
+    os: str = ""                # "windows" | "linux"
+    state: str = ""             # "running", "stopped", ...
+    address: str = ""           # what to connect to (public IP today)
+    private_address: str = ""
+    provider: str = ""
+    extras: dict = field(default_factory=dict)
+
+
+@dataclass
+class CredentialLease:
+    username: str
+    secret: str = ""            # password; never log or show to the model
+    private_key: str = ""
+    protocol: str = ""
+    port: int = 0
+    expires_at: float = 0.0
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\ports\registry.py ===
+
+"""Adapter registry. Adapters are discovered from app/adapters/* at startup."""
+from __future__ import annotations
+
+import importlib
+import os
+import pkgutil
+from typing import Callable
+
+from app.ports.errors import Unsupported
+from app.ports.manifest import Manifest
+
+_ADAPTERS: dict[tuple[str, str], tuple[Manifest, Callable]] = {}
+_DISCOVERED = False
+
+
+def register(manifest: Manifest, factory: Callable) -> None:
+    _ADAPTERS[(manifest.port, manifest.provider)] = (manifest, factory)
+
+
+def discover() -> None:
+    """Import every package under app/adapters so each can call register()."""
+    global _DISCOVERED
+    if _DISCOVERED:
+        return
+    import app.adapters as pkg
+    for m in pkgutil.iter_modules(pkg.__path__):
+        importlib.import_module(f"app.adapters.{m.name}")
+    _DISCOVERED = True
+
+
+def available(port: str) -> list[Manifest]:
+    discover()
+    return [m for (p, _), (m, _) in _ADAPTERS.items() if p == port]
+
+
+def get(port: str, provider: str, **kw):
+    discover()
+    try:
+        factory = _ADAPTERS[(port, provider)][1]
+    except KeyError:
+        raise Unsupported(f"No '{provider}' adapter installed for port '{port}'")
+    return factory(**kw)
+
+
+# Until the config layer exists (P1) the active provider comes from the environment.
+def active_provider(port: str, default: str) -> str:
+    return os.getenv(f"{port.upper()}_PROVIDER", default)
+
+
+def get_ticketing(role: str = "agent"):
+    """role="reviewer" returns an adapter that acts as the independent checker identity."""
+    return get("ticketing", active_provider("ticketing", "servicenow"), role=role)
+
+def get_active(port: str, default: str, **kw):
+    return get(port, active_provider(port, default), **kw)
+
+
+def get_hosts():
+    return get_active("hosts", "aws")
+
+
+def get_context():
+    return get_active("context", "servicenow")
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\ports\ticketing.py ===
+
+"""Ticketing port: only operations the agent already uses today."""
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+from app.ports.models import Ticket
+
+CAP_WORK_NOTES = "work_notes"          # if absent, adapters fall back to comments
+CAP_CREATE = "create"
+CAP_CALLER_SEARCH = "caller_search"
+CAP_SLA = "sla"
+CAP_REVIEW = "review" 
+
+
+@runtime_checkable
+class TicketingPort(Protocol):
+    provider: str
+    capabilities: frozenset
+    role: str  
+
+    def list_queue(self) -> list[str]: ...
+    def get(self, ticket_id: str) -> Ticket: ...
+    def claim(self, ticket_id: str, note: str | None = None) -> Ticket: ...
+    def add_note(self, ticket_id: str, note: str) -> None: ...
+    def resolve(self, ticket_id: str, close_notes: str) -> Ticket: ...
+    def escalate(self, ticket_id: str, reason: str) -> Ticket: ...
+    def create(self, title: str, description: str, urgency: int = 3, impact: int = 3,
+               caller: str = "", host: str = "") -> Ticket: ...
+    def search_callers(self, text: str, limit: int = 8) -> list[dict]: ...
+    def get_sla(self, ticket_id: str) -> dict: ...
+    def ping(self) -> None: ...                                  # raises if the system is unreachable
+    def open_tickets(self, caller: str, host: str = "", ticket_id: str = "",
+                     limit: int = 3) -> list[Ticket]: ...
+    def cancel(self, ticket_id: str, note: str) -> None: ...
+    def set_severity(self, ticket_id: str, urgency: int, impact: int, note: str) -> None: ...
+    def close(self, ticket_id: str, note: str) -> None: ...      # reviewer: Resolved -> Closed
+    def reopen(self, ticket_id: str, note: str, group: str = "") -> None: ...   # reviewer
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\ports\__init__.py ===
+
+
 === FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\rag\__init__.py ===
 
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\tools\active.py ===
+
+"""The server the current ticket is about. Same behaviour as the old aws.ACTIVE / aws.STRICT,
+but vendor-neutral: the address comes from whichever Hosts adapter is active."""
+from app.ports import registry
+
+import contextvars
+
+# "windows" / "linux" -> host id, for the run the current thread is working. A ContextVar, so each
+# run thread (and the LangGraph tool workers it starts, which copy its context) sees only its own server.
+_HOSTS: contextvars.ContextVar = contextvars.ContextVar("run_hosts", default=None)
+STRICT = False         # the agent sets this True: no fallback to the static hosts in .env
+
+
+def bind(hosts: dict | None) -> None:
+    """Set the servers for the run this thread is working. Replaces any earlier binding."""
+    _HOSTS.set(dict(hosts or {}))
+
+
+def bind_run(run: dict) -> None:
+    """Bind from a stored run's `host`. Used on resume, including after a restart."""
+    h = run.get("host") or {}
+    bind({h["os"]: h["id"]} if h.get("os") and h.get("id") else {})
+
+
+def host_id(target: str):
+    return (_HOSTS.get() or {}).get(target)
+
+
+def snapshot() -> dict:
+    return dict(_HOSTS.get() or {})
+
+
+def current_address(target: str):
+    """Address of the active host for this platform, or None if no host was resolved.
+    Raises Unavailable (a RuntimeError) if the host is stopped or has no address."""
+    hid = host_id(target)
+    if not hid:
+        return None
+    return registry.get_hosts().connect_address(hid)
 
 === FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\tools\aws.py ===
 
@@ -3012,11 +3941,11 @@ import json
 import boto3
 from langchain_core.tools import tool
 
-from app.tools import aws
+from app.tools import aws, active
 
 
 def _iid(target: str) -> str:
-    iid = aws.ACTIVE.get(target)
+    iid = active.host_id(target)
     if not iid:
         raise RuntimeError("No server was identified for this ticket.")
     return iid
@@ -3091,7 +4020,7 @@ def escalate_l3(number: str, reason: str) -> dict:
         lam = boto3.client("lambda", region_name=os.getenv("AWS_REGION"))
         r = lam.invoke(
             FunctionName=os.getenv("L3_LAMBDA", "triage1-l3-notify"),
-            Payload=json.dumps({"ticket": number, "reason": reason, "server": dict(aws.ACTIVE)}).encode(),
+            Payload=json.dumps({"ticket": number, "reason": reason, "server": active.snapshot()}).encode(),
         )
         if r.get("FunctionError"):
             return {"error": r["Payload"].read().decode()[:300]}
@@ -3273,12 +4202,12 @@ import os
 import re
 import socket
 import time
-
+from app.tools import pam
 import paramiko
 import winrm
 from langchain_core.tools import tool
 
-from app.tools import aws
+from app.tools import active
 
 TARGETS = ("windows", "linux")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")  # blocks shell/PowerShell injection
@@ -3297,19 +4226,24 @@ def _threshold() -> float:
 
 
 def _service_allowlist() -> set[str]:
-    raw = os.getenv("SERVICE_ALLOWLIST",
-                    "nginx,docker,postgresql,postgres,sshd,ssh,apache2,httpd,mysql,mysqld,redis,redis-server,cron")
+    """Optional strict mode: only enforced when SERVICE_ALLOWLIST is set in .env. Empty = no restriction."""
+    raw = os.getenv("SERVICE_ALLOWLIST", "")
     return {s.strip().lower() for s in raw.split(",") if s.strip()}
+
+
+def _service_denylist() -> set[str]:
+    """Optional: services the agent must never start. Empty by default."""
+    return {s.strip().lower() for s in os.getenv("SERVICE_DENYLIST", "").split(",") if s.strip()}
 
 
 # ---- low-level helpers ----
 def _host(target: str) -> str:
     if target not in TARGETS:
         raise ValueError(f"target must be one of {TARGETS}")
-    ip = aws.current_host(target)  # the instance the current ticket is about, via AWS
+    ip = active.current_address(target)  # the host the current ticket is about, via the Hosts port
     if ip:
         return ip
-    if aws.STRICT:
+    if active.STRICT:
         raise RuntimeError("No server was identified for this ticket, so no server check was run.")
     host = os.getenv("WIN_HOST" if target == "windows" else "LINUX_HOST", "")
     if not host:
@@ -3323,10 +4257,12 @@ def _port(target: str) -> int:
 
 def _win(script: str) -> str:
     """Run a PowerShell script on the Windows server over WinRM and return stdout."""
+    host = _host("windows")
+    creds = pam.checkout(host)
     session = winrm.Session(
-        f"http://{_host('windows')}:5985/wsman",
-        auth=(os.environ["WIN_USER"], os.environ["WIN_PASSWORD"]),
-        transport=os.getenv("WIN_WINRM_TRANSPORT", "ntlm"),
+        f"http://{host}:{int(creds.get('port', 5985))}/wsman",
+        auth=(creds["username"], creds["password"]),
+        transport=creds.get("transport", "ntlm"),
         operation_timeout_sec=20,
         read_timeout_sec=30,
     )
@@ -3338,15 +4274,20 @@ def _win(script: str) -> str:
 
 def _linux(command: str) -> str:
     """Run a shell command on the Linux server over SSH and return stdout."""
+    host = _host("linux")
+    creds = pam.checkout(host)
+    pkey = None
+    if creds.get("private_key"):
+        pkey = pam.load_pkey(creds["private_key"], creds.get("passphrase") or None)
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
         client.connect(
-            _host("linux"),
-            port=_port("linux"),
-            username=os.environ["LINUX_USER"],
-            password=os.getenv("LINUX_PASSWORD") or None,
-            key_filename=os.getenv("LINUX_KEY_PATH") or None,
+            host,
+            port=int(creds.get("port", 22)),
+            username=creds["username"],
+            password=creds.get("password") or None,
+            pkey=pkey,
             timeout=10,
             look_for_keys=False,
             allow_agent=False,
@@ -3536,8 +4477,9 @@ def start_service(target: str, service_name: str) -> dict:
         if target not in TARGETS:
             raise ValueError(f"target must be one of {TARGETS}")
         svc = _safe(service_name, "service_name")
-        if svc.lower() not in _service_allowlist():
-            raise ValueError(f"Service '{svc}' is not on the allowed list (SERVICE_ALLOWLIST).")
+        low, allow = svc.lower(), _service_allowlist()
+        if low in _service_denylist() or (allow and low not in allow):
+            raise ValueError(f"Service '{svc}' is blocked by SERVICE_DENYLIST / SERVICE_ALLOWLIST.")
         if target == "windows":
             _win(f"Start-Service -Name '{svc}'")
         else:
@@ -3580,146 +4522,109 @@ INFRA_TOOLS = [check_reachability, check_disk_usage, check_service_status, looku
                clear_temp_files, start_service, unlock_ad_account]
 HIGH_RISK_TOOLS = {"unlock_ad_account"}
 
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\tools\pam.py ===
+
+"""Fetches host credentials from OpenBao. Used inside the tool layer only.
+Never log, print, or return the values this module gives back."""
+import io
+import os
+
+import hvac
+import paramiko
+
+
+def _client() -> hvac.Client:
+    c = hvac.Client(url=os.environ["BAO_ADDR"], timeout=10)
+    c.auth.approle.login(role_id=os.environ["BAO_ROLE_ID"],
+                         secret_id=os.environ["BAO_SECRET_ID"])
+    return c
+
+
+def checkout(host: str) -> dict:
+    """Return the secret stored at secret/pam/hosts/<host> (host is the IP)."""
+    try:
+        r = _client().secrets.kv.v2.read_secret_version(
+            path=f"pam/hosts/{host}", mount_point="secret",
+            raise_on_deleted_version=True)
+        return r["data"]["data"]
+    except Exception:
+        # Deliberately generic: never echo secrets or server internals upward.
+        raise RuntimeError(f"No credential available for {host}")
+
+
+def load_pkey(text: str, passphrase: str | None = None):
+    """Build a Paramiko key object from the PEM text stored in OpenBao."""
+    for cls in (paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey):
+        try:
+            return cls.from_private_key(io.StringIO(text), password=passphrase)
+        except paramiko.SSHException:
+            continue
+    raise RuntimeError("Unsupported private key format")
+
 === FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\tools\snow.py ===
 
-"""ServiceNow tools for the triage agent.
+"""Compatibility shim. Old imports keep working while callers move to the port."""
+from app.adapters.servicenow.client import (  # noqa: F401
+    FIELDS, STATE_IN_PROGRESS, STATE_RESOLVED, SLA_FALLBACK,
+    _request, _lookup_sys_id, _user_id, _group_id, _incident_id, _flatten, _fetch,
+    _caller, _group, _assignee, _human, find_ci_id,
+)
+from app.ports import registry
+from app.tools.ticketing_tools import (  # noqa: F401
+    CLAIM_NOTE, SNOW_TOOLS, get_incident, create_incident, claim_incident,
+    add_work_note, escalate_incident, resolve_incident,
+)
 
-Each function decorated with @tool is something the LangChain agent can call.
-The docstring is what the LLM reads to decide when to use it, so keep it short.
-"""
-import os
-import requests
+
+def list_queue() -> list:
+    return registry.get_ticketing().list_queue()
+
+
+def search_users(text: str, limit: int = 8) -> list[dict]:
+    return registry.get_ticketing().search_callers(text, limit)
+
+
+def get_sla(number: str) -> dict:
+    return registry.get_ticketing().get_sla(number)
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\tools\ticketing_tools.py ===
+
+"""Agent-facing ticket tools. Same names, docstrings and return shapes as before;
+every call now goes through the active Ticketing adapter."""
 from langchain_core.tools import tool
-import time
-from datetime import datetime, timezone
 
-STATE_IN_PROGRESS = 2  # "WIP"
-STATE_RESOLVED = 6
+from app.ports import registry
+from app.ports.errors import NotFound
 
-# Only return these fields so we don't waste tokens on the 80+ others
-FIELDS = "number,short_description,description,state,priority,caller_id,assignment_group,assigned_to,contact_type,work_notes"
+CLAIM_NOTE = ("TRIAGE-1 picked up this ticket and has started automated triage.\n\n"
+              "What happens next: it chooses a playbook, runs read-only diagnostics, and asks a human to "
+              "approve any change that carries risk. A full report is added to this ticket when it finishes.")
 
-
-# ---- config (read at call time so load_dotenv() has already run) ----
-def _caller() -> str:
-    return os.getenv("SNOW_CALLER", "sre_triage_agent")
+_KEYS = {"number": "id", "short_description": "title", "description": "description",
+         "priority": "priority", "caller_id": "caller", "assignment_group": "group",
+         "assigned_to": "assignee", "work_notes": "work_notes"}
 
 
-def _group() -> str:
-    return os.getenv("SNOW_ASSIGNMENT_GROUP", "L1-SRE-Agent")
+def _tk():
+    return registry.get_ticketing()
 
 
-def _assignee() -> str:
-    return os.getenv("SNOW_ASSIGNEE", "svc_triage_01")
+def _legacy(t) -> dict:
+    """Old dict shape. ServiceNow tickets carry their raw record; other adapters get a mapped one."""
+    if t.raw:
+        return dict(t.raw)
+    d = {k: getattr(t, a) for k, a in _KEYS.items()}
+    d["state"] = t.extras.get("raw_state") or t.state.value.replace("_", " ").title()
+    return d
 
 
-RETRY_METHODS = {"GET", "PATCH", "PUT"}  # POST (create) is never retried: it could duplicate a ticket
-
-
-def _request(method: str, path: str, identity: str = "agent", **kwargs):
-    """Single place that talks to SNOW. Retries transient failures on safe methods.
-    Raises with the response body on errors."""
-    base = os.environ["SNOW_INSTANCE"].strip().rstrip("/")
-    if not base.startswith("http"):
-        base = f"https://{base}.service-now.com" if "." not in base else f"https://{base}"
-    if identity == "checker":
-        auth = (os.environ["SNOW_CHECKER_USER"], os.environ["SNOW_CHECKER_PASSWORD"])
-    else:
-        auth = (os.environ["SNOW_USER"], os.environ["SNOW_PASSWORD"])
-    attempts = 3 if method.upper() in RETRY_METHODS else 1
-    resp = None
-    for i in range(attempts):
-        try:
-            resp = requests.request(
-                method,
-                f"{base}/api/now/table/{path}",
-                auth=auth,
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
-                timeout=(5, 20),
-                **kwargs,
-            )
-        except (requests.ConnectionError, requests.Timeout) as e:
-            if i == attempts - 1:
-                raise RuntimeError(f"SNOW unreachable: {str(e)[:200]}")
-            time.sleep(2 ** i)
-            continue
-        if resp.status_code in (429, 502, 503, 504) and i < attempts - 1:
-            time.sleep(2 ** i)
-            continue
-        break
-    if not resp.ok:
-        raise RuntimeError(f"SNOW {resp.status_code} on {method} {path}: {resp.text[:500]}")
-    return resp.json()["result"]
-
-def _lookup_sys_id(table: str, query: str, label: str) -> str:
-    rows = _request(
-        "GET", table, params={"sysparm_query": query, "sysparm_limit": 1, "sysparm_fields": "sys_id"}
-    )
-    if not rows:
-        raise ValueError(f"{label} not found in SNOW")
-    return rows[0]["sys_id"]
-
-
-def _user_id(user: str) -> str:
-    """Caller can be a ServiceNow user_name or an email address."""
-    user = user.replace("^", "")
-    return _lookup_sys_id("sys_user", f"user_name={user}^ORemail={user}", f"User '{user}'")
-
-def _group_id(name: str) -> str:
-    return _lookup_sys_id("sys_user_group", f"name={name}", f"Group '{name}'")
-
-
-def _incident_id(number: str) -> str:
-    return _lookup_sys_id("incident", f"number={number}", f"Incident {number}")
-
-
-def _flatten(record: dict) -> dict:
-    """Reference fields come back as {'display_value':..., 'link':...}. Keep just the readable value."""
-    return {k: (v.get("display_value") if isinstance(v, dict) else v) for k, v in record.items()}
-
-
-def _fetch(number: str) -> dict:
-    rows = _request(
-        "GET",
-        "incident",
-        params={
-            "sysparm_query": f"number={number}",
-            "sysparm_limit": 1,
-            "sysparm_fields": FIELDS,
-            "sysparm_display_value": "true",
-        },
-    )
-    if not rows:
-        return {"error": f"Incident {number} not found"}
-    return _flatten(rows[0])
-
-
-# ---- tools the agent can call ----
 @tool
 def get_incident(number: str) -> dict:
     """Fetch a ServiceNow incident by number (e.g. INC0010001). Returns its key fields."""
-    return _fetch(number)
-
-def search_users(text: str, limit: int = 8) -> list[dict]:
-    """Type-ahead for the Caller field: active users matching name, user name or email."""
-    text = text.replace("^", " ").strip()[:50]
-    rows = _request("GET", "sys_user", params={
-        "sysparm_query": f"active=true^nameLIKE{text}^ORuser_nameLIKE{text}^ORemailLIKE{text}",
-        "sysparm_limit": limit,
-        "sysparm_fields": "user_name,name,email",
-    })
-    return [{"user_name": r.get("user_name", ""), "name": r.get("name", ""), "email": r.get("email", "")}
-            for r in rows]
-
-
-def find_ci_id(name: str) -> str | None:
-    """sys_id of the CMDB configuration item with this name, or None if there is none."""
     try:
-        rows = _request("GET", "cmdb_ci", params={
-            "sysparm_query": f"name={name.replace('^', ' ')}", "sysparm_limit": 1, "sysparm_fields": "sys_id"})
-        return rows[0]["sys_id"] if rows else None
-    except Exception:
-        return None
+        return _legacy(_tk().get(number))
+    except NotFound as e:
+        return {"error": str(e)}
 
 
 @tool
@@ -3729,170 +4634,36 @@ def create_incident(short_description: str, description: str, urgency: int = 3, 
     In Progress. urgency and impact: 1=high, 2=medium, 3=low. caller is a ServiceNow user_name
     (defaults to the integration user). ci is the configuration item (server) name.
     Returns the incident as it now stands."""
-    body = {
-        "short_description": short_description,
-        "description": description,
-        "urgency": str(urgency),
-        "impact": str(impact),
-        "contact_type": os.getenv("SNOW_CHANNEL", "virtual_agent"),
-        "caller_id": _user_id(caller or _caller()),
-        "assignment_group": _group_id(_group()),
-        "assigned_to": _user_id(_assignee()),
-    }
-    if ci:
-        ci_id = find_ci_id(ci)
-        if ci_id:
-            body["cmdb_ci"] = ci_id
-    created = _request("POST", "incident", json=body)
-    # Assignment is done. Now move to WIP as a separate step.
-    _request(
-        "PATCH",
-        f"incident/{created['sys_id']}",
-        json={"state": str(STATE_IN_PROGRESS), "work_notes": "Assigned to triage agent. Work started."},
-    )
-    return _fetch(created["number"])
-    # Assignment is done. Now move to WIP as a separate step.
-    _request(
-        "PATCH",
-        f"incident/{created['sys_id']}",
-        json={"state": str(STATE_IN_PROGRESS), "work_notes": "Assigned to triage agent. Work started."},
-    )
-    return _fetch(created["number"])
-
-CLAIM_NOTE = ("TRIAGE-1 picked up this ticket and has started automated triage.\n\n"
-              "What happens next: it chooses a playbook, runs read-only diagnostics, and asks a human to "
-              "approve any change that carries risk. A full report is added to this ticket when it finishes.")
+    return _legacy(_tk().create(short_description, description, urgency, impact, caller, ci))
 
 
 @tool
 def claim_incident(number: str, work_note: str = CLAIM_NOTE) -> dict:
     """Take ownership of an existing incident: assign it to the triage agent and move it to In Progress.
     Use this first when a ticket arrives in the L1 queue."""
-    sys_id = _incident_id(number)
-    _request("PATCH", f"incident/{sys_id}", json={"assigned_to": _user_id(_assignee())})
-    _request(
-        "PATCH",
-        f"incident/{sys_id}",
-        json={"state": str(STATE_IN_PROGRESS), "work_notes": work_note},
-    )
-    return _fetch(number)
+    return _legacy(_tk().claim(number, work_note))
 
 
 @tool
 def resolve_incident(number: str, close_notes: str) -> dict:
     """Resolve an incident. close_notes must describe what was fixed. Only call after the underlying issue is fixed."""
-    sys_id = _incident_id(number)
-    close_code = os.getenv("SNOW_CLOSE_CODE", "Solution provided")
+    return _legacy(_tk().resolve(number, close_notes))
 
-    # Save the resolution fields first, then change the state.
-    saved = _request(
-        "PATCH",
-        f"incident/{sys_id}",
-        params={"sysparm_fields": "close_code"},
-        json={"close_code": close_code, "close_notes": close_notes},
-    )
-    # SNOW silently ignores invalid choice values, so check the write really stuck.
-    if not saved.get("close_code"):
-        raise RuntimeError(
-            f"SNOW did not accept close_code '{close_code}'. "
-            "Use a value from the Resolution code dropdown and set SNOW_CLOSE_CODE."
-        )
-
-    _request("PATCH", f"incident/{sys_id}", json={"state": str(STATE_RESOLVED)})
-    return _fetch(number)
 
 @tool
 def add_work_note(number: str, note: str) -> dict:
     """Add a work note to an incident. Use it to record checks done, findings, and actions taken."""
-    _request("PATCH", f"incident/{_incident_id(number)}", json={"work_notes": note})
+    _tk().add_note(number, note)
     return {"number": number, "note_added": True}
+
 
 @tool
 def escalate_incident(number: str, reason: str) -> dict:
     """Hand an incident to the human L2 team when it is beyond L1, could not be fixed, or needs approval.
     Unassigns the agent and records the reason. The L2 team is fixed by configuration: do not pass a group."""
-    group = os.getenv("SNOW_ESCALATION_GROUP", "")
-    if not group:
-        raise RuntimeError("SNOW_ESCALATION_GROUP is not set in .env")
-    _request(
-        "PATCH",
-        f"incident/{_incident_id(number)}",
-        json={
-            "assignment_group": _group_id(group),
-            "assigned_to": "",
-            "work_notes": f"Escalated by triage agent. Reason: {reason}",
-        },
-    )
-    return _fetch(number)
-
-def list_queue() -> list:
-    """Ticket numbers waiting in the L1 queue: New, unassigned, oldest first."""
-    rows = _request(
-        "GET",
-        "incident",
-        params={
-            "sysparm_query": f"active=true^state=1^assigned_toISEMPTY"
-                             f"^assignment_group.name={_group()}^ORDERBYpriority^ORDERBYsys_created_on",
-            "sysparm_fields": "number",
-            "sysparm_limit": 10,
-        },
-    )
-    return [r["number"] for r in rows]
-
-# Used only when ServiceNow has no SLA records on the ticket. (response_min, resolution_min) by priority.
-# These numbers are placeholders. Replace them with your real SLAs.
-SLA_FALLBACK = {"1": (15, 240), "2": (30, 480), "3": (120, 1440), "4": (240, 4320)}
+    return _legacy(_tk().escalate(number, reason))
 
 
-def _human(minutes: float) -> str:
-    m = max(int(round(minutes)), 1)
-    if m < 60:
-        return f"{m} minute{'s' if m != 1 else ''}"
-    h, rem = divmod(m, 60)
-    if h < 24:
-        return f"{h} hour{'s' if h != 1 else ''}" + (f" {rem} minutes" if rem else "")
-    d, h = divmod(h, 24)
-    return f"{d} day{'s' if d != 1 else ''}" + (f" {h} hours" if h else "")
-
-
-def get_sla(number: str) -> dict:
-    """Response and resolution targets as readable text. Reads the ticket's task_sla records
-    (SLA names containing 'response' / 'resolution'); falls back to SLA_FALLBACK by priority."""
-    out = {"response": None, "resolution": None, "source": "servicenow"}
-    try:
-        rows = _request("GET", "task_sla", params={
-            "sysparm_query": f"task={_incident_id(number)}",
-            "sysparm_fields": "sla.name,planned_end_time",
-            "sysparm_limit": 10,
-        })
-        now = datetime.now(timezone.utc)
-        for r in rows:
-            name = str(r.get("sla.name", "")).lower()
-            end = r.get("planned_end_time")
-            if not end:
-                continue
-            due = datetime.strptime(end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-            if due <= now:
-                continue
-            text = _human((due - now).total_seconds() / 60)
-            if "response" in name and not out["response"]:
-                out["response"] = text
-            elif "resolution" in name and not out["resolution"]:
-                out["resolution"] = text
-    except Exception:
-        pass
-    if not (out["response"] and out["resolution"]):
-        try:
-            prio = (_fetch(number).get("priority") or "3")[:1]
-        except Exception:
-            prio = "3"
-        resp_m, reso_m = SLA_FALLBACK.get(prio, SLA_FALLBACK["3"])
-        out["response"] = out["response"] or _human(resp_m)
-        out["resolution"] = out["resolution"] or _human(reso_m)
-        out["source"] = "fallback"
-    return out
-
-# The agent will import this list in Phase 3
 SNOW_TOOLS = [get_incident, create_incident, claim_incident, add_work_note, escalate_incident, resolve_incident]
 
 === FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\tools\__init__.py ===
@@ -4531,7 +5302,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 from sentence_transformers import SentenceTransformer
 from supabase import create_client, Client
 from neo4j import GraphDatabase
-from app.tools import aws
+from app.ports import registry
 from app import store
 from app.tools.snow import create_incident, add_work_note
 from app.api.agent import _active, start_run
@@ -5231,11 +6002,11 @@ def analyze_chat_for_incident(query: str, history: list[dict]) -> dict | None:
 
     if issue_text:
         try:
-            inst = aws.find_in_text(issue_text)
-            if inst:
-                suggested = inst["name"] or inst["instance_id"]
+            host = registry.get_hosts().find_in_text(issue_text)
+            if host:
+                suggested = host.name or host.id
         except Exception as e:
-            log.warning("AWS lookup in chat failed: %s", e)
+            log.warning("Host lookup in chat failed: %s", e)
 
     return {"status": "needs_server", "mode": "explicit" if explicit else "issue",
             "description": issue_text[:1800], "suggested_server": suggested}
@@ -5487,10 +6258,22 @@ def _safe(fn):
     wrapper.__name__ = fn.__name__
     return wrapper
 
+def _ticket_ref(ticket):
+    """(provider, external_id) for a bare incident number or 'provider:id'. Written next to the legacy
+    `ticket` column, which stays the source of truth until readers are switched over."""
+    if not ticket:
+        return None, None
+    from app.ports import registry
+    from app.ports.models import TicketRef
+    ref = TicketRef.parse(ticket, registry.active_provider("ticketing", "servicenow"))
+    return ref.provider, ref.external_id
+
 @_safe
 def save_run(run: dict) -> None:
+    prov, ext = _ticket_ref(run["ticket"])
     supabase.table("runs").upsert({
         "id": run["id"], "ticket": run["ticket"], "status": run["status"],
+        "ticket_provider": prov, "ticket_external_id": ext, "host": run.get("host"),
         "skill": run.get("skill"), "server": run.get("server"),
         "thread_id": run.get("thread_id"),
         "created": run.get("created", time.time()), "updated": time.time(),
@@ -5506,8 +6289,10 @@ def add_event(run_id: str, seq: int, ev: dict) -> None:
     }).execute()
 
 def audit(run_id: str | None, ticket: str | None, actor: str, action: str, detail: str = "") -> None:
+    prov, ext = _ticket_ref(ticket)
     supabase.table("audit").insert({
         "ts": time.time(), "run_id": run_id, "ticket": ticket,
+        "ticket_provider": prov, "ticket_external_id": ext,
         "actor": actor, "action": action, "detail": detail[:1000]
     }).execute()
 
@@ -5527,7 +6312,7 @@ def load_runs(limit: int = 20) -> list[dict]:
                     "requester": r.get("requester"), "steps": r.get("steps") or 0,
                     "nudges": r.get("nudges") or 0, "tokens_in": r.get("tokens_in") or 0,
                     "tokens_out": r.get("tokens_out") or 0, "llm_calls": r.get("llm_calls") or 0,
-                    "skill_version": r.get("skill_version"),
+                    "skill_version": r.get("skill_version"), "host": r.get("host"),
                     "events": evs, "pending": None, "last_event": time.time()})  # fresh approval clock after a restart
 
     for run in out:
@@ -5672,7 +6457,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
 
 load_dotenv()
-
+from app.tools import active
 from app.tools import aws
 from app.tools import infra
 
@@ -5691,7 +6476,7 @@ def pick(name):
     inst = aws.find_in_text(name)
     if not inst:
         raise RuntimeError(f"No instance named '{name}' found")
-    aws.ACTIVE[inst["platform"]] = inst["instance_id"]
+    active.ACTIVE[inst["platform"]] = inst["instance_id"]
     return inst
 
 
@@ -6175,6 +6960,7 @@ load_dotenv()
 
 from app.agent import skills
 from app.tools import snow
+from app.adapters.servicenow import client as snow_client
 
 FAILS = []
 
@@ -6208,7 +6994,7 @@ def serve(rows=None, error=None):
         if error:
             raise RuntimeError(error)
         return rows
-    snow._request = fake
+    snow_client._request = fake
 
 
 def load(source):
@@ -7985,7 +8771,7 @@ function addEvent(ev) {
     let row = null;
     if (ev.type === 'tool_call') row = stepRow('â–¶', 'text-[#0084FF]', ev.name, JSON.stringify(ev.args));
     else if (ev.type === 'tool_result') row = stepRow('âœ“', 'text-[#3DDC84]', `${ev.name} result`, ev.content);
-    else if (ev.type === 'decision') row = stepRow(ev.approve ? 'âœ”' : 'âœ–', ev.approve ? 'text-[#3DDC84]' : 'text-red-400', ev.approve ? 'Engineer approved' : 'Engineer rejected');
+    else if (ev.type === 'decision') row = stepRow(ev.approve ? 'âœ”' : 'âœ–', ev.approve ? 'text-[#3DDC84]' : 'text-red-400', (ev.approve ? 'Approved by ' : 'Rejected by ') + (ev.by || 'an engineer'));
     else if (ev.type === 'nudge') row = stepRow('â†»', 'text-[#FFB000]', 'Nudged the agent to finish', ev.text);
     else if (ev.type === 'warning') row = stepRow('!', 'text-[#FFB000]', 'Warning', ev.message);
     else if (ev.type === 'error') row = stepRow('âœ–', 'text-red-400', 'Error', ev.message);
@@ -11848,3 +12634,381 @@ def test_same_priority_oldest_first():
 
 def test_empty():
     assert pick_next([]) is None
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\tests\test_p0_active.py ===
+
+"""Tests for the active-server state and the host resolver, using a fake Hosts adapter."""
+import pytest
+
+from app.agent import hosts
+from app.ports import registry
+from app.ports.errors import Unavailable
+from app.ports.manifest import Manifest
+from app.ports.models import Host
+from app.tools import active
+
+H = [Host("i-1", "web01", "linux", "running", "3.3.3.3", "10.0.0.5", "fake"),
+     Host("w-1", "win01", "windows", "running", "4.4.4.4", "10.0.0.6", "fake"),
+     Host("w-2", "win02", "windows", "stopped", "", "10.0.0.7", "fake")]
+
+
+class FakeHosts:
+    provider, capabilities, broken = "fake", frozenset(), False
+
+    def list_hosts(self, force=False):
+        return list(H)
+
+    def get_host(self, host_id):
+        return next(h for h in H if h.id == host_id)
+
+    def find_in_text(self, text):
+        if FakeHosts.broken:
+            raise RuntimeError("boom")
+        return next((h for h in H if h.name in text), None)
+
+    def connect_address(self, host_id):
+        h = self.get_host(host_id)
+        if h.state != "running":
+            raise Unavailable(f"Instance {h.name} is {h.state}")
+        return h.address
+
+
+def _use_fake(monkeypatch):
+    registry.register(Manifest(port="hosts", provider="fake", title="Fake"), FakeHosts)
+    monkeypatch.setenv("HOSTS_PROVIDER", "fake")
+    active.ACTIVE.clear()
+    FakeHosts.broken = False
+
+
+def _cleanup():
+    registry._ADAPTERS.pop(("hosts", "fake"), None)
+    active.ACTIVE.clear()
+
+
+def test_resolve_server(monkeypatch):
+    _use_fake(monkeypatch)
+    try:
+        inst, why = hosts.resolve_server("disk full on web01")
+        assert why == "" and inst["platform"] == "linux" and inst["name"] == "web01"
+        assert set(inst) == {"instance_id", "name", "platform", "state", "public_ip", "private_ip"}
+        assert active.ACTIVE == {"linux": "i-1"}
+        inst, why = hosts.resolve_server("nothing named here")
+        assert inst is None and "No known instance" in why and active.ACTIVE == {}
+        FakeHosts.broken = True
+        inst, why = hosts.resolve_server("web01")
+        assert inst is None and why.startswith("Host lookup failed")
+    finally:
+        _cleanup()
+
+
+def test_default_windows_needs_exactly_one_running(monkeypatch):
+    _use_fake(monkeypatch)
+    try:
+        inst = hosts.resolve_default_windows()          # win01 running, win02 stopped -> exactly one
+        assert inst["instance_id"] == "w-1" and active.ACTIVE == {"windows": "w-1"}
+        H.append(Host("w-3", "win03", "windows", "running", "5.5.5.5", "", "fake"))
+        active.ACTIVE.clear()
+        assert hosts.resolve_default_windows() is None  # two running -> ambiguous -> no pick
+        assert active.ACTIVE == {}
+    finally:
+        H.pop()
+        _cleanup()
+
+
+def test_current_address(monkeypatch):
+    _use_fake(monkeypatch)
+    try:
+        assert active.current_address("linux") is None
+        active.ACTIVE["linux"] = "i-1"
+        assert active.current_address("linux") == "3.3.3.3"
+        active.ACTIVE["windows"] = "w-2"
+        with pytest.raises(Unavailable):
+            active.current_address("windows")           # stopped
+    finally:
+        _cleanup()
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\tests\test_p0_inventory.py ===
+
+"""P0 tests for the Hosts and Context ports. No AWS, ServiceNow or network needed."""
+import sys
+import types
+
+import pytest
+
+from app.adapters.aws.hosts import AwsHosts, map_error
+from app.adapters.servicenow.context import ServiceNowContext
+from app.ports import registry
+from app.ports.errors import AuthFailed, NotFound, PortError, Unavailable
+from app.ports.context import ContextPort
+from app.ports.hosts import HostsPort
+
+INST = {"instance_id": "i-1", "name": "web01", "state": "running", "platform": "linux",
+        "public_ip": "3.3.3.3", "private_ip": "10.0.0.5"}
+
+
+class FakeClientError(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.response = {"Error": {"Code": code}}
+
+
+def _stub_aws(insts):
+    m = types.ModuleType("app.tools.aws")
+    m.list_instances = lambda force=False: list(insts.values())
+
+    def get(i):
+        if i not in insts:
+            raise FakeClientError("InvalidInstanceID.NotFound")
+        return dict(insts[i])
+    m.get_instance = get
+    m.find_in_text = lambda t: next((v for v in insts.values() if v["name"] in t), None)
+    return m
+
+
+@pytest.fixture
+def hosts(monkeypatch):
+    insts = {"i-1": dict(INST), "i-2": {**INST, "instance_id": "i-2", "name": "db01",
+                                        "state": "stopped", "public_ip": ""},
+             "i-3": {**INST, "instance_id": "i-3", "name": "app01", "public_ip": ""}}
+    monkeypatch.setitem(sys.modules, "app.tools.aws", _stub_aws(insts))
+    return AwsHosts()
+
+
+def test_hosts_contract(hosts):
+    assert isinstance(hosts, HostsPort)
+    assert [h.id for h in hosts.list_hosts()] == ["i-1", "i-2", "i-3"]
+    h = hosts.get_host("i-1")
+    assert (h.name, h.os, h.address, h.provider) == ("web01", "linux", "3.3.3.3", "aws")
+    assert hosts.find_in_text("disk full on web01").id == "i-1"
+    assert hosts.find_in_text("nothing here") is None
+    assert hosts.connect_address("i-1") == "3.3.3.3"
+    with pytest.raises(NotFound):
+        hosts.get_host("i-999")
+    with pytest.raises(Unavailable):
+        hosts.connect_address("i-2")       # stopped
+    with pytest.raises(Unavailable):
+        hosts.connect_address("i-3")       # running, no public IP
+
+
+@pytest.mark.parametrize("exc,cls", [
+    (FakeClientError("InvalidInstanceID.Malformed"), NotFound),
+    (IndexError("list index out of range"), NotFound),
+    (FakeClientError("UnauthorizedOperation"), AuthFailed),
+    (FakeClientError("RequestLimitExceeded"), Unavailable),
+    (type("NoCredentialsError", (Exception,), {})("no creds"), AuthFailed),
+    (type("EndpointConnectionError", (Exception,), {})("down"), Unavailable),
+    (RuntimeError("odd"), PortError),
+])
+def test_aws_error_mapping(exc, cls):
+    assert type(map_error(exc)) is cls
+
+
+def test_context_adapter(monkeypatch):
+    cm = types.ModuleType("app.tools.cmdb")
+    cm.service_context = lambda h, s="": {"host": h, "service": s, "found": True, "criticality": 1}
+    cm.critical_by_cmdb = lambda h, s: (True, "CMDB: critical")
+    monkeypatch.setitem(sys.modules, "app.tools.cmdb", cm)
+    c = ServiceNowContext()
+    assert isinstance(c, ContextPort)
+    assert c.service_context("web01", "nginx")["found"] is True
+    assert c.is_critical("web01", "nginx") == (True, "CMDB: critical")
+    cm.critical_by_cmdb = lambda h, s: (_ for _ in ()).throw(ValueError("bad env"))
+    assert c.is_critical("web01", "nginx") == (False, "")      # never raises
+
+
+def test_registry(monkeypatch):
+    for v in ("HOSTS_PROVIDER", "CONTEXT_PROVIDER"):
+        monkeypatch.delenv(v, raising=False)
+    assert [m.provider for m in registry.available("hosts")] == ["aws"]
+    assert [m.provider for m in registry.available("context")] == ["servicenow"]
+    assert isinstance(registry.get_hosts(), AwsHosts)
+    assert isinstance(registry.get_context(), ServiceNowContext)
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\tests\test_p0_ports.py ===
+
+"""P0 tests. Runs without ServiceNow, langchain or a network: snow.py is replaced by a stub."""
+import sys
+import types
+
+import pytest
+
+from app.adapters.servicenow.ticketing import ServiceNowTicketing, map_error, to_ticket
+from app.ports import registry
+from app.ports.errors import AuthFailed, NotFound, PortError, Unavailable, Unsupported
+from app.ports.models import TicketRef, TicketState
+from tests.ticketing_contract import run_contract
+
+
+class _Tool:
+    """Mimics a LangChain tool: .invoke(dict)."""
+    def __init__(self, fn):
+        self.fn = fn
+
+    def invoke(self, args):
+        return self.fn(**args)
+
+
+def _stub_snow(store):
+    m = types.ModuleType("app.adapters.servicenow.client")
+
+    def rec(n):
+        return dict(store[n])
+
+    def fetch(n):
+        return rec(n) if n in store else {"error": f"Incident {n} not found"}
+
+    def claim(number, work_note=None):
+        store[number]["state"] = "In Progress"
+        return rec(number)
+
+    def resolve(number, close_notes):
+        store[number]["state"] = "Resolved"
+        return rec(number)
+
+    def note(number, note):
+        store[number]["work_notes"] += note
+        return {"number": number, "note_added": True}
+
+    m._fetch = fetch
+    m.list_queue = lambda: [n for n, r in store.items() if r["state"] == "New"]
+    m.claim_incident, m.resolve_incident = _Tool(claim), _Tool(resolve)
+    m.add_work_note = _Tool(note)
+    m.escalate_incident = _Tool(lambda number, reason: rec(number))
+    m.create_incident = _Tool(lambda **k: rec("INC1"))
+    m.search_users = lambda text, limit=8: []
+    m.get_sla = lambda n: {"response": "1 hour", "resolution": "1 day", "source": "fallback"}
+    return m
+
+
+@pytest.fixture
+def adapter(monkeypatch):
+    store = {"INC1": {"number": "INC1", "short_description": "disk full", "description": "d",
+                      "state": "New", "priority": "2 - High", "caller_id": "bob",
+                      "assignment_group": "L1-SRE-Agent", "assigned_to": "",
+                      "work_notes": "", "contact_type": "web"}}
+    monkeypatch.setitem(sys.modules, "app.adapters.servicenow.client", _stub_snow(store))
+    return ServiceNowTicketing()
+
+
+def test_contract(adapter):
+    run_contract(adapter, "INC1")
+
+
+def test_normalisation():
+    t = to_ticket({"number": "INC5", "short_description": "x", "state": "On Hold",
+                   "priority": "1 - Critical", "contact_type": "phone", "cmdb_ci": "web01"})
+    assert t.state is TicketState.ON_HOLD and t.host == "web01"
+    assert t.extras == {"contact_type": "phone"}
+    assert to_ticket({"number": "I", "state": "7"}).state is TicketState.CLOSED
+    odd = to_ticket({"number": "I", "state": "Pending Vendor"})
+    assert odd.state is TicketState.UNKNOWN and odd.extras["raw_state"] == "Pending Vendor"
+
+
+@pytest.mark.parametrize("exc,cls", [
+    (RuntimeError("SNOW unreachable: timeout"), Unavailable),
+    (RuntimeError("SNOW 503 on GET incident: busy"), Unavailable),
+    (RuntimeError("SNOW 401 on GET incident: nope"), AuthFailed),
+    (ValueError("Incident INC1 not found in SNOW"), NotFound),
+    (RuntimeError("SNOW_ESCALATION_GROUP is not set in .env"), Unsupported),
+    (KeyError("SNOW_USER"), Unsupported),
+    (RuntimeError("something odd"), PortError),
+])
+def test_error_mapping(exc, cls):
+    assert type(map_error(exc)) is cls
+
+
+def test_ticket_ref_backfill():
+    assert TicketRef.parse("INC0010001") == TicketRef("servicenow", "INC0010001")
+    assert str(TicketRef.parse("jira:OPS-4")) == "jira:OPS-4"
+
+
+def test_registry_discovers_servicenow(monkeypatch):
+    monkeypatch.delenv("TICKETING_PROVIDER", raising=False)
+    assert [m.provider for m in registry.available("ticketing")] == ["servicenow"]
+    assert isinstance(registry.get_ticketing(), ServiceNowTicketing)
+    with pytest.raises(Unsupported):
+        registry.get("ticketing", "jira")
+    secrets = registry.available("ticketing")[0].secret_keys
+    assert set(secrets) == {"password", "checker_password"}
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\tests\test_p0_run_host.py ===
+
+import threading
+
+from langchain_core.messages import AIMessage
+from langchain_core.tools import tool
+from langgraph.prebuilt import ToolNode
+
+from app.tools import active
+
+
+@tool
+def probe(target: str) -> str:
+    """Return the host id bound for this run."""
+    return active.host_id(target) or "none"
+
+
+def test_bind_is_per_thread():
+    seen, barrier = {}, threading.Barrier(2)
+
+    def work(name, hid):
+        active.bind({"linux": hid})
+        barrier.wait()                      # both threads have bound before either reads
+        seen[name] = active.host_id("linux")
+
+    ts = [threading.Thread(target=work, args=(n, h)) for n, h in (("a", "i-aaa"), ("b", "i-bbb"))]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert seen == {"a": "i-aaa", "b": "i-bbb"}
+
+
+def test_binding_reaches_langgraph_tool_workers():
+    active.bind({"linux": "i-123"})
+    msg = AIMessage(content="", tool_calls=[
+        {"name": "probe", "args": {"target": "linux"}, "id": "1"},
+        {"name": "probe", "args": {"target": "linux"}, "id": "2"}])   # two calls, so the thread pool is used
+    out = ToolNode([probe]).invoke({"messages": [msg]})
+    assert [m.content for m in out["messages"]] == ["i-123", "i-123"]
+
+
+def test_bind_run_restores_host_from_a_stored_run():
+    active.bind({})
+    active.bind_run({"host": {"provider": "aws", "id": "i-9", "os": "windows", "name": "web1"}})
+    assert active.host_id("windows") == "i-9"
+    active.bind_run({})                     # a run saved before this change has no host
+    assert active.host_id("windows") is None
+
+=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\tests\ticketing_contract.py ===
+
+"""Contract suite: every Ticketing adapter must pass this unchanged.
+Usage: run_contract(adapter, seed_ticket_id) where seed_ticket_id is a NEW ticket
+in the adapter's queue (use a fake or a sandbox instance)."""
+from app.ports.errors import NotFound, PortError
+from app.ports.models import Ticket, TicketState
+from app.ports.ticketing import TicketingPort
+
+
+def run_contract(adapter, seed_id: str, missing_id: str = "INC9999999") -> None:
+    assert isinstance(adapter, TicketingPort), "adapter does not satisfy TicketingPort"
+    assert adapter.provider and isinstance(adapter.capabilities, frozenset)
+
+    t = adapter.get(seed_id)
+    assert isinstance(t, Ticket) and t.id == seed_id and t.provider == adapter.provider
+    assert isinstance(t.state, TicketState)
+    assert str(t.ref) == f"{adapter.provider}:{seed_id}"
+
+    try:
+        adapter.get(missing_id)
+        raise AssertionError("get() on a missing ticket must raise NotFound")
+    except NotFound:
+        pass
+
+    assert seed_id in adapter.list_queue()
+    adapter.add_note(seed_id, "contract: note")
+    claimed = adapter.claim(seed_id)
+    assert claimed.state is TicketState.IN_PROGRESS
+    done = adapter.resolve(seed_id, "contract: resolved")
+    assert done.state in (TicketState.RESOLVED, TicketState.CLOSED)
+
+    for e in (NotFound,):
+        assert issubclass(e, PortError)
