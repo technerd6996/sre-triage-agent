@@ -61,3 +61,15 @@ def get_hosts():
 
 def get_context():
     return get_active("context", "servicenow")
+
+
+def get_credentials():
+    return get_active("credentials", "awssm")
+
+
+def get_identity():
+    return get_active("identity", "ad")
+
+def get_notifications():
+    """The transport comes from the Notice transport setting (NOTICE_TRANSPORT); blank means smtp."""
+    return get("notifications", (os.getenv("NOTICE_TRANSPORT") or "smtp").strip().lower())

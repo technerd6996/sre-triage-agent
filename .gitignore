@@ -16,3 +16,4 @@ venv/
 __pycache__/
 *.bak
 triage_checkpoints.db
+*.db

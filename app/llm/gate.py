@@ -25,6 +25,7 @@ class LLMBusy(Exception):
 class _Gate:
     def __init__(self, slots: int = 1):
         self._cv = threading.Condition()
+        self._slots = slots
         self._free = slots
         self._waiting: list = []          # heap of (priority, arrival number)
         self._seq = itertools.count()
@@ -55,6 +56,15 @@ class _Gate:
         with self._cv:
             return len(self._waiting)
 
+    def set_slots(self, n: int) -> None:
+        """Change the number of concurrent requests. Applies at once; running requests finish normally."""
+        n = max(1, int(n))
+        with self._cv:
+            if n != self._slots:
+                self._free += n - self._slots      # can go negative while extra requests drain
+                self._slots = n
+                self._cv.notify_all()
+
 
 GATE = _Gate(1)
 
@@ -65,6 +75,11 @@ def llm_slot(kind: str = "chat", wait_timeout=_DEFAULT):
     Chat gives up after LLM_CHAT_WAIT_SECONDS and raises LLMBusy; every other kind waits."""
     if wait_timeout is _DEFAULT:
         wait_timeout = CHAT_WAIT_SECONDS if kind == "chat" else None
+    try:
+        from app import config
+        GATE.set_slots(config.get("model.slots"))   # cached for 5 s, so this is cheap
+    except Exception:
+        pass
     t0 = time.monotonic()
     GATE.acquire(PRIORITY.get(kind, 3), wait_timeout)
     waited = time.monotonic() - t0

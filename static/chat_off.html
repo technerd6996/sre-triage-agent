@@ -41,7 +41,7 @@
         </main>
         <script>
             fetch('/api/auth/me').then((r) => r.json()).then((m) => {
-                if (m.role === 'approver') document.getElementById('agent').classList.remove('hidden');
+                if ((m.caps || []).includes('console.view')) document.getElementById('agent').classList.remove('hidden');
             }).catch(() => {});
             document.getElementById('logout').onclick = () =>
                 fetch('/api/auth/logout', { method: 'POST' }).finally(() => { location.href = '/static/login.html'; });

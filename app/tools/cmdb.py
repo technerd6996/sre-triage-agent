@@ -9,7 +9,11 @@ Env (all optional):
   CMDB_URL_FIELDS           fields tried in order   (default u_health_check_url,url)
   CMDB_WALK_DEPTH           relationship levels     (default 3)
   CRITICALITY_AUTONOMY_MAX  highest criticality number that counts as critical (default 1)
+  CMDB_HOST_TABLE           table holding server CIs for connect addresses (default cmdb_ci_server)
+  CMDB_IP_FIELD             field with the server's IP address            (default ip_address)
+  HOST_ADDRESS_ALLOWED_CIDRS  optional, comma-separated ranges; an address outside them is refused
 """
+import ipaddress
 import os
 import re
 import time
@@ -152,3 +156,46 @@ def critical_by_cmdb(host: str, service: str) -> tuple:
         names = ", ".join(s["name"] for s in ctx["services"])
         return True, f"CMDB: {service} supports {names} (criticality {c})"
     return False, ""
+
+
+# ---- connect address, read from the server's CMDB record ----
+_ADDR_CACHE: dict = {}
+ADDR_TTL = 60   # seconds; short, so a corrected CMDB record is picked up quickly
+
+
+def _usable_ip(text: str, allowed: list) -> str:
+    """First address in the field that is a real host address. The CMDB field can hold several."""
+    nets = []
+    for c in allowed:
+        try:
+            nets.append(ipaddress.ip_network(c, strict=False))
+        except ValueError:
+            continue
+    for tok in re.split(r"[,\s;]+", text or ""):
+        try:
+            ip = ipaddress.ip_address(tok)
+        except ValueError:
+            continue
+        if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+            continue                      # 169.254.169.254 (cloud metadata) is link-local
+        if nets and not any(ip in n for n in nets):
+            continue
+        return str(ip)
+    return ""
+
+
+def host_address(name: str) -> str:
+    """Connect address of a server from its CMDB record. '' when there is none that is usable."""
+    key = name.lower()
+    hit = _ADDR_CACHE.get(key)
+    if hit and time.time() - hit[0] < ADDR_TTL:
+        return hit[1]
+    table = os.getenv("CMDB_HOST_TABLE", "cmdb_ci_server")
+    field = os.getenv("CMDB_IP_FIELD", "ip_address")
+    rows = _request("GET", table, params={
+        "sysparm_query": f"name={name.replace('^', ' ')}", "sysparm_limit": 1,
+        "sysparm_fields": field, "sysparm_display_value": "false"})
+    ip = _usable_ip(_txt(rows[0].get(field)) if rows else "", _list("HOST_ADDRESS_ALLOWED_CIDRS", ""))
+    if ip:
+        _ADDR_CACHE[key] = (time.time(), ip)      # empty results are not cached, like errors above
+    return ip

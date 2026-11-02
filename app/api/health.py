@@ -9,7 +9,6 @@ from fastapi.responses import JSONResponse
 
 from app import store
 from app.ports import registry
-from app.tools.snow import _request
 
 router = APIRouter(prefix="/api")
 
@@ -24,7 +23,8 @@ def _timed(fn) -> dict:
 
 
 def _llm():
-    base = os.getenv("COLAB_API_URL", "").rsplit("/", 1)[0]
+    url = os.getenv("COLAB_API_URL", "")
+    base = url.split("/v1")[0] if "/v1" in url else url.rsplit("/", 1)[0]
     r = requests.get(f"{base}/health", timeout=3)
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}")
@@ -32,7 +32,7 @@ def _llm():
 
 
 def _snow():
-    _request("GET", "incident", params={"sysparm_limit": 1, "sysparm_fields": "number"})
+    registry.get_ticketing().ping()
     return "reachable"
 
 

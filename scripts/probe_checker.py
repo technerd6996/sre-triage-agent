@@ -1,24 +1,21 @@
-"""Probe what the checker account may do on one ticket.
-Run: python -m scripts.probe_checker INC0010100          (work note only)
-     python -m scripts.probe_checker INC0010100 --close  (also tries Resolved -> Closed)"""
 import sys
 from dotenv import load_dotenv
 load_dotenv()
-from app import checker
+from app.ports import registry
 
 number = sys.argv[1]
-sys_id, state = checker._ticket(number)
-print("state as checker:", state)
+tk = registry.get_ticketing(role="reviewer")
+print("state as checker:", tk.get(number).state.value)
 
 
-def attempt(label, body):
+def attempt(label, fn):
     try:
-        checker._snow("PATCH", f"incident/{sys_id}", json=body)
+        fn()
         print(f"OK     {label}")
     except Exception as e:
         print(f"DENIED {label}: {str(e)[:160]}")
 
 
-attempt("work note only", {"work_notes": "probe: checker write test"})
+attempt("work note only", lambda: tk.add_note(number, "probe: checker write test"))
 if "--close" in sys.argv:
-    attempt("state to Closed", {"state": checker.STATE_CLOSED, "work_notes": "probe: close test"})
+    attempt("state to Closed", lambda: tk.close(number, "probe: close test"))

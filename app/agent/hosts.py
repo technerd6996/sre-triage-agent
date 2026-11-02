@@ -9,11 +9,13 @@ def _legacy(h) -> dict:
             "public_ip": h.address, "private_ip": h.private_address, "provider": h.provider}
 
 
-def resolve_server(ticket_text: str):
+def resolve_server(ticket_text: str, ci_name: str = ""):
     """Returns (instance, reason). Also sets the active server so the infra tools use its address."""
     active.bind({})  # never carry a previous ticket's server over
     try:
-        host = registry.get_hosts().find_in_text(ticket_text)
+        hosts = registry.get_hosts()
+        host = hosts.find_by_name(ci_name) if ci_name and hasattr(hosts, "find_by_name") else None
+        host = host or hosts.find_in_text(ticket_text)
     except Exception as e:
         return None, f"Host lookup failed: {str(e)[:150]}."
     if not host:

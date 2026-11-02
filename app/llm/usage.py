@@ -55,33 +55,53 @@ def count_messages(messages: list) -> int:
 
 # ---- which agent run a model call belongs to ----
 _run_ctx = contextvars.ContextVar("triage_run", default=None)
-_active = {"run_id": None, "kind": "triage"}   # fallback: only one agent run is active at a time
+_active = {
+    "run_id": None, "kind": "triage", "skill": None, 
+    "ticket": None, "step": None, "user_id": None, "model": None
+}
 
-
-def bind_run(run_id: str, kind: str = "triage") -> None:
-    _run_ctx.set((run_id, kind))
-    _active.update(run_id=run_id, kind=kind)
-
+def bind_run(run_id: str, kind: str = "triage", skill: str = None, ticket: str = None, step: str = None, user_id: str = None, model: str = None) -> None:
+    ctx_data = {
+        "run_id": run_id, "kind": kind, "skill": skill, 
+        "ticket": ticket, "step": step, "user_id": user_id, "model": model
+    }
+    _run_ctx.set(ctx_data)
+    _active.update(ctx_data)
 
 def unbind_run(run_id: str) -> None:
     _run_ctx.set(None)
+    _totals.pop(run_id, None)
     if _active["run_id"] == run_id:
-        _active.update(run_id=None, kind="triage")
+        _active.update(run_id=None, kind="triage", skill=None, ticket=None, step=None, user_id=None, model=None)
 
-
-def agent_context() -> tuple:
-    """(run_id, kind) for a model call made by the agent. kind is 'triage' or 'resume'."""
+def agent_context() -> dict:
+    """Returns the full dictionary of run context for a model call."""
     ctx = _run_ctx.get()
-    if ctx:
-        return ctx
-    return _active["run_id"], _active["kind"]
+    return ctx if ctx else _active
+
+_totals: dict = {}      # run_id -> running token totals
 
 
-def log_call(kind: str, run_id, tokens_in: int, tokens_out: int, seconds: float, waited: float = 0.0) -> None:
+def run_totals(run_id: str) -> dict:
+    return dict(_totals.get(run_id) or {"tokens_in": 0, "tokens_out": 0, "calls": 0})
+
+
+def log_call(metrics: dict, ctx: dict = None) -> None:
+    """
+    metrics expects: tokens_in, tokens_out, gen_s, wait_s, ttft_s, prompt_comp, wasted_tokens, trace_id
+    """
+    ctx = ctx or agent_context()
+    if ctx.get("run_id"):
+        t = _totals.setdefault(ctx["run_id"], {"tokens_in": 0, "tokens_out": 0, "calls": 0})
+        t["tokens_in"] += metrics.get("tokens_in", 0)
+        t["tokens_out"] += metrics.get("tokens_out", 0)
+        t["calls"] += 1
     log.info("LLM %-7s run=%s in=%d out=%d gen=%.1fs wait=%.1fs",
-             kind, run_id or "-", tokens_in, tokens_out, seconds, waited)
+             ctx["kind"], ctx["run_id"] or "-", 
+             metrics.get("tokens_in", 0), metrics.get("tokens_out", 0), 
+             metrics.get("gen_s", 0.0), metrics.get("wait_s", 0.0))
     try:
         from app import store
-        store.add_llm_call(kind, run_id, tokens_in, tokens_out, seconds, waited)
+        store.add_llm_call(ctx, metrics)
     except Exception as e:
         log.warning("usage: could not save the LLM call: %s", str(e)[:150])

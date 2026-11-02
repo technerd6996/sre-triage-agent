@@ -77,6 +77,8 @@ def load_runs(limit: int = 20) -> list[dict]:
         ev_res = supabase.table("events").select("body").eq("run_id", r["id"]).order("seq").execute()
         evs = [e["body"] for e in ev_res.data]
         out.append({"id": r["id"], "ticket": r["ticket"], "status": r["status"], "skill": r["skill"],
+                    "ticket_provider": r.get("ticket_provider"),
+                    "ticket_external_id": r.get("ticket_external_id"),
                     "server": r["server"], "thread_id": r["thread_id"], "created": r["created"],
                     "outcome": r.get("outcome"), "started": r.get("started"), "ended": r.get("ended"),
                     "requester": r.get("requester"), "steps": r.get("steps") or 0,
@@ -104,12 +106,24 @@ def load_runs(limit: int = 20) -> list[dict]:
     return out
 
 @_safe
-def add_llm_call(kind: str, run_id: str | None, tokens_in: int, tokens_out: int,
-                 gen_s: float, wait_s: float) -> None:
+def add_llm_call(ctx: dict, metrics: dict) -> None:
     supabase.table("llm_calls").insert({
-        "ts": time.time(), "kind": kind, "run_id": run_id,
-        "tokens_in": tokens_in, "tokens_out": tokens_out,
-        "gen_s": round(gen_s, 2), "wait_s": round(wait_s, 2),
+        "ts": time.time(),
+        "kind": ctx.get("kind"),
+        "run_id": ctx.get("run_id"),
+        "model": metrics.get("model") or ctx.get("model"),
+        "skill": ctx.get("skill"),
+        "ticket": ctx.get("ticket"),
+        "step": ctx.get("step"),
+        "user_id": ctx.get("user_id"),
+        "tokens_in": metrics.get("tokens_in", 0),
+        "tokens_out": metrics.get("tokens_out", 0),
+        "gen_s": round(metrics.get("gen_s", 0.0), 2),
+        "wait_s": round(metrics.get("wait_s", 0.0), 2),
+        "ttft_s": round(metrics.get("ttft_s", 0.0), 3) if metrics.get("ttft_s") else None,
+        "prompt_comp": metrics.get("prompt_comp"),
+        "wasted_tokens": metrics.get("wasted_tokens", 0),
+        "trace_id": metrics.get("trace_id")
     }).execute()
 
 
@@ -122,6 +136,13 @@ def llm_totals(run_id: str) -> dict:
         return {}
     return {"tokens_in": sum(r["tokens_in"] for r in rows),
             "tokens_out": sum(r["tokens_out"] for r in rows), "llm_calls": len(rows)}
+
+def llm_rows_since(cutoff_ts: float) -> list[dict]:
+    """Raw llm_calls rows since a timestamp, for cost and budget reports. Raises on DB errors."""
+    return (supabase.table("llm_calls")
+            .select("ts,run_id,skill,ticket,kind,tokens_in,tokens_out,gen_s,wasted_tokens")
+            .gte("ts", cutoff_ts)
+            .execute().data) or []
 
 _SET_CACHE: dict = {}
 

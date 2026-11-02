@@ -73,8 +73,11 @@ store.supabase.table("llm_calls").delete().eq("run_id", RUN).execute()
 # 5. new runs columns
 store.save_run({"id": RUN, "ticket": "INC0000000", "status": "done", "steps": 3,
                 "tokens_in": 150, "tokens_out": 30, "requester": "selftest"})
-row = store.supabase.table("runs").select("steps,tokens_in,requester").eq("id", RUN).execute().data
+row = store.supabase.table("runs").select("steps,tokens_in,requester,ticket_provider,ticket_external_id").eq("id", RUN).execute().data
 check("runs table has the new columns", bool(row) and row[0]["steps"] == 3, str(row))
+check("run stores {provider, external_id} next to the legacy ticket",
+      bool(row) and row[0]["ticket_provider"] == "servicenow"
+      and row[0]["ticket_external_id"] == "INC0000000", str(row))
 store.supabase.table("runs").delete().eq("id", RUN).execute()
 
 print("\nALL PASS" if not failures else f"\n{failures} FAILED")

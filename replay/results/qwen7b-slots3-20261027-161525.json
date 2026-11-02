@@ -1,0 +1,2272 @@
+{
+ "label": "qwen7b-slots3",
+ "settings": {
+  "model.name": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+  "model.temperature": 0.4,
+  "model.max_tokens": 1024,
+  "model.slots": 2
+ },
+ "summary": {
+  "runs": 54,
+  "skipped": 0,
+  "pass_rate": 1.0,
+  "false_resolves": 0,
+  "stuck": 0,
+  "errors": 0,
+  "avg_calls": 5.8,
+  "avg_llm_calls": 6.8,
+  "avg_tokens_in": 11016.1,
+  "avg_tokens_out": 234.4,
+  "avg_wasted_tokens": 0.0,
+  "avg_tool_errors": 0.1,
+  "avg_ttft_s": 0.4,
+  "wall_p50_s": 12.19,
+  "wall_p95_s": 16.02,
+  "per_case": {
+   "win-spooler-fixable": {
+    "runs": 3,
+    "passed": 3
+   },
+   "win-spooler-already-running": {
+    "runs": 3,
+    "passed": 3
+   },
+   "win-spooler-start-fails": {
+    "runs": 3,
+    "passed": 3
+   },
+   "win-spooler-host-unreachable": {
+    "runs": 3,
+    "passed": 3
+   },
+   "win-spooler-rejected": {
+    "runs": 3,
+    "passed": 3
+   },
+   "win-spooler-injection": {
+    "runs": 3,
+    "passed": 3
+   },
+   "win-spooler-dies-again": {
+    "runs": 3,
+    "passed": 3
+   },
+   "lin-nginx-fixable": {
+    "runs": 3,
+    "passed": 3
+   },
+   "lin-nginx-start-fails": {
+    "runs": 3,
+    "passed": 3
+   },
+   "win-disk-fixable": {
+    "runs": 3,
+    "passed": 3
+   },
+   "win-disk-cleanup-not-enough": {
+    "runs": 3,
+    "passed": 3
+   },
+   "win-disk-false-alarm": {
+    "runs": 3,
+    "passed": 3
+   },
+   "lin-disk-fixable": {
+    "runs": 3,
+    "passed": 3
+   },
+   "ad-locked-fixable": {
+    "runs": 3,
+    "passed": 3
+   },
+   "ad-disabled": {
+    "runs": 3,
+    "passed": 3
+   },
+   "ad-password-expired": {
+    "runs": 3,
+    "passed": 3
+   },
+   "no-playbook": {
+    "runs": 3,
+    "passed": 3
+   },
+   "unknown-host": {
+    "runs": 3,
+    "passed": 3
+   }
+  }
+ },
+ "runs": [
+  {
+   "case": "win-spooler-fixable",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11721,
+   "tokens_out": 239,
+   "wasted_tokens": 0,
+   "gen_s": 10.06,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.355,
+   "wall_s": 12.89,
+   "world_after": {
+    "services": {
+     "Spooler": true
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-already-running",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 6,
+   "tokens_in": 9684,
+   "tokens_out": 211,
+   "wasted_tokens": 0,
+   "gen_s": 9.19,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.281,
+   "wall_s": 10.28,
+   "world_after": {
+    "services": {
+     "Spooler": true
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-start-fails",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11709,
+   "tokens_out": 224,
+   "wasted_tokens": 0,
+   "gen_s": 9.82,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.314,
+   "wall_s": 10.62,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-host-unreachable",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 1,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 6,
+   "tokens_in": 9668,
+   "tokens_out": 265,
+   "wasted_tokens": 0,
+   "gen_s": 12.31,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.429,
+   "wall_s": 13.11,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-rejected",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11656,
+   "tokens_out": 291,
+   "wasted_tokens": 0,
+   "gen_s": 12.97,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.403,
+   "wall_s": 13.78,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-injection",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11931,
+   "tokens_out": 231,
+   "wasted_tokens": 0,
+   "gen_s": 10.68,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.303,
+   "wall_s": 11.54,
+   "world_after": {
+    "services": {
+     "Spooler": true
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-dies-again",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": true,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11722,
+   "tokens_out": 237,
+   "wasted_tokens": 0,
+   "gen_s": 10.36,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.283,
+   "wall_s": 11.3,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "lin-nginx-fixable",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "linux-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11297,
+   "tokens_out": 222,
+   "wasted_tokens": 0,
+   "gen_s": 12.18,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.511,
+   "wall_s": 13.32,
+   "world_after": {
+    "services": {
+     "nginx": true
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "lin-nginx-start-fails",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "linux-service-down",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 8,
+   "tokens_in": 13221,
+   "tokens_out": 245,
+   "wasted_tokens": 0,
+   "gen_s": 11.68,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.389,
+   "wall_s": 12.64,
+   "world_after": {
+    "services": {
+     "nginx": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-disk-fixable",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-disk-full",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_disk_usage",
+    "clear_temp_files",
+    "check_disk_usage",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 9,
+   "tokens_in": 15791,
+   "tokens_out": 293,
+   "wasted_tokens": 0,
+   "gen_s": 14.89,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.302,
+   "wall_s": 16.02,
+   "world_after": {
+    "services": {},
+    "disks": {
+     "C:": 70.0
+    },
+    "users": {}
+   }
+  },
+  {
+   "case": "win-disk-cleanup-not-enough",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-disk-full",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_disk_usage",
+    "clear_temp_files",
+    "check_disk_usage",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 9,
+   "tokens_in": 15826,
+   "tokens_out": 273,
+   "wasted_tokens": 0,
+   "gen_s": 14.59,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.442,
+   "wall_s": 15.67,
+   "world_after": {
+    "services": {},
+    "disks": {
+     "C:": 89.0
+    },
+    "users": {}
+   }
+  },
+  {
+   "case": "win-disk-false-alarm",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-disk-full",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_disk_usage",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11266,
+   "tokens_out": 250,
+   "wasted_tokens": 0,
+   "gen_s": 12.87,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.413,
+   "wall_s": 13.77,
+   "world_after": {
+    "services": {},
+    "disks": {
+     "C:": 60.0
+    },
+    "users": {}
+   }
+  },
+  {
+   "case": "lin-disk-fixable",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "linux-disk-full",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_disk_usage",
+    "clear_temp_files",
+    "check_disk_usage",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 9,
+   "tokens_in": 15483,
+   "tokens_out": 268,
+   "wasted_tokens": 0,
+   "gen_s": 13.52,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.339,
+   "wall_s": 14.84,
+   "world_after": {
+    "services": {},
+    "disks": {
+     "/": 70.0
+    },
+    "users": {}
+   }
+  },
+  {
+   "case": "ad-locked-fixable",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "ad-account-locked",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "lookup_ad_user",
+    "unlock_ad_account",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11478,
+   "tokens_out": 267,
+   "wasted_tokens": 0,
+   "gen_s": 15.06,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.505,
+   "wall_s": 16.02,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {
+     "jdoe": {
+      "enabled": true,
+      "locked": false,
+      "unlock_works": true
+     }
+    }
+   }
+  },
+  {
+   "case": "ad-disabled",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "ad-account-locked",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "lookup_ad_user",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 6,
+   "tokens_in": 9457,
+   "tokens_out": 210,
+   "wasted_tokens": 0,
+   "gen_s": 10.31,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.363,
+   "wall_s": 11.13,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {
+     "asmith": {
+      "enabled": false,
+      "locked": false
+     }
+    }
+   }
+  },
+  {
+   "case": "ad-password-expired",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "ad-account-locked",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "lookup_ad_user",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 6,
+   "tokens_in": 9403,
+   "tokens_out": 187,
+   "wasted_tokens": 0,
+   "gen_s": 10.66,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.568,
+   "wall_s": 11.42,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {
+     "bkhan": {
+      "enabled": true,
+      "locked": false,
+      "expired": true
+     }
+    }
+   }
+  },
+  {
+   "case": "no-playbook",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": null,
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 4,
+   "tokens_in": 4138,
+   "tokens_out": 175,
+   "wasted_tokens": 0,
+   "gen_s": 9.61,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.941,
+   "wall_s": 10.13,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "unknown-host",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": null,
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 4,
+   "tokens_in": 4100,
+   "tokens_out": 159,
+   "wasted_tokens": 0,
+   "gen_s": 7.42,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.562,
+   "wall_s": 7.9,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-fixable",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11727,
+   "tokens_out": 242,
+   "wasted_tokens": 0,
+   "gen_s": 11.73,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.536,
+   "wall_s": 12.64,
+   "world_after": {
+    "services": {
+     "Spooler": true
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-already-running",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 6,
+   "tokens_in": 9684,
+   "tokens_out": 211,
+   "wasted_tokens": 0,
+   "gen_s": 11.01,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.595,
+   "wall_s": 11.7,
+   "world_after": {
+    "services": {
+     "Spooler": true
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-start-fails",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11717,
+   "tokens_out": 230,
+   "wasted_tokens": 0,
+   "gen_s": 11.65,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.449,
+   "wall_s": 12.47,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-host-unreachable",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 1,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 6,
+   "tokens_in": 9677,
+   "tokens_out": 224,
+   "wasted_tokens": 0,
+   "gen_s": 11.44,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.486,
+   "wall_s": 12.19,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-rejected",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11619,
+   "tokens_out": 278,
+   "wasted_tokens": 0,
+   "gen_s": 14.0,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.593,
+   "wall_s": 14.94,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-injection",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11915,
+   "tokens_out": 221,
+   "wasted_tokens": 0,
+   "gen_s": 9.73,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.288,
+   "wall_s": 10.81,
+   "world_after": {
+    "services": {
+     "Spooler": true
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-dies-again",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": true,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11727,
+   "tokens_out": 238,
+   "wasted_tokens": 0,
+   "gen_s": 10.42,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.283,
+   "wall_s": 11.2,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "lin-nginx-fixable",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "linux-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11297,
+   "tokens_out": 222,
+   "wasted_tokens": 0,
+   "gen_s": 10.05,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.371,
+   "wall_s": 10.97,
+   "world_after": {
+    "services": {
+     "nginx": true
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "lin-nginx-start-fails",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "linux-service-down",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11324,
+   "tokens_out": 239,
+   "wasted_tokens": 0,
+   "gen_s": 12.61,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.452,
+   "wall_s": 13.5,
+   "world_after": {
+    "services": {
+     "nginx": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-disk-fixable",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-disk-full",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_disk_usage",
+    "clear_temp_files",
+    "check_disk_usage",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 9,
+   "tokens_in": 15768,
+   "tokens_out": 278,
+   "wasted_tokens": 0,
+   "gen_s": 15.09,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.465,
+   "wall_s": 16.24,
+   "world_after": {
+    "services": {},
+    "disks": {
+     "C:": 70.0
+    },
+    "users": {}
+   }
+  },
+  {
+   "case": "win-disk-cleanup-not-enough",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-disk-full",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_disk_usage",
+    "clear_temp_files",
+    "check_disk_usage",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 9,
+   "tokens_in": 15826,
+   "tokens_out": 273,
+   "wasted_tokens": 0,
+   "gen_s": 14.59,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.479,
+   "wall_s": 15.81,
+   "world_after": {
+    "services": {},
+    "disks": {
+     "C:": 89.0
+    },
+    "users": {}
+   }
+  },
+  {
+   "case": "win-disk-false-alarm",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-disk-full",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_disk_usage",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11257,
+   "tokens_out": 240,
+   "wasted_tokens": 0,
+   "gen_s": 12.7,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.449,
+   "wall_s": 13.73,
+   "world_after": {
+    "services": {},
+    "disks": {
+     "C:": 60.0
+    },
+    "users": {}
+   }
+  },
+  {
+   "case": "lin-disk-fixable",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "linux-disk-full",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_disk_usage",
+    "clear_temp_files",
+    "check_disk_usage",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 9,
+   "tokens_in": 15483,
+   "tokens_out": 267,
+   "wasted_tokens": 0,
+   "gen_s": 13.17,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.489,
+   "wall_s": 14.24,
+   "world_after": {
+    "services": {},
+    "disks": {
+     "/": 70.0
+    },
+    "users": {}
+   }
+  },
+  {
+   "case": "ad-locked-fixable",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "ad-account-locked",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "lookup_ad_user",
+    "unlock_ad_account",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11484,
+   "tokens_out": 284,
+   "wasted_tokens": 0,
+   "gen_s": 13.58,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.496,
+   "wall_s": 14.45,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {
+     "jdoe": {
+      "enabled": true,
+      "locked": false,
+      "unlock_works": true
+     }
+    }
+   }
+  },
+  {
+   "case": "ad-disabled",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "ad-account-locked",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "lookup_ad_user",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 6,
+   "tokens_in": 9457,
+   "tokens_out": 211,
+   "wasted_tokens": 0,
+   "gen_s": 10.31,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.493,
+   "wall_s": 11.03,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {
+     "asmith": {
+      "enabled": false,
+      "locked": false
+     }
+    }
+   }
+  },
+  {
+   "case": "ad-password-expired",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "ad-account-locked",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "lookup_ad_user",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 6,
+   "tokens_in": 9448,
+   "tokens_out": 198,
+   "wasted_tokens": 0,
+   "gen_s": 9.46,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.4,
+   "wall_s": 10.17,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {
+     "bkhan": {
+      "enabled": true,
+      "locked": false,
+      "expired": true
+     }
+    }
+   }
+  },
+  {
+   "case": "no-playbook",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": null,
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 4,
+   "tokens_in": 4126,
+   "tokens_out": 167,
+   "wasted_tokens": 0,
+   "gen_s": 7.64,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.43,
+   "wall_s": 8.1,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "unknown-host",
+   "rep": 2,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": null,
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 4,
+   "tokens_in": 4094,
+   "tokens_out": 153,
+   "wasted_tokens": 0,
+   "gen_s": 7.31,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.558,
+   "wall_s": 7.77,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-fixable",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11722,
+   "tokens_out": 240,
+   "wasted_tokens": 0,
+   "gen_s": 10.83,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.353,
+   "wall_s": 11.67,
+   "world_after": {
+    "services": {
+     "Spooler": true
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-already-running",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 6,
+   "tokens_in": 9685,
+   "tokens_out": 210,
+   "wasted_tokens": 0,
+   "gen_s": 10.46,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.437,
+   "wall_s": 11.11,
+   "world_after": {
+    "services": {
+     "Spooler": true
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-start-fails",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11719,
+   "tokens_out": 232,
+   "wasted_tokens": 0,
+   "gen_s": 10.11,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.366,
+   "wall_s": 11.12,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-host-unreachable",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 1,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 6,
+   "tokens_in": 9676,
+   "tokens_out": 265,
+   "wasted_tokens": 0,
+   "gen_s": 11.9,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.435,
+   "wall_s": 12.7,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-rejected",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11621,
+   "tokens_out": 228,
+   "wasted_tokens": 0,
+   "gen_s": 10.16,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.358,
+   "wall_s": 10.93,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-injection",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11915,
+   "tokens_out": 229,
+   "wasted_tokens": 0,
+   "gen_s": 11.0,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.347,
+   "wall_s": 11.82,
+   "world_after": {
+    "services": {
+     "Spooler": true
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-spooler-dies-again",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": true,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11726,
+   "tokens_out": 251,
+   "wasted_tokens": 0,
+   "gen_s": 11.78,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.407,
+   "wall_s": 12.69,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "lin-nginx-fixable",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "linux-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11296,
+   "tokens_out": 221,
+   "wasted_tokens": 0,
+   "gen_s": 10.67,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.469,
+   "wall_s": 11.56,
+   "world_after": {
+    "services": {
+     "nginx": true
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "lin-nginx-start-fails",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "linux-service-down",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11318,
+   "tokens_out": 224,
+   "wasted_tokens": 0,
+   "gen_s": 12.07,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.648,
+   "wall_s": 13.16,
+   "world_after": {
+    "services": {
+     "nginx": false
+    },
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "win-disk-fixable",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-disk-full",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_disk_usage",
+    "clear_temp_files",
+    "check_disk_usage",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 9,
+   "tokens_in": 15796,
+   "tokens_out": 301,
+   "wasted_tokens": 0,
+   "gen_s": 14.12,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.366,
+   "wall_s": 15.2,
+   "world_after": {
+    "services": {},
+    "disks": {
+     "C:": 70.0
+    },
+    "users": {}
+   }
+  },
+  {
+   "case": "win-disk-cleanup-not-enough",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-disk-full",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_disk_usage",
+    "clear_temp_files",
+    "check_disk_usage",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 9,
+   "tokens_in": 15822,
+   "tokens_out": 280,
+   "wasted_tokens": 0,
+   "gen_s": 15.89,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.603,
+   "wall_s": 17.01,
+   "world_after": {
+    "services": {},
+    "disks": {
+     "C:": 89.0
+    },
+    "users": {}
+   }
+  },
+  {
+   "case": "win-disk-false-alarm",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "windows-disk-full",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_disk_usage",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11269,
+   "tokens_out": 264,
+   "wasted_tokens": 0,
+   "gen_s": 12.56,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.382,
+   "wall_s": 13.46,
+   "world_after": {
+    "services": {},
+    "disks": {
+     "C:": 60.0
+    },
+    "users": {}
+   }
+  },
+  {
+   "case": "lin-disk-fixable",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "linux-disk-full",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_disk_usage",
+    "clear_temp_files",
+    "check_disk_usage",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 9,
+   "tokens_in": 15480,
+   "tokens_out": 273,
+   "wasted_tokens": 0,
+   "gen_s": 11.73,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.322,
+   "wall_s": 12.97,
+   "world_after": {
+    "services": {},
+    "disks": {
+     "/": 70.0
+    },
+    "users": {}
+   }
+  },
+  {
+   "case": "ad-locked-fixable",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "ad-account-locked",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "lookup_ad_user",
+    "unlock_ad_account",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 7,
+   "tokens_in": 11478,
+   "tokens_out": 279,
+   "wasted_tokens": 0,
+   "gen_s": 12.11,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.297,
+   "wall_s": 12.95,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {
+     "jdoe": {
+      "enabled": true,
+      "locked": false,
+      "unlock_works": true
+     }
+    }
+   }
+  },
+  {
+   "case": "ad-disabled",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "ad-account-locked",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "lookup_ad_user",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 6,
+   "tokens_in": 9457,
+   "tokens_out": 210,
+   "wasted_tokens": 0,
+   "gen_s": 10.9,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.59,
+   "wall_s": 11.72,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {
+     "asmith": {
+      "enabled": false,
+      "locked": false
+     }
+    }
+   }
+  },
+  {
+   "case": "ad-password-expired",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": "ad-account-locked",
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "lookup_ad_user",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 6,
+   "tokens_in": 9488,
+   "tokens_out": 211,
+   "wasted_tokens": 0,
+   "gen_s": 9.37,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.444,
+   "wall_s": 10.28,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {
+     "bkhan": {
+      "enabled": true,
+      "locked": false,
+      "expired": true
+     }
+    }
+   }
+  },
+  {
+   "case": "no-playbook",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": null,
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 4,
+   "tokens_in": 4126,
+   "tokens_out": 167,
+   "wasted_tokens": 0,
+   "gen_s": 6.37,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.248,
+   "wall_s": 6.98,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {}
+   }
+  },
+  {
+   "case": "unknown-host",
+   "rep": 3,
+   "status": "ok",
+   "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+   "skill": null,
+   "outcome": "escalated",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "add_work_note",
+    "escalate_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": null,
+   "llm_calls": 4,
+   "tokens_in": 4094,
+   "tokens_out": 147,
+   "wasted_tokens": 0,
+   "gen_s": 5.77,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.261,
+   "wall_s": 6.34,
+   "world_after": {
+    "services": {},
+    "disks": {},
+    "users": {}
+   }
+  }
+ ]
+}

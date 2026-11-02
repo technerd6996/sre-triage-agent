@@ -1,0 +1,75 @@
+{
+ "label": "dbg",
+ "settings": {
+  "model.name": "Qwen/Qwen3-8B-AWQ",
+  "model.temperature": 0.4,
+  "model.max_tokens": 1024,
+  "model.slots": 2
+ },
+ "summary": {
+  "runs": 1,
+  "skipped": 0,
+  "pass_rate": 0.0,
+  "false_resolves": 0,
+  "stuck": 0,
+  "errors": 1,
+  "avg_calls": 0.0,
+  "avg_llm_calls": 0.0,
+  "avg_tokens_in": 0.0,
+  "avg_tokens_out": 0.0,
+  "avg_wasted_tokens": 0.0,
+  "avg_tool_errors": 0.0,
+  "avg_ttft_s": null,
+  "wall_p50_s": 0.14,
+  "wall_p95_s": 0.14,
+  "checker_runs": 0,
+  "code_wrong": 0,
+  "llm_wrong": 0,
+  "llm_unverified": 0,
+  "per_case": {
+   "win-spooler-fixable": {
+    "runs": 1,
+    "passed": 0
+   }
+  }
+ },
+ "runs": [
+  {
+   "case": "win-spooler-fixable",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen3-8B-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "error",
+   "passed": false,
+   "problems": [
+    "outcome error, expected resolved",
+    "never called start_service"
+   ],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [],
+   "tool_errors": 0,
+   "nudges": 0,
+   "approvals": 0,
+   "error": "404 Client Error: Not Found for url: https://cushy-excavator-prism.ngrok-free.dev/v1/chat/completions",
+   "llm_calls": 0,
+   "tokens_in": 0,
+   "tokens_out": 0,
+   "wasted_tokens": 0,
+   "gen_s": 0,
+   "wait_s": 0,
+   "ttft_avg_s": null,
+   "wall_s": 0.14,
+   "world_after": {
+    "services": {
+     "Spooler": false
+    },
+    "disks": {},
+    "users": {}
+   },
+   "checker": null
+  }
+ ]
+}

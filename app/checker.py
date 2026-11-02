@@ -13,61 +13,36 @@ import os
 import time
 import uuid
 
-from app import store
+from app import config, store
 from app.agent.report import outcome_code
-from app.tools.snow import _request
+from app.ports import registry
+from app.ports.models import TicketState
 
 log = logging.getLogger("triage.checker")
 ACTOR = "triage-checker"
-STATE_RESOLVED, STATE_IN_PROGRESS, STATE_CLOSED = "6", "2", "7"
 
 
 def mode() -> str:
-    m = os.getenv("CHECKER_MODE", "shadow").strip().lower()
-    return m if m in ("off", "shadow", "on") else "shadow"
+    return config.get("agent.checker_mode")
 
 
 def _soak() -> float:
-    return float(os.getenv("VERIFY_SOAK_SECONDS", "60"))
+    return config.get("agent.verify_soak_seconds")
 
 
-# ---- ServiceNow, as the checker identity ----
-def _snow(method: str, path: str, **kw):
-    return _request(method, path, identity="checker", **kw)
+# ---- the ticket system, as the checker identity (through the Ticketing port) ----
+def _tk():
+    return registry.get_ticketing(role="reviewer")
 
 
-def _sys_id(table: str, query: str) -> str:
-    rows = _snow("GET", table, params={"sysparm_query": query, "sysparm_limit": 1, "sysparm_fields": "sys_id"})
-    if not rows:
-        raise ValueError(f"Not found in ServiceNow: {table} {query}")
-    return rows[0]["sys_id"]
+# (nothing: these four helpers are removed; the logic now lives in the ServiceNow adapter)
+
+# ---- the ticket system, as the checker identity (through the Ticketing port) ----
+def _tk():
+    return registry.get_ticketing(role="reviewer")
 
 
-def _ticket(number: str) -> tuple[str, str]:
-    """(sys_id, raw state code) read with the checker's own account."""
-    rows = _snow("GET", "incident", params={
-        "sysparm_query": f"number={number}", "sysparm_limit": 1,
-        "sysparm_fields": "sys_id,state", "sysparm_display_value": "false"})
-    if not rows:
-        raise ValueError(f"Incident {number} not found")
-    return rows[0]["sys_id"], str(rows[0]["state"])
-
-
-def _note(sys_id: str, text: str, **fields) -> None:
-    _snow("PATCH", f"incident/{sys_id}", json={**fields, "work_notes": text[:8000]})
-
-
-def _set_state(number: str, sys_id: str, state: str, text: str, **fields) -> None:
-    """Changes the state and re-reads it: ServiceNow can silently ignore a write the account may not make."""
-    _note(sys_id, text, state=state, **fields)
-    _, now = _ticket(number)
-    if now != state:
-        try:
-            _note(sys_id, f"{ACTOR}: ServiceNow did not accept the change to state {state}; the ticket is still "
-                          f"{now}. Disregard the note above.")
-        except Exception:
-            pass
-        raise RuntimeError(f"ServiceNow ignored the state change (still {now}). Check the checker's roles and ACLs.")
+# ---- what to verify, taken from what the agent actually did ----
 
 
 # ---- what to verify, taken from what the agent actually did ----
@@ -92,6 +67,12 @@ def _spec(run: dict):
         a = _last_call(run, "lookup_ad_user", "unlock_ad_account")
         if a.get("username"):
             return "ad", {"username": a["username"]}
+    elif skill in ("linux-high-memory", "windows-high-memory"):
+        a = _last_call(run, "check_memory_usage")
+        return "memory", {"target": a.get("target") or ("linux" if skill.startswith("linux") else "windows")}
+    elif skill in ("linux-high-cpu", "windows-high-cpu"):
+        a = _last_call(run, "check_cpu_usage")
+        return "cpu", {"target": a.get("target") or ("linux" if skill.startswith("linux") else "windows")}
     return None
 
 
@@ -115,13 +96,20 @@ def _check(kind: str, args: dict):
             return None, f"could not look up {args['username']}: {r['error']}"
         ok = bool(r.get("Enabled")) and not r.get("LockedOut")
         return ok, f"AD user {args['username']}: enabled={bool(r.get('Enabled'))}, locked out={bool(r.get('LockedOut'))}"
+    if kind in ("memory", "cpu"):
+        from app.tools.infra_perf import check_cpu_usage, check_memory_usage
+        r = (check_memory_usage if kind == "memory" else check_cpu_usage).invoke(args)
+        if r.get("error"):
+            return None, f"could not check {kind} on {args['target']}: {r['error']}"
+        val = r.get("used_pct") if kind == "memory" else r.get("cpu_pct")
+        return not r.get("over_threshold"), f"{kind} on {args['target']}: {val}% (limit {r.get('threshold_pct')}%)"
     return None, f"unknown check kind {kind}"
 
 
 def _run_checks(kind: str, args: dict):
     """Services are checked twice, VERIFY_SOAK_SECONDS apart, to catch a service that comes up and dies again."""
     notes = []
-    for i in range(2 if kind == "service" else 1):
+    for i in range(2 if kind in ("service", "cpu") else 1):
         if i:
             time.sleep(_soak())
         ok, text = _check(kind, args)
@@ -191,6 +179,27 @@ def _report(run: dict, kind: str, notes: list, verdict: str, comment: str, prefi
     return "\n".join(lines)
 
 
+def _run_llm_checker(run: dict):
+    from app.agent.agent import deploy_agent
+    tools = ("check_reachability", "check_disk_usage", "check_service_status", "lookup_ad_user", "get_cloudwatch_metric")
+    agent, config = deploy_agent("checker", run["ticket"], tools)
+    
+    case_file = f"Ticket: {run['ticket']}\nServer: {run.get('server')}\nActions taken:\n"
+    for e in run.get("events", []):
+        if e.get("type") == "tool_call":
+            case_file += f"- Called {e.get('name')} with {e.get('args')}\n"
+        elif e.get("type") == "tool_result":
+            case_file += f"  Result: {str(e.get('content'))[:200]}\n"
+    
+    payload = {"messages": [{"role": "user", "content": f"CASE FILE:\n{case_file}\n\nPlease verify the fix."}]}
+    try:
+        res = agent.invoke(payload, config)
+        text = res["messages"][-1].content
+        verdict = "pass" if "VERDICT: PASS" in text else ("fail" if "VERDICT: FAIL" in text else "unverified")
+        return verdict, text
+    except Exception as e:
+        return "error", str(e)
+
 # ---- entry point ----
 def verify_run(run: dict, emit=lambda text, verdict=None: None):
     """Verifies a run that ended 'resolved'. Returns 'pass', 'fail', 'unverified' or None (nothing done).
@@ -206,16 +215,28 @@ def verify_run(run: dict, emit=lambda text, verdict=None: None):
     ticket = run["ticket"]
     tag = "" if md == "on" else "shadow-"
     shadow = "" if md == "on" else "[shadow] "
+    tk = _tk()
     try:
-        sys_id, state = _ticket(ticket)
+        state = tk.get(ticket).state
     except Exception as e:
         _audit(run, "verify_error", str(e)[:300])
         return None
-    if state != STATE_RESOLVED:
-        _audit(run, "verify_skipped", f"ticket state is {state}, not Resolved")
+    if state is not TicketState.RESOLVED:
+        _audit(run, "verify_skipped", f"ticket state is {state.value}, not Resolved")
         return None
+        
     emit("Checker: verifying the fix independently")
     ok, notes = _run_checks(kind, args)
+    
+    # P8 Multi-Agent Pipeline: Deploy LLM Checker in shadow mode next to code checker
+    llm_verdict, llm_notes = _run_llm_checker(run) if config.get("agent.llm_checker") else ("off", "")
+    code_verdict = "pass" if ok is True else ("fail" if ok is False else "unverified")
+    
+    if llm_verdict != code_verdict:
+        _audit(run, "checker_disagreement", f"code={code_verdict} llm={llm_verdict} llm_notes={llm_notes[:200]}")
+    else:
+        _audit(run, "checker_agreement", f"verdict={code_verdict}")
+        
     evidence = "; ".join(notes)
     reopen_count, closed = 0, False
     try:
@@ -226,10 +247,10 @@ def verify_run(run: dict, emit=lambda text, verdict=None: None):
                           else "Would move the ticket from Resolved to Closed."))
             report = _report(run, kind, notes, verdict, comment, shadow)
             if md == "on":
-                _set_state(ticket, sys_id, STATE_CLOSED, report)
+                tk.close(ticket, report)
                 closed = True
             else:
-                _note(sys_id, report)
+                tk.add_note(ticket, report)
         elif ok is False:
             verdict = "fail"
             reopen_count = _reopens(ticket) + 1 if md == "on" else 0
@@ -238,25 +259,21 @@ def verify_run(run: dict, emit=lambda text, verdict=None: None):
                           else "Would reopen the ticket and assign it to the escalation group."))
             report = _report(run, kind, notes, verdict, comment, shadow)
             if md == "on":
-                fields = {}
-                grp = os.getenv("SNOW_ESCALATION_GROUP", "").strip()
-                if grp:
-                    fields["assignment_group"] = _sys_id("sys_user_group", f"name={grp}")
-                _set_state(ticket, sys_id, STATE_IN_PROGRESS, report, **fields)
+                tk.reopen(ticket, report, group=os.getenv("SNOW_ESCALATION_GROUP", "").strip())
             else:
-                _note(sys_id, report)
+                tk.add_note(ticket, report)
         else:
             verdict = "unverified"
             comment = ("The checker could not verify the fix (" + evidence + "). "
                        "The ticket is left in Resolved for a person to confirm.")
-            _note(sys_id, _report(run, kind, notes, verdict, comment, shadow))
+            tk.add_note(ticket, _report(run, kind, notes, verdict, comment, shadow))
     except Exception as e:
         _audit(run, "verify_error", str(e)[:300])
         log.warning("Checker failed for %s: %s", ticket, str(e)[:200])
         emit(f"Checker could not complete: {str(e)[:150]}")
         try:   # best effort: a person reading the ticket must not assume it was verified
-            _note(sys_id, f"{shadow}{ACTOR}: could not complete the verification of this fix "
-                          f"({str(e)[:150]}). The ticket was not closed. Please confirm the fix by hand.")
+            tk.add_note(ticket, f"{shadow}{ACTOR}: could not complete the verification of this fix "
+                                f"({str(e)[:150]}). The ticket was not closed. Please confirm the fix by hand.")
         except Exception:
             pass
         return None

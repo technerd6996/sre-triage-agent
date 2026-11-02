@@ -185,20 +185,9 @@ def _q(s: str) -> str:
 
 def _open_tickets(user: str, server: str = "", number: str = "") -> list:
     """Open incidents whose caller is this user (user_name or email), optionally on one server or one number."""
-    u = _q(user)
-    if not u:
-        return []
-    q = f"active=true^caller_id.user_name={u}^ORcaller_id.email={u}"
-    if server:
-        q += f"^cmdb_ci.name={_q(server)}"
-    if number:
-        q += f"^number={_q(number)}"
-    rows = _request("GET", "incident", params={
-        "sysparm_query": q + "^ORDERBYDESCsys_created_on",
-        "sysparm_fields": "number,short_description,state",
-        "sysparm_display_value": "true", "sysparm_limit": 3})
-    return [{"number": r["number"], "short_description": r.get("short_description", ""),
-             "state": r.get("state", "")} for r in rows]
+    rows = registry.get_ticketing().open_tickets(user, host=server, ticket_id=number)
+    return [{"number": t.id, "short_description": t.title,
+             "state": t.extras.get("raw_state") or t.state.value.replace("_", " ").title()} for t in rows]
 
 
 @router.get("/issues/open")

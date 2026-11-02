@@ -7,9 +7,12 @@ RISK = {
     "resolve_incident": 0, "escalate_incident": 0,
     "check_reachability": 0, "check_disk_usage": 0, "check_service_status": 0, "lookup_ad_user": 0,
     "check_ec2_status": 0, "check_security_group": 0, "get_cloudwatch_metric": 0,
+    "check_memory_usage": 0, "check_cpu_usage": 0, "top_processes": 0,
+    "check_oom_events": 0, "get_service_logs": 0, "find_large_files": 0,
     "escalate_l3": 0,  # notification only; no remediation happens at L3
     # L1: standard operations need a human
     "clear_temp_files": 1, "start_service": 1, "unlock_ad_account": 1,
+    "restart_service": 1, "clean_old_logs": 1, "kill_process": 2,
 }
 APPROVAL_FROM_LEVEL = 1
 
@@ -24,7 +27,7 @@ def interrupt_config(tools) -> dict:
 
 import os
 import time
-from app import store
+from app import config, store
 
 FLAP_LIMIT = 3
 _RESTORES: dict[str, list[float]] = {}
@@ -36,7 +39,7 @@ def autonomy_mode() -> str:
 
 def _never_auto() -> set[str]:
     """Optional: services that must always go to a human. Empty by default."""
-    return {s.strip().lower() for s in os.getenv("NEVER_AUTO_SERVICES", "").split(",") if s.strip()}
+    return {s.strip().lower() for s in config.get("agent.never_auto_services").split(",") if s.strip()}
 
 
 def autonomous_restore(actions, host: str = "") -> tuple[bool, str]:

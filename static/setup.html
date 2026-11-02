@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="/static/css/theme.css?v=6">
+    <script src="/static/js/theme.js?v=6"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Setup · TRIAGE-1</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: var(--font-ui); background: var(--bg); color: var(--text); }
+        .card { background: var(--panel); border: 1px solid var(--border); box-shadow: 0 12px 40px rgba(0, 0, 0, .25); }
+        .field-label { display: block; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: var(--muted); }
+        .field-input { width: 100%; padding: 11px 14px; border-radius: 10px; font-size: 16px; color: var(--text);
+            background: var(--bg); border: 1px solid var(--border-strong); outline: none; font-family: 'JetBrains Mono', monospace; }
+        .field-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+        .btn { background: var(--accent); color: var(--on-accent); }
+        .btn:hover:not(:disabled) { background: var(--accent-strong); }
+        .btn:disabled { opacity: .5; cursor: not-allowed; }
+        .btn2 { border: 1px solid var(--border-strong); color: var(--text); background: var(--panel-soft); }
+        .err { background: var(--danger-bg); color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); }
+        .note { background: var(--panel-soft); border: 1px solid var(--border); }
+        code { font-family: 'JetBrains Mono', monospace; word-break: break-all; }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+    <div class="card p-8 rounded-2xl w-full max-w-lg">
+        <h1 class="text-[22px] font-bold tracking-tight">Set up TRIAGE-1</h1>
+        <p class="text-[14px] mt-1" style="color: var(--muted)">First-run checks. Nothing changes until you press Finish setup.</p>
+
+        <div id="form">
+            <label for="code" class="field-label mt-6">Setup code</label>
+            <input id="code" class="field-input" autocomplete="off" spellcheck="false">
+            <p class="text-[13px] mt-1.5" style="color: var(--subtle)">Printed in the server console at startup (look for SETUP REQUIRED).</p>
+
+            <h2 class="text-[16px] font-semibold mt-6">Checks</h2>
+            <ul id="checks" class="mt-2 flex flex-col gap-2 text-[15px]"></ul>
+            <div class="flex gap-3 mt-3">
+                <button type="button" id="recheck" class="btn2 px-4 py-2 rounded-lg text-[14px] font-semibold">Check again</button>
+                <button type="button" id="genkey" class="btn2 px-4 py-2 rounded-lg text-[14px] font-semibold hidden">Generate encryption key</button>
+            </div>
+            <div id="keybox" class="note rounded-lg p-3 mt-3 text-[14px] hidden"></div>
+
+            <div id="msg" role="alert" class="err rounded-lg px-3 py-2.5 text-[14px] mt-4 hidden"></div>
+            <button type="button" id="finish" class="btn mt-5 w-full py-3 rounded-lg font-semibold text-[16px]" disabled>Finish setup</button>
+        </div>
+
+        <div id="done" class="hidden mt-6">
+            <h2 class="text-[16px] font-semibold">Setup complete</h2>
+            <p id="done-text" class="text-[14px] mt-2" style="color: var(--muted)"></p>
+            <div id="creds" class="note rounded-lg p-3 mt-3 text-[14px] hidden">
+                <div>User: <code id="done-user"></code></div>
+                <div class="mt-1">Default password: <code id="done-pass"></code></div>
+                <p class="mt-2" style="color: var(--muted)">This is shown once. You will be asked to change it at your first sign-in.</p>
+            </div>
+            <a href="/static/login.html" class="btn mt-5 block text-center w-full py-3 rounded-lg font-semibold text-[16px]">Continue to sign in</a>
+        </div>
+    </div>
+    <script>
+        const $ = (id) => document.getElementById(id);
+
+        function fail(text) { $('msg').textContent = text; $('msg').classList.remove('hidden'); }
+        function row(ok, text) {
+            const li = document.createElement('li');
+            li.textContent = (ok ? '✓ ' : '✗ ') + text;
+            if (!ok) li.style.color = 'var(--danger)';
+            return li;
+        }
+        async function post(url) {
+            const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                           body: JSON.stringify({ code: $('code').value.trim() }) });
+            const data = await res.json().catch(() => ({}));
+            return { ok: res.ok, data, error: typeof data.detail === 'string' ? data.detail : 'The request failed.' };
+        }
+
+        async function load() {
+            $('msg').classList.add('hidden');
+            const res = await fetch('/api/setup/status');
+            if (res.status === 404) { location.href = '/static/login.html'; return; }
+            const s = await res.json();
+            const ul = $('checks');
+            ul.replaceChildren(
+                row(s.database.ok, s.database.ok ? 'Database: all ' + s.database.checked + ' tables found'
+                                                 : 'Database: missing tables: ' + s.database.missing.join(', ')),
+                row(s.secret_key, s.secret_key ? 'Encryption key is set' : 'Encryption key is not set (needed to store secrets)'));
+            $('genkey').classList.toggle('hidden', s.secret_key);
+            $('finish').disabled = !s.database.ok;
+        }
+
+        $('recheck').addEventListener('click', load);
+
+        $('genkey').addEventListener('click', async () => {
+            $('msg').classList.add('hidden');
+            const r = await post('/api/setup/generate-key');
+            if (!r.ok) return fail(r.error);
+            const box = $('keybox');
+            const p = document.createElement('p');
+            p.textContent = r.data.saved_to_env_file
+                ? 'The key was added to your .env file. Back it up: without it, saved secrets cannot be read.'
+                : 'Add this line to your environment and back it up: without it, saved secrets cannot be read.';
+            const c = document.createElement('code');
+            c.textContent = 'TRIAGE_SECRET_KEY=' + r.data.key;
+            box.replaceChildren(p, c);
+            box.classList.remove('hidden');
+            load();
+        });
+
+        $('finish').addEventListener('click', async () => {
+            $('msg').classList.add('hidden');
+            $('finish').disabled = true;
+            const r = await post('/api/setup/complete');
+            if (!r.ok) { fail(r.error); $('finish').disabled = false; return; }
+            $('form').classList.add('hidden');
+            $('done').classList.remove('hidden');
+            if (r.data.created) {
+                $('done-text').textContent = 'The Default Super Admin account has been created.';
+                $('done-user').textContent = r.data.username;
+                $('done-pass').textContent = r.data.default_password;
+                $('creds').classList.remove('hidden');
+            } else {
+                $('done-text').textContent = 'An admin account already exists. Sign in with it.';
+            }
+        });
+
+        load();
+    </script>
+</body>
+</html>

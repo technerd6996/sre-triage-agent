@@ -1,0 +1,80 @@
+{
+ "label": "dbg",
+ "settings": {
+  "model.name": "Qwen/Qwen3-8B-AWQ",
+  "model.temperature": 0.4,
+  "model.max_tokens": 1024,
+  "model.slots": 2
+ },
+ "summary": {
+  "runs": 1,
+  "skipped": 0,
+  "pass_rate": 1.0,
+  "false_resolves": 0,
+  "stuck": 0,
+  "errors": 0,
+  "avg_calls": 7.0,
+  "avg_llm_calls": 9.0,
+  "avg_tokens_in": 15350.0,
+  "avg_tokens_out": 300.0,
+  "avg_wasted_tokens": 0.0,
+  "avg_tool_errors": 0.0,
+  "avg_ttft_s": 0.9,
+  "wall_p50_s": 20.05,
+  "wall_p95_s": 20.05,
+  "checker_runs": 0,
+  "code_wrong": 0,
+  "llm_wrong": 0,
+  "llm_unverified": 0,
+  "per_case": {
+   "win-spooler-fixable": {
+    "runs": 1,
+    "passed": 1
+   }
+  }
+ },
+ "runs": [
+  {
+   "case": "win-spooler-fixable",
+   "rep": 1,
+   "status": "ok",
+   "model": "Qwen/Qwen3-8B-AWQ",
+   "skill": "windows-service-down",
+   "outcome": "resolved",
+   "passed": true,
+   "problems": [],
+   "false_resolve": false,
+   "stuck": false,
+   "later_failure": false,
+   "calls": [
+    "claim_incident",
+    "get_incident",
+    "check_reachability",
+    "check_service_status",
+    "start_service",
+    "add_work_note",
+    "resolve_incident"
+   ],
+   "tool_errors": 0,
+   "nudges": 1,
+   "approvals": 1,
+   "error": null,
+   "llm_calls": 9,
+   "tokens_in": 15350,
+   "tokens_out": 300,
+   "wasted_tokens": 0,
+   "gen_s": 18.57,
+   "wait_s": 0.0,
+   "ttft_avg_s": 0.891,
+   "wall_s": 20.05,
+   "world_after": {
+    "services": {
+     "Spooler": true
+    },
+    "disks": {},
+    "users": {}
+   },
+   "checker": null
+  }
+ ]
+}

@@ -134,12 +134,13 @@ def _kw_match(keyword: str, text: str) -> bool:
     return re.search(rf"(?<![a-z0-9]){kw}(?:e?s)?(?![a-z0-9])", text) is not None
 
 
-def pick_skill(ticket_text: str, platform: str = None):
-    """Technical skill whose keywords match best, limited to skills for this platform."""
+def pick_skill(ticket_text: str, platform: str = None, audience: str = "l1"):
     text = ticket_text.lower()
     best_name, best, best_score = None, None, 0
     for name, s in load_skills().items():
         if name == BASE_SKILL:
+            continue
+        if s["meta"].get("audience", "l1") != audience:      # NEW
             continue
         systems = s["meta"].get("systems", [])
         if platform and systems and platform not in systems:

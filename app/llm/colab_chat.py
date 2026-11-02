@@ -6,6 +6,7 @@ Tool calling is done through the prompt: the model is told to answer with one JS
 object {"tool": "...", "args": {...}} when it wants a tool, and plain text when done.
 """
 import json
+import logging
 import time
 import uuid
 from typing import Any, List, Optional
@@ -18,6 +19,8 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import Field
+
+log = logging.getLogger("uvicorn.error")
 
 TOOL_INSTRUCTIONS = """You can use tools. Available tools:
 {tool_list}
@@ -32,6 +35,31 @@ RULES:
 
 TERMINAL_TOOLS = {"resolve_incident", "escalate_incident"}
 
+_SESSION = requests.Session()      # one keep-alive connection, reused by every call
+
+RETRY_STATUS = {429, 502, 503, 504}
+BACKOFF = (0, 3, 10, 25)
+
+def post_with_retry(url, payload, timeout):
+    """POST to the model server. Retries dropped connections and busy responses
+    (429/502/503/504) with backoff. Only the response status is retried, never a reply
+    that has already started streaming."""
+    last = None
+    for wait in BACKOFF:
+        if wait:
+            time.sleep(wait)
+        try:
+            r = _SESSION.post(url, json=payload, stream=True, timeout=timeout)
+        except requests.exceptions.ConnectionError as e:
+            last = e
+            _SESSION.close()           # drop the dead connection so the retry opens a fresh one
+            continue
+        if r.status_code in RETRY_STATUS:
+            last = requests.exceptions.HTTPError(f"Model server busy: HTTP {r.status_code}")
+            r.close()
+            continue
+        return r
+    raise last
 
 class ColabChat(BaseChatModel):
     url: str                                   # COLAB_API_URL (the /generate endpoint)
@@ -76,8 +104,11 @@ class ColabChat(BaseChatModel):
                                  "Reply with a two-sentence plain-text summary and no JSON.")
                 else:
                     follow_up = "Continue with the next step in the playbook. Call ONE tool or give the final answer."
+                body = str(m.content)
+                if len(body) > 800:
+                    body = body[:800] + " ...[truncated]"
                 out.append({"role": "user",
-                            "content": f"[TOOL RESULT from {m.name}]: {m.content}\n{follow_up}"})
+                            "content": f"[TOOL RESULT from {m.name}]: {body}\n{follow_up}"})
         if self.tools_spec:
             system_parts.append(self._tool_prompt())
         if system_parts:
@@ -89,6 +120,9 @@ class ColabChat(BaseChatModel):
         names = {s["name"] for s in self.tools_spec}
         decoder = json.JSONDecoder()
         i = text.find("{")
+        
+        json_failed = False
+        
         while self.tools_spec and i != -1:
             try:
                 obj, _ = decoder.raw_decode(text[i:])
@@ -99,24 +133,101 @@ class ColabChat(BaseChatModel):
                             "name": obj["tool"], "args": args,
                             "id": f"call_{uuid.uuid4().hex[:8]}", "type": "tool_call"}])
             except ValueError:
+                json_failed = True
                 pass
             i = text.find("{", i + 1)
+            
+        # If it tried to output JSON but failed, flag it in the active context
+        if json_failed:
+            ctx = usage.agent_context()
+            ctx["wasted_tokens"] = usage.count_tokens(text)
+            
         return AIMessage(content=text.strip())
+
+    def _open(self, payload: dict, timeout):
+        """POST over a reused connection, with retry on dropped connections and busy responses."""
+        return post_with_retry(self.url, payload, timeout)
 
     def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None,
                   run_manager: Any = None, **kwargs: Any) -> ChatResult:
         msgs = self._to_colab(messages)
-        run_id, kind = usage.agent_context()          # 'triage' or 'resume', set by _consume
+        ctx = usage.agent_context()
+        
+        # Calculate prompt composition (System vs History vs Latest Action)
+        comp = {"system": 0, "history": 0, "latest": 0}
+        for i, m in enumerate(msgs):
+            toks = usage.count_tokens(m.get("content", ""))
+            if m.get("role") == "system":
+                comp["system"] += toks
+            elif i == len(msgs) - 1:
+                comp["latest"] += toks
+            else:
+                comp["history"] += toks
+        
+        # Initial estimates in case the stream breaks early
         tokens_in = usage.count_messages(msgs)
+        tokens_out = 0
         text = ""
-        with llm_slot(kind) as waited:
+        ttft = None
+        
+        from app import config
+        model_name = config.get("model.name")
+        usage_exact = False
+        payload = {
+            "model": model_name,
+            "messages": msgs,
+            "stream": True,
+            "temperature": config.get("model.temperature"),
+            "max_tokens": config.get("model.max_tokens"),
+            "stream_options": {"include_usage": True},
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        
+        with llm_slot(ctx["kind"]) as waited:
             t0 = time.time()
-            with requests.post(self.url, json={"messages": msgs},
-                               stream=True, timeout=self.timeout) as r:
+            with self._open(payload, config.get("model.timeout_seconds")) as r:
                 r.raise_for_status()
-                for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
-                    if chunk:
-                        text += chunk
+                for line in r.iter_lines(decode_unicode=True):
+                    if line and line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            continue          # keep reading to the end so the connection can be reused
+                        try:
+                            chunk = json.loads(data_str)
+                            # Capture exact token usage from the final vLLM chunk
+                            if chunk.get("usage"):
+                                usage_exact = True
+                                tokens_in = chunk["usage"].get("prompt_tokens", tokens_in)
+                                tokens_out = chunk["usage"].get("completion_tokens", tokens_out)
+                            
+                            delta = chunk["choices"][0].get("delta", {}) if chunk.get("choices") else {}
+                            if "content" in delta and delta["content"]:
+                                if ttft is None:
+                                    ttft = time.time() - t0
+                                text += delta["content"]
+                        except (json.JSONDecodeError, IndexError):
+                            continue
             seconds = time.time() - t0
-        usage.log_call(kind, run_id, tokens_in, usage.count_tokens(text), seconds, waited)
+        
+        if not usage_exact:
+            log.warning("LLM server sent no usage block: token counts for this call are estimates")
+        if not tokens_out:
+            tokens_out = usage.count_tokens(text)
+            
+        wasted = ctx.get("wasted_tokens", 0)
+        if wasted > 0:
+            ctx["wasted_tokens"] = 0  # Reset for next call
+            
+        metrics = {
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "gen_s": seconds,
+            "wait_s": waited,
+            "ttft_s": ttft,
+            "prompt_comp": comp,
+            "wasted_tokens": wasted,
+            "model": model_name
+        }
+        
+        usage.log_call(metrics)
         return ChatResult(generations=[ChatGeneration(message=self._parse(text))])

@@ -39,6 +39,7 @@
             </div>
         </div>
         
+        <div id="default-banner" class="login-error rounded-lg px-3 py-2.5 text-[14px] mb-5 hidden" role="status"></div>
         <form id="login-form" class="flex flex-col gap-5">
             <div>
                 <label for="username" class="field-label">Username</label>
@@ -105,7 +106,8 @@
                 const data = await res.json().catch(() => ({}));
                 if (res.ok) {
                     redirecting = true;   // keep the button disabled while the page changes
-                    window.location.href = data.role === 'admin' ? '/admin' : '/';
+                    window.location.href = data.must_change_password ? '/static/change-password.html'
+                        : (data.home || '/');
                     return;
                 }
                 if (res.status === 429) {
@@ -124,6 +126,14 @@
                 if (!redirecting) { btn.disabled = false; btn.textContent = 'Sign in'; }
             }
         });
+        
+        fetch('/api/auth/banner').then((r) => r.json()).then((b) => {
+            if (!b.default_admin) return;
+            const el = document.getElementById('default-banner');
+            el.textContent = 'First sign-in: use the account ' + b.username +
+                ' with the default password from the setup guide. You will be asked to change it straight away.';
+            el.classList.remove('hidden');
+        }).catch(() => {});
     </script>
 </body>
 </html>

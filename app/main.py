@@ -8,6 +8,11 @@ import time
 import requests
 from typing import Annotated, Literal
 from dotenv import load_dotenv
+
+load_dotenv()                      # bootstrap values (database connection, secret key) still come from here
+from app import config             # noqa: E402
+config.hydrate_environ()           # saved settings and secrets fill the environment before anything reads it
+
 from fastapi import FastAPI, UploadFile, File
 from fastapi.concurrency import run_in_threadpool
 from fastapi import HTTPException, Request
@@ -24,8 +29,8 @@ from app.api.agent import _active, start_run
 from app.api.issues import redact
 from app.llm import usage
 from app.llm.gate import LLMBusy, llm_slot
+from app.llm.client import llm_post, log_stream
 from app.api.admin import router as admin_router
-
 
 # Centralized SRE persona rules
 from pathlib import Path
@@ -40,8 +45,16 @@ log = logging.getLogger("uvicorn.error")
 
 app = FastAPI()
 from app.auth import AuthMiddleware
+from app import bootstrap
 app.add_middleware(AuthMiddleware)
+bootstrap.announce_setup_if_needed()          # prints the setup code in the console on a fresh install
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+try:
+    from app.tools.host_lock import start_watchdog
+    start_watchdog()    # warns in the log if a per-host lock is ever held unusually long (a leak)
+except Exception as e:
+    log.warning("Host-lock watchdog not started: %s", e)
 
 try:
     from app.api.agent import router as agent_router
@@ -59,12 +72,21 @@ try:
 except Exception as e:
     log.warning("Health API not loaded: %s", e)
 try:
+    from app.api.approver_chat import router as approver_chat_router
+    app.include_router(approver_chat_router)
+except Exception as e:
+    log.warning("Approver-chat API not loaded: %s", e)
+try:
     from app.api.auth import router as auth_router
     app.include_router(auth_router)
 except Exception as e:
     log.warning("Auth API not loaded: %s", e)
 
 app.include_router(admin_router)
+from app.api.config_pane import router as config_pane_router
+app.include_router(config_pane_router)
+from app.api.setup import router as setup_router
+app.include_router(setup_router)
 
 
 
@@ -74,11 +96,29 @@ embedder = SentenceTransformer('all-MiniLM-L6-v2')
 from app.secret_check import require_secret_key
 
 supabase: Client = create_client(os.getenv("SUPABASE_URL"), require_secret_key(os.getenv("SUPABASE_KEY")))
-neo4j_driver = GraphDatabase.driver(
-    os.getenv("NEO4J_URI"),
-    auth=(os.getenv("NEO4J_USER"), os.getenv("NEO4J_PASS")),
-    max_connection_lifetime=180  # AuraDB drops idle connections; recycle before that
-)
+class _LazyNeo4j:
+    """Builds the Neo4j driver on first use, so the app and /setup can start before Neo4j is configured."""
+
+    def __init__(self):
+        self._drv = None
+
+    def _get(self):
+        if self._drv is None:
+            uri = (os.getenv("NEO4J_URI") or "").strip()
+            if not uri:
+                raise RuntimeError("Neo4j is not configured. Set it in Settings > Knowledge and skills, then restart the app.")
+            self._drv = GraphDatabase.driver(
+                uri,
+                auth=(os.getenv("NEO4J_USER"), os.getenv("NEO4J_PASS")),
+                max_connection_lifetime=180  # AuraDB drops idle connections; recycle before that
+            )
+        return self._drv
+
+    def __getattr__(self, name):          # session(), close(), verify_connectivity() and so on
+        return getattr(self._get(), name)
+
+
+neo4j_driver = _LazyNeo4j()
 
 # --- Log Truncation Globals ---
 MAX_FILE_CHARS = 6000
@@ -185,15 +225,13 @@ def delete_vectors(filename: str):
 # ======================================================================
 def call_llm(messages: list, timeout: int = 180) -> str:
     out = ""
-    tokens_in = usage.count_messages(messages)
     with llm_slot("ingest", wait_timeout=None) as waited:
         t0 = time.time()
-        with requests.post(COLAB_API_URL, json={"messages": messages}, stream=True, timeout=timeout) as r:
-            for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
-                if chunk:
-                    out += chunk
+        with llm_post(messages, timeout=(10, timeout)) as r:
+            for chunk in r.iter_content():
+                out += chunk
         seconds = time.time() - t0
-    usage.log_call("ingest", None, tokens_in, usage.count_tokens(out), seconds, waited)
+    log_stream("ingest", r, seconds, waited)
     return out
 
 
@@ -360,6 +398,12 @@ def remove_doc_graph(filename: str) -> dict:
     with neo4j_driver.session() as session:
         return session.execute_write(_tx)
 
+@app.get("/setup", response_class=HTMLResponse)
+async def serve_setup_ui():
+    with open(BASE_DIR / "static" / "setup.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def serve_admin_ui():
     with open(BASE_DIR / "static" / "admin.html", "r", encoding="utf-8") as f:
@@ -370,7 +414,7 @@ async def serve_admin_ui():
 def health_check():
     try:
         # Extract base ngrok URL (e.g., https://xxxx.ngrok-free.app)
-        base_url = COLAB_API_URL.rsplit("/", 1)[0]
+        base_url = os.getenv("COLAB_API_URL", "").split("/v1")[0]
         res = requests.get(f"{base_url}/health", timeout=3)
         if res.status_code == 200:
             return {"status": "online"}
@@ -608,17 +652,15 @@ def generate_title(req: TitleRequest):
 
     try:
         full_title = ""
-        tokens_in = usage.count_messages(colab_messages)
         with llm_slot("chat", wait_timeout=15) as waited:
             t0 = time.time()
-            with requests.post(COLAB_API_URL, json={"messages": colab_messages},
-                               stream=True, timeout=(10, 60)) as r:
+            with llm_post(colab_messages, timeout=(10, 60)) as r:
                 if r.status_code != 200:
                     return {"title": "Incident Triage"}
                 for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
                     if chunk:
                         full_title += chunk
-        usage.log_call("chat", None, tokens_in, usage.count_tokens(full_title), time.time() - t0, waited)
+        log_stream("chat", r, time.time() - t0, waited)
 
         title = re.sub(r'[\"\'\[\]]', '', full_title).strip()
         # Reject HTML/error pages and anything that isn't a short plain title
@@ -841,8 +883,7 @@ def chat_endpoint(req: ChatRequest, request: Request):
         try:
             with llm_slot("chat") as waited:
                 t0 = time.time()
-                with requests.post(COLAB_API_URL, json={"messages": colab_messages},
-                                   stream=True, timeout=(10, 300)) as r:
+                with llm_post(colab_messages, timeout=(10, 300)) as r:
                     if r.status_code != 200:
                         yield f"data: {json.dumps({'error': f'LLM server returned HTTP {r.status_code}. Is the Colab session alive?'})}\n\n"
                     else:
@@ -866,7 +907,7 @@ def chat_endpoint(req: ChatRequest, request: Request):
                             text = OFFTOPIC_REPLY if OFFTOPIC_RE.match(head) else head
                             sent.append(text)
                             yield f"data: {json.dumps({'text': text})}\n\n"
-            usage.log_call("chat", None, tokens_in, usage.count_tokens("".join(sent)), time.time() - t0, waited)
+            log_stream("chat", r, time.time() - t0, waited, _uh)
             _ans = "".join(sent)
             _cited = list(dict.fromkeys(i.upper() for i in DOC_ID_RE.findall(_ans)))
             _kind = ("offtopic" if OFFTOPIC_RE.match(_ans) else
@@ -882,4 +923,9 @@ def chat_endpoint(req: ChatRequest, request: Request):
             yield f"data: {json.dumps({'error': f'LLM server unreachable: {e}'})}\n\n"
         yield "data: [DONE]\n\n"
 
+
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
+
+from app import rbac
+rbac.warn_unruled(app)
+

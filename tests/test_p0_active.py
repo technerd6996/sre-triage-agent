@@ -37,13 +37,13 @@ class FakeHosts:
 def _use_fake(monkeypatch):
     registry.register(Manifest(port="hosts", provider="fake", title="Fake"), FakeHosts)
     monkeypatch.setenv("HOSTS_PROVIDER", "fake")
-    active.ACTIVE.clear()
+    active.bind({})
     FakeHosts.broken = False
 
 
 def _cleanup():
     registry._ADAPTERS.pop(("hosts", "fake"), None)
-    active.ACTIVE.clear()
+    active.bind({})
 
 
 def test_resolve_server(monkeypatch):
@@ -51,10 +51,10 @@ def test_resolve_server(monkeypatch):
     try:
         inst, why = hosts.resolve_server("disk full on web01")
         assert why == "" and inst["platform"] == "linux" and inst["name"] == "web01"
-        assert set(inst) == {"instance_id", "name", "platform", "state", "public_ip", "private_ip"}
-        assert active.ACTIVE == {"linux": "i-1"}
+        assert set(inst) == {"instance_id", "name", "platform", "state", "public_ip", "private_ip", "provider"}
+        assert active.snapshot() == {"linux": "i-1"}
         inst, why = hosts.resolve_server("nothing named here")
-        assert inst is None and "No known instance" in why and active.ACTIVE == {}
+        assert inst is None and "No known instance" in why and active.snapshot() == {}
         FakeHosts.broken = True
         inst, why = hosts.resolve_server("web01")
         assert inst is None and why.startswith("Host lookup failed")
@@ -66,11 +66,11 @@ def test_default_windows_needs_exactly_one_running(monkeypatch):
     _use_fake(monkeypatch)
     try:
         inst = hosts.resolve_default_windows()          # win01 running, win02 stopped -> exactly one
-        assert inst["instance_id"] == "w-1" and active.ACTIVE == {"windows": "w-1"}
+        assert inst["instance_id"] == "w-1" and active.snapshot() == {"windows": "w-1"}
         H.append(Host("w-3", "win03", "windows", "running", "5.5.5.5", "", "fake"))
-        active.ACTIVE.clear()
+        active.bind({})
         assert hosts.resolve_default_windows() is None  # two running -> ambiguous -> no pick
-        assert active.ACTIVE == {}
+        assert active.snapshot() == {}
     finally:
         H.pop()
         _cleanup()
@@ -80,9 +80,9 @@ def test_current_address(monkeypatch):
     _use_fake(monkeypatch)
     try:
         assert active.current_address("linux") is None
-        active.ACTIVE["linux"] = "i-1"
+        active.bind({"linux": "i-1"})
         assert active.current_address("linux") == "3.3.3.3"
-        active.ACTIVE["windows"] = "w-2"
+        active.bind({"linux": "i-1", "windows": "w-2"})
         with pytest.raises(Unavailable):
             active.current_address("windows")           # stopped
     finally:

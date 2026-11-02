@@ -8,6 +8,7 @@ import requests
 from langchain_core.tools import tool
 import time
 from datetime import datetime, timezone
+import re
 
 STATE_IN_PROGRESS = 2  # "WIP"
 STATE_RESOLVED = 6
@@ -173,6 +174,32 @@ CLAIM_NOTE = ("TRIAGE-1 picked up this ticket and has started automated triage.\
               "What happens next: it chooses a playbook, runs read-only diagnostics, and asks a human to "
               "approve any change that carries risk. A full report is added to this ticket when it finishes.")
 
+def _q(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9@._ -]", "", s or "")        # keeps ^ and other query operators out
+
+
+@tool
+def link_duplicate_incident(number: str, host: str, short_description: str) -> dict:
+    """Checks for another OPEN incident on the same host with the same problem text and links this one to
+    it as a child. Call this once, right after claiming a ticket, before running any checks. Returns
+    {"linked": False} if this is the first report of the problem."""
+    sys_id = _incident_id(number)
+    problem = _q(short_description.split("\"", 1)[-1].rsplit("\"", 1)[0]) or _q(short_description)
+    rows = _request("GET", "incident", params={
+        "sysparm_query": f"cmdb_ci.name={host}^short_descriptionLIKE{problem}"
+                         f"^active=true^numberNOT IN{number}",
+        "sysparm_fields": "number,sys_id,opened_at",
+        "sysparm_limit": 5,
+    }).get("result", [])
+    if not rows:
+        return {"linked": False}
+
+    parent = min(rows, key=lambda r: r["opened_at"])   # the oldest open match
+    _request("PATCH", f"incident/{sys_id}", json={
+        "parent_incident": parent["sys_id"],
+        "work_notes": f"Linked as a duplicate of {parent['number']}, same host and problem, already open.",
+    })
+    return {"linked": True, "parent": parent["number"]}
 
 @tool
 def claim_incident(number: str, work_note: str = CLAIM_NOTE) -> dict:

@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
-from app import store
+from app import bootstrap, config, envimport, rbac, store
+from app import ad_roles
+from collections import defaultdict
+from datetime import datetime
 
 router = APIRouter()
 
@@ -96,7 +99,7 @@ from passlib.context import CryptContext
 from app.auth import forget_user
 
 _pwd = CryptContext(schemes=["bcrypt"])
-_ROLES = ("viewer", "approver", "admin")
+_ROLES = tuple(rbac.ROLES)
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _db = store.supabase
 
@@ -104,7 +107,7 @@ _db = store.supabase
 class NewUser(BaseModel):
     user_id: str
     name: str
-    role: str = "viewer"
+    role: str = "users"
     password: str
 
 
@@ -116,7 +119,7 @@ class UserPatch(BaseModel):
 
 @router.get("/api/admin/users")
 def list_users():
-    return _db.table("users").select("user_id,name,role,type,status,last_login").order("user_id").execute().data
+    return _db.table("users").select("user_id,name,role,type,status,last_login,roles_checked_at").order("user_id").execute().data
 
 
 @router.post("/api/admin/users")
@@ -158,12 +161,15 @@ def patch_user(uid: str, req: UserPatch, request: Request):
         patch["password_hash"] = _pwd.hash(req.password)
     if not patch:
         raise HTTPException(422, "Nothing to change")
-    losing_admin = cur["role"] == "admin" and cur["status"] == "active" and (
-        patch.get("role", "admin") != "admin" or patch.get("status", "active") != "active")
+    if uid == bootstrap.DEFAULT_ADMIN_ID and (
+            patch.get("role", "super_admin") != "super_admin" or patch.get("status", "active") != "active"):
+        raise HTTPException(409, "The Default Super Admin cannot be demoted or disabled")
+    losing_admin = cur["role"] == "super_admin" and cur["status"] == "active" and (
+        patch.get("role", "super_admin") != "super_admin" or patch.get("status", "active") != "active")
     if losing_admin:
-        others = _db.table("users").select("user_id").eq("role", "admin").eq("status", "active").neq("user_id", uid).execute().data
+        others = _db.table("users").select("user_id").eq("role", "super_admin").eq("status", "active").neq("user_id", uid).execute().data
         if not others:
-            raise HTTPException(409, "The last active admin cannot be demoted or disabled")
+            raise HTTPException(409, "The last active Super Admin cannot be demoted or disabled")
     _db.table("users").update(patch).eq("user_id", uid).execute()
     if patch.get("status") == "disabled" or "role" in patch:
         _db.table("sessions").delete().eq("user_id", uid).execute() if patch.get("status") == "disabled" else None
@@ -172,6 +178,15 @@ def patch_user(uid: str, req: UserPatch, request: Request):
                 + (" password_reset" if "password_hash" in patch else ""))
     return {"ok": True}
 
+@router.post("/api/admin/users/{uid}/revoke")
+def revoke_user(uid: str, request: Request):
+    """Sign the user out of every device now. Their groups are read fresh at the next login."""
+    if not _db.table("users").select("user_id").eq("user_id", uid).execute().data:
+        raise HTTPException(404, "No such user")
+    _db.table("sessions").delete().eq("user_id", uid).execute()
+    forget_user(uid)
+    store.audit(None, None, getattr(request.state, "user", "?"), "user_signed_out", uid)
+    return {"ok": True}
 
 def _audit_rows(actor, action, ticket, days, limit):
     q = _db.table("audit").select("*").order("ts", desc=True).limit(min(limit, 5000))
@@ -221,7 +236,10 @@ def _p90(v):
 @router.get("/api/admin/bot-stats")
 def bot_stats(days: int = 7):
     cut = time.time() - days * 86400
-    runs = _db.table("runs").select("skill,outcome,started,ended,steps,nudges,status").gte("created", cut).execute().data
+    # Added tokens_in and tokens_out to the runs query, and integrated llm_calls
+    runs = _db.table("runs").select("skill,outcome,started,ended,steps,nudges,status,tokens_in,tokens_out").gte("created", cut).execute().data
+    llm_calls = _db.table("llm_calls").select("tokens_in,tokens_out,gen_s,wait_s").gte("ts", cut).execute().data
+    
     done = [r for r in runs if r["status"] not in ("running", "awaiting_approval")]
     n = len(done) or 1
     cnt: dict = {}
@@ -391,7 +409,7 @@ def admin_rerun(run_id: str, request: Request):
     return {"queued": True, "position": pos}
 
 
-_OPS = {"manual_minutes_per_ticket": (1, 600, 20), "approval_timeout_min": (1, 240, 30), "rag_retention_days": (7, 365, 30)}
+_OPS = {"manual_minutes_per_ticket": (1, 600, 20), "rag_retention_days": (7, 365, 30)}
 
 
 @router.get("/api/admin/settings")
@@ -435,3 +453,230 @@ def admin_cancel_job(job_id: str, request: Request):
     jobs.set_status(job_id, "cancelled")
     store.audit(None, None, getattr(request.state, "user", "?"), "job_cancelled", job_id)
     return {"ok": True}
+
+class ConfigValue(BaseModel):
+    key: str
+    value: str | int | float | bool
+
+
+class ConfigKey(BaseModel):
+    key: str
+
+
+class EnvText(BaseModel):
+    text: str
+
+
+@router.get("/api/admin/config")
+def config_list(group: str | None = None):
+    return config.describe(group)
+
+
+@router.post("/api/admin/config")
+def config_save(req: ConfigValue, request: Request):
+    if req.key not in config.SETTINGS:
+        raise HTTPException(404, f"Unknown setting {req.key}")
+    try:
+        config.save(req.key, req.value, getattr(request.state, "user", "?"))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except RuntimeError as e:                        # secrets need TRIAGE_SECRET_KEY
+        raise HTTPException(409, str(e))
+    return {"ok": True, "live": config.SETTINGS[req.key].live}
+
+
+@router.post("/api/admin/config/reset")
+def config_reset(req: ConfigKey, request: Request):
+    if req.key not in config.SETTINGS:
+        raise HTTPException(404, f"Unknown setting {req.key}")
+    config.reset(req.key, getattr(request.state, "user", "?"))
+    return {"ok": True}
+
+
+@router.post("/api/admin/config/import/preview")
+def config_import_preview(req: EnvText):
+    return envimport.preview(req.text)
+
+
+@router.post("/api/admin/config/import/apply")
+def config_import_apply(req: EnvText, request: Request):
+    try:
+        res = envimport.apply(req.text, getattr(request.state, "user", "?"))
+    except envimport.ImportBlocked as e:
+        raise HTTPException(409, str(e))
+    except (ValueError, RuntimeError) as e:          # for example a malformed TRIAGE_SECRET_KEY
+        raise HTTPException(409, f"Import stopped: {e}")
+    if not res["ok"]:
+        raise HTTPException(422, res["errors"])
+    return res
+
+@router.get("/api/admin/llm-stats")
+def llm_stats():
+    """Aggregate LLM call stats for the admin bot performance panel."""
+    now = time.time()
+    cutoff_7d = now - 7 * 86400
+    cutoff_24h = now - 86400
+    try:
+        rows = store.supabase.table("llm_calls") \
+            .select("ts,kind,tokens_in,tokens_out,gen_s,wait_s,ttft_s,prompt_comp,wasted_tokens") \
+            .gte("ts", cutoff_7d).execute().data
+    except Exception:
+        return {"error": "unavailable"}
+        
+    if not rows:
+        return {"calls": 0, "tokens_in": 0, "tokens_out": 0, "wasted_tokens": 0,
+                "avg_gen_s": None, "avg_wait_s": None, "avg_ttft_s": None, "by_kind": {}, "last_24h": 0}
+                
+    by_kind: dict = {}
+    for r in rows:
+        k = r["kind"] or "other"
+        s = by_kind.setdefault(k, {
+            "calls": 0, "tokens_in": 0, "tokens_out": 0, "wasted_tokens": 0,
+            "gen_s": 0.0, "ttft_s": 0.0, "ttft_calls": 0
+        })
+        s["calls"] += 1
+        s["tokens_in"] += r["tokens_in"] or 0
+        s["tokens_out"] += r["tokens_out"] or 0
+        s["gen_s"] += r["gen_s"] or 0.0
+        s["wasted_tokens"] += r.get("wasted_tokens") or 0
+        
+        if r.get("ttft_s") is not None:
+            s["ttft_s"] += r["ttft_s"]
+            s["ttft_calls"] += 1
+            
+    for s in by_kind.values():
+        s["avg_gen_s"] = round(s.pop("gen_s") / s["calls"], 2) if s["calls"] else None
+        s["avg_ttft_s"] = round(s.pop("ttft_s") / s["ttft_calls"], 3) if s["ttft_calls"] else None
+        
+    gen_times = [r["gen_s"] for r in rows if r.get("gen_s") is not None]
+    wait_times = [r["wait_s"] for r in rows if r.get("wait_s") is not None]
+    ttft_times = [r["ttft_s"] for r in rows if r.get("ttft_s") is not None]
+    # total latency per call: wait + generate, the closest thing to "how long did this call take"
+    call_times = sorted((r.get("wait_s") or 0) + (r.get("gen_s") or 0) for r in rows
+                         if r.get("gen_s") is not None)
+
+    def _pct(sorted_vals, p):
+        if not sorted_vals:
+            return None
+        idx = min(len(sorted_vals) - 1, int(round(p / 100 * (len(sorted_vals) - 1))))
+        return round(sorted_vals[idx], 2)
+
+    return {
+        "calls": sum(s["calls"] for s in by_kind.values()),
+        "tokens_in": sum(s["tokens_in"] for s in by_kind.values()),
+        "tokens_out": sum(s["tokens_out"] for s in by_kind.values()),
+        "wasted_tokens": sum(s.get("wasted_tokens", 0) for s in by_kind.values()),
+        "avg_gen_s": round(sum(gen_times) / len(gen_times), 2) if gen_times else None,
+        "avg_wait_s": round(sum(wait_times) / len(wait_times), 2) if wait_times else None,
+        "avg_ttft_s": round(sum(ttft_times) / len(ttft_times), 3) if ttft_times else None,
+        "p50_call_s": _pct(call_times, 50),
+        "p95_call_s": _pct(call_times, 95),
+        "by_kind": by_kind,
+        "last_24h": sum(1 for r in rows if r["ts"] >= cutoff_24h),
+    }
+
+@router.get("/api/admin/token-cost")
+def token_cost(days: int = 7):
+    """Tokens, runs and wasted tokens per skill (the closest thing to a ticket type)."""
+    days = max(1, min(days, 90))
+    try:
+        rows = store.llm_rows_since(time.time() - days * 86400)
+    except Exception:
+        return {"error": "unavailable"}
+
+    by_skill = defaultdict(lambda: {"calls": 0, "tokens_in": 0, "tokens_out": 0,
+                                    "wasted": 0, "gen_s": 0.0, "runs": set()})
+    for r in rows:
+        s = by_skill[r.get("skill") or "(no skill)"]
+        s["calls"] += 1
+        s["tokens_in"] += r.get("tokens_in") or 0
+        s["tokens_out"] += r.get("tokens_out") or 0
+        s["wasted"] += r.get("wasted_tokens") or 0
+        s["gen_s"] += r.get("gen_s") or 0.0
+        if r.get("run_id"):
+            s["runs"].add(r["run_id"])
+
+    out = []
+    for skill, s in by_skill.items():
+        total = s["tokens_in"] + s["tokens_out"]
+        runs = len(s["runs"])
+        out.append({
+            "skill": skill,
+            "runs": runs,
+            "calls": s["calls"],
+            "tokens_total": total,
+            "tokens_per_run": round(total / runs) if runs else None,
+            "wasted_pct": round(100 * s["wasted"] / total, 1) if total else 0.0,
+            "gen_seconds": round(s["gen_s"], 1),
+        })
+    out.sort(key=lambda x: x["tokens_total"], reverse=True)
+    return {"days": days, "rows": out}
+
+
+@router.get("/api/admin/token-budget")
+def token_budget():
+    """Today's model tokens against the daily budget. Warning only: nothing is blocked."""
+    limit = int(config.get("budget.daily_tokens") or 0)
+    warn_pct = int(config.get("budget.warn_pct") or 80)
+    start_of_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    try:
+        rows = store.llm_rows_since(start_of_day)
+    except Exception:
+        return {"error": "unavailable"}
+
+    used = sum((r.get("tokens_in") or 0) + (r.get("tokens_out") or 0) for r in rows)
+    if limit <= 0:
+        status = "off"
+    elif used >= limit:
+        status = "over"
+    elif used >= limit * warn_pct / 100:
+        status = "warn"
+    else:
+        status = "ok"
+    return {"limit": limit, "used": used,
+            "pct": round(100 * used / limit, 1) if limit else None,
+            "status": status, "enforced": False}
+
+class ADMapping(BaseModel):
+    group_id: str
+    group_name: str
+    role: str
+
+@router.get("/api/admin/ad-mappings")
+def list_ad_mappings():
+    return _db.table("ad_group_mappings").select("*").order("group_name").execute().data
+
+@router.post("/api/admin/ad-mappings")
+def add_ad_mapping(req: ADMapping, request: Request):
+    if req.role not in _ROLES:
+        raise HTTPException(422, "Invalid role")
+    who = getattr(request.state, "user", "?")
+    _db.table("ad_group_mappings").upsert({
+        "group_id": req.group_id, 
+        "group_name": req.group_name, 
+        "role": req.role, 
+        "updated_at": time.time(), 
+        "updated_by": who
+    }).execute()
+    ad_roles.mark_mappings_changed()
+    store.audit(None, None, who, "ad_mapping_saved", f"{req.group_name} -> {req.role}")
+    return {"ok": True}
+
+@router.delete("/api/admin/ad-mappings/{group_id}")
+def delete_ad_mapping(group_id: str, request: Request):
+    who = getattr(request.state, "user", "?")
+    _db.table("ad_group_mappings").delete().eq("group_id", group_id).execute()
+    ad_roles.mark_mappings_changed()
+    store.audit(None, None, who, "ad_mapping_deleted", group_id)
+    return {"ok": True}
+
+@router.get("/api/admin/ad-groups/search")
+def search_ad_groups(q: str = ""):
+    if len(q) < 2:
+        return []
+    try:
+        from app.ports import registry
+        ident = registry.get_identity()
+        return ident.search_groups(q)
+    except Exception as e:
+        raise HTTPException(502, f"AD Search failed: {e}")

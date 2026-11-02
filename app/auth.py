@@ -3,33 +3,14 @@ import hashlib
 import logging
 import time
 from fastapi import Request
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
 
-from app import store
+from app import ad_roles, bootstrap, rbac, store
 
 log = logging.getLogger("uvicorn.error")
-LEVELS = {"viewer": 1, "approver": 2, "admin": 3}
 
-import re
-
-_RUN_ONE = re.compile(r"^/api/agent/runs/[^/]+$")
-
-def required_role(method: str, path: str) -> str:
-    # Admin only
-    if (path.startswith(("/api/admin", "/admin", "/api/users", "/api/agent/audit"))
-            or path == "/api/agent/auto"
-            or (path.startswith("/api/rag") and method not in ("GET", "HEAD", "OPTIONS"))):
-        return "admin"
-    # Approver and above: Agent Console, KB pages, run lists, queue, decisions
-    if path in ("/agent", "/knowledge") or path.startswith("/api/rag"):
-        return "approver"
-    if path.startswith("/api/agent/"):
-        # Chat users still poll their own run and the live banner
-        if method == "GET" and (_RUN_ONE.match(path) or path == "/api/agent/live"):
-            return "viewer"
-        return "approver"
-    return "viewer"
 
 CACHE_TTL = 45   # seconds a session lookup is reused; also the longest a disabled user keeps access
 _CACHE: dict[str, tuple[float, float, dict]] = {}   # token_hash -> (cached_at, session_expires, user_info)
@@ -47,12 +28,26 @@ def _lookup_session(token: str | None) -> dict | None:
     if not res.data or res.data[0]["expires_at"] <= now:
         _CACHE.pop(token_hash, None)
         return None
-    ures = store.supabase.table("users").select("user_id, name, role, status").eq("user_id", res.data[0]["user_id"]).execute()
+    ures = store.supabase.table("users").select(
+        "user_id, name, role, status, must_change_password, roles_checked_at"
+    ).eq("user_id", res.data[0]["user_id"]).execute()
     if not ures.data or ures.data[0].get("status") != "active":
         _CACHE.pop(token_hash, None)
         return None
-    _CACHE[token_hash] = (now, res.data[0]["expires_at"], ures.data[0])
-    return ures.data[0]
+    user = ures.data[0]
+
+    # AD users: re-check group membership once their last check is old enough
+    if ad_roles.is_stale(user.get("roles_checked_at")):
+        status, user = ad_roles.refresh_user(user)
+        if status == "revoked":
+            forget_user(user["user_id"])          # drop cached sessions on every device
+            _CACHE.pop(token_hash, None)
+            return None
+        if status == "changed":
+            forget_user(user["user_id"])
+
+    _CACHE[token_hash] = (now, res.data[0]["expires_at"], user)
+    return user
 
 
 def forget_session(token: str | None):
@@ -61,36 +56,62 @@ def forget_session(token: str | None):
 
 
 def forget_user(user_id: str):
-    """Call after a role change or disable so it applies immediately (used by the admin console later)."""
+    """Call after a role change, disable or revoke so it applies immediately."""
     for k in [k for k, v in _CACHE.items() if v[2]["user_id"] == user_id]:
         _CACHE.pop(k, None)
+
+_PW_CHANGE_OK = ("/api/auth/change-password", "/api/auth/me", "/api/auth/logout")
+
+
+def allowed_while_password_change_pending(path: str) -> bool:
+    return path in _PW_CHANGE_OK or path.startswith("/static")
+
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if path in ("/api/health", "/api/auth/login") or request.method == "OPTIONS" or path.startswith("/static"):
+        if path in ("/api/health", "/api/auth/login", "/api/auth/banner") or request.method == "OPTIONS" or path.startswith("/static"):
             return await call_next(request)
 
-        user_info = _lookup_session(request.cookies.get("triage_session"))
+        is_setup_path = path == "/setup" or path.startswith("/api/setup")
+        if not bootstrap.is_installed():
+            if is_setup_path:
+                return await call_next(request)
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": "Setup is not complete.", "code": "setup_required"}, status_code=503)
+            return Response(status_code=302, headers={"Location": "/setup"})
+        if is_setup_path:                       # once installed, setup is closed to everyone
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": "Setup is already complete."}, status_code=404)
+            return Response(status_code=302, headers={"Location": "/static/login.html"})
+
+        user_info = await run_in_threadpool(_lookup_session, request.cookies.get("triage_session"))
 
         if not user_info:
             if path.startswith("/api/"):
                 return JSONResponse({"detail": "Unauthorized"}, status_code=401)
             return Response(status_code=302, headers={"Location": "/static/login.html"})
 
-        role = user_info["role"]
-        need = required_role(request.method, path)
-        
-        if LEVELS.get(role, 0) < LEVELS.get(need, 1):
-            store.audit(None, None, user_info["user_id"], "forbidden", f"{request.method} {path} needs {need}")
-            return JSONResponse({"detail": f"This action requires the {need} role."}, status_code=403)
+        if user_info.get("must_change_password") and not allowed_while_password_change_pending(path):
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": "You must change your password before continuing.",
+                                     "code": "password_change_required"}, status_code=403)
+            return Response(status_code=302, headers={"Location": "/static/change-password.html"})
 
-        # Redirect Admin away from the chat interface (Phase 1 rule)
-        if path == "/" and role == "admin":
-            return Response(status_code=302, headers={"Location": "/admin"})
+        role = user_info["role"]
+        need = rbac.rule_for(request.method, path)
+        if need is None or not rbac.allows(role, need):
+            why = "no rule for this route" if need is None else "needs " + " or ".join(need)
+            store.audit(None, None, user_info["user_id"], "forbidden", f"{request.method} {path}: {why}")
+            if not path.startswith("/api/") and rbac.is_page(path):
+                home = rbac.home_for(role)
+                if home != path:
+                    return Response(status_code=302, headers={"Location": home})
+            return JSONResponse({"detail": "You do not have permission to do this."}, status_code=403)
 
         request.state.user = user_info["user_id"]
         request.state.role = role
+        request.state.caps = sorted(rbac.caps_for(role))
         request.state.user_name = user_info["name"]
 
         return await call_next(request)

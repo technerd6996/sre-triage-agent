@@ -62,7 +62,7 @@ async function initUserSession() {
         currentUser = await res.json();
         STORE_KEY = `triage1_chats_v1:${currentUser.user_id}`;
         const label = document.getElementById('user-label');
-        if (label) label.textContent = `${currentUser.name} · ${currentUser.role === 'viewer' ? 'end user' : currentUser.role}`;
+        if (label) label.textContent = `${currentUser.name} · ${currentUser.role_label || currentUser.role}`;
         const lo = document.getElementById('logout-btn');
         if (lo) lo.onclick = async () => {
             await fetch('/api/auth/logout', { method: 'POST' });
@@ -71,12 +71,9 @@ async function initUserSession() {
         // Hide Admin/Agent buttons based on role
         const agentBtn = document.querySelector('a[href="/agent"]');
         const kbBtn = document.querySelector('a[href="/knowledge"]');
-        if (currentUser.role === 'viewer') {
-            if (agentBtn) agentBtn.style.display = 'none';
-            if (kbBtn) kbBtn.style.display = 'none';
-        } else if (currentUser.role === 'approver') {
-            // Approver can see KB, but it will be read-only (enforced via API)
-        }
+        const caps = currentUser.caps || [];
+        if (agentBtn && !caps.includes('console.view')) agentBtn.style.display = 'none';
+        if (kbBtn && !caps.includes('kb.view')) kbBtn.style.display = 'none';
         
         // Load state now that we have the namespaced key
         const saved = loadState();
@@ -631,6 +628,118 @@ async function streamResponse(query) {
 
     const maxTurns = slider ? parseInt(slider.value, 10) : 6;
     const limitedHistory = activeHistory.filter((m) => !m.skip).slice(-(maxTurns * 2)).map(({ role, content }) => ({ role, content }));
+
+    // Approvers asking a live read-only question ("what is the CPU utilization on <server>", "what
+    // owns <server> in the CMDB") get answered from the real host via /api/approver-chat/inquire,
+    // not the chat persona. The server name itself is resolved server-side (resolve_server /
+    // find_in_text scans the question for a known CI name) -- no client-side text parsing.
+    const isApprover = (currentUser?.caps || []).includes('console.act');
+    const actionMatch = isApprover
+        && /\b(restart|kill|stop|start)\b/i.test(query)
+        && !/\?\s*$/.test(query);   // a question mark means they're asking, not instructing
+    const inquireMatch = !actionMatch && isApprover
+        && /\b(cpu|memory|mem|process(es)?|cmdb|criticality|support group|health check)\b/i.test(query);
+    
+    if (actionMatch) {
+        const card = appendDOM('assistant', '');
+        stopThinking();
+        card.innerHTML = formatSeverity(`Run this as an ad-hoc action?\n\n> ${esc(query)}`);
+        const row = mkEl('div', 'mt-3 flex gap-3');
+        const confirmBtn = mkEl('button', 'px-5 py-2 rounded-lg bg-[#FFB000] text-black font-semibold text-[15px] hover:bg-[#E6A000]', 'Yes, run it');
+        const cancelBtn = mkEl('button', 'px-5 py-2 rounded-lg border border-[#2E3744] text-gray-200 text-[15px] hover:border-gray-500', 'Cancel');
+        confirmBtn.type = cancelBtn.type = 'button';
+        row.append(confirmBtn, cancelBtn);
+        card.appendChild(row);
+
+        cancelBtn.onclick = () => {
+            row.remove();
+            card.innerHTML += formatSeverity('_Cancelled._');
+        };
+        confirmBtn.onclick = async () => {
+            confirmBtn.disabled = true;
+            cancelBtn.disabled = true;
+            confirmBtn.textContent = 'Starting\u2026';
+            try {
+                const res = await fetch('/api/approver-chat/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ instruction: query })
+                });
+                const data = await res.json();
+                row.remove();
+                if (!res.ok) {
+                    card.innerHTML += formatSeverity(data.detail || 'Could not start the run.');
+                } else {
+                    card.innerHTML += formatSeverity(
+                        `Ticket **${data.number}** created${data.queued ? ' and queued' : ' and running'}.`
+                    );
+                    if (data.run_id) {
+                        const chat = chats[activeChatId];
+                        chat.run = { runId: data.run_id, number: data.number, server: '' };
+                        saveState();
+                        watchRun(card, data.run_id, data.number, '', activeChatId);
+                    } else if (data.queued) {
+                        followQueued(card, data.number, '', activeChatId);
+                    }
+                }
+            } catch (e) {
+                row.remove();
+                card.innerHTML += formatSeverity(`Failed: ${e.message}`);
+            }
+        };
+        activeHistory.push({ role: 'user', content: query, skip: true },
+                           { role: 'assistant', content: `[ad-hoc action proposed for: ${query}]`, skip: true });
+        return;
+    }
+    if (inquireMatch) {
+        try {
+            const res = await fetch('/api/approver-chat/inquire', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: query, server: chat.lastInquiryServer || '' })
+            });
+            const data = await res.json();
+            stopThinking();
+            if (!res.ok) {
+                contentNode.innerHTML = formatSeverity(data.detail || 'Check failed.');
+            } else {
+                chat.lastInquiryServer = data.server;
+                const r = data.result;
+                let line = `**${data.server}** (${data.platform}): `;
+                if (r.cpu_pct !== undefined) {
+                    line += `${r.cpu_pct}% CPU used` + (r.over_threshold ? ` â€” over the ${r.threshold_pct}% threshold.` : '.');
+                } else if (r.used_pct !== undefined) {
+                    line += `${r.used_pct}% memory used` + (r.over_threshold ? ` â€” over the ${r.threshold_pct}% threshold.` : '.');
+                } else if (Array.isArray(r.processes) && r.processes.length) {
+                    const top = r.processes[0];
+                    const shareKey = r.sort_by === 'cpu' ? 'cpu_pct' : 'mem_pct';
+                    const share = top[shareKey];
+                    line += `top ${r.sort_by === 'cpu' ? 'CPU' : 'memory'} user is **${top.name}** (pid ${top.pid}, ${share}%)`;
+                    line += top.service ? `, service \`${top.service}\`` : '';
+                    line += r.culprit_service ? '.' : ' â€” not a service this agent can restart by name.';
+                } else if (r.summary) {
+                    line += r.summary;
+                } else {
+                    line += JSON.stringify(r);
+                }
+                contentNode.innerHTML = formatSeverity(line);
+            }
+            activeHistory.push({ role: 'user', content: query, skip: true },
+                               { role: 'assistant', content: contentNode.innerText, skip: true });
+            return;
+        } catch (e) {
+            stopThinking();
+            contentNode.innerHTML = formatSeverity(`Check failed: ${e.message}`);
+            return;
+        } finally {
+            busy = false;
+            if (sendBtn) {
+                sendBtn.disabled = false;
+                sendBtn.classList.remove('opacity-50');
+            }
+            applyComposerState();
+        }
+    }
 
     try {
         const response = await fetch('/api/chat', {

@@ -16,3 +16,5 @@ boto3
 passlib
 bcrypt
 hvac
+ldap3
+pycryptodome

@@ -1,0 +1,14 @@
+HINRBXmVEMGNRIVNa_Erbw9Fo62PHKYCi8aN_SzKkiY= - Root key
+
+DEFAULT_ADMIN_ID = "superadmin@triage.local"
+DEFAULT_ADMIN_PASSWORD = "ChangeMe-Triage1!"
+MIN_PASSWORD = 12
+
+AD Service Account - TriageAdmin@3654
+
+pg_dump "https://vrkmuvzmdgdakcitxdrq.supabase.co" --schema-only --no-owner --no-privileges ^
+  -t public.approvals -t public.audit -t public.events -t public.jobs -t public.llm_calls ^
+  -t public.notices -t public.rag_events -t public.runs -t public.sessions -t public.settings ^
+  -t public.sre_runbooks -t public.users -t public.verifications > db\schema.sql
+
+robocopy C:\Users\VedaVidyadaran\sre-triage-agent C:\Users\VedaVidyadaran\triage-scartch /E /XF .env /XD .git .venv venv __pycache__

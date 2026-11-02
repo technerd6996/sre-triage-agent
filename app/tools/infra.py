@@ -6,6 +6,7 @@ Decisions (threshold checks, resolve vs escalate) are made in code and returned 
 so a small model only has to follow the instruction.
 """
 import json
+import logging
 import os
 import re
 import socket
@@ -17,6 +18,8 @@ from langchain_core.tools import tool
 
 from app.tools import active
 
+log = logging.getLogger(__name__)
+
 TARGETS = ("windows", "linux")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")  # blocks shell/PowerShell injection
 
@@ -25,7 +28,10 @@ _CLEARED: dict[str, float] = {}   # target -> when temp files were last cleared
 _BEFORE: dict[str, dict] = {}     # target -> {disk: used_pct} before the cleanup
 VERIFY_WINDOW = 900               # seconds in which a disk check counts as the post-cleanup check
 
-_ERR_STEP = "Call add_work_note with this error, then call escalate_incident."
+_ERR_STEP = ("THE CHECK COULD NOT RUN. This is not a finding about the server, so do not say the server "
+             "or service is down. Retry the same check once. If it fails again, call add_work_note saying "
+             "the check could not run and quoting the error text. Do not escalate and do not resolve. "
+             "Stop and wait for an engineer.")
 
 
 # ---- config ----
@@ -63,10 +69,11 @@ def _port(target: str) -> int:
     return 5985 if target == "windows" else int(os.getenv("LINUX_SSH_PORT", "22"))
 
 
-def _win(script: str) -> str:
+def _win(script: str, *, inquiry_user: str | None = None) -> str:
     """Run a PowerShell script on the Windows server over WinRM and return stdout."""
     host = _host("windows")
-    creds = pam.checkout(host)
+    creds = (pam.checkout_for_inquiry(inquiry_user, active.host_id("windows"), host)
+             if inquiry_user else pam.checkout(active.host_id("windows"), host))
     session = winrm.Session(
         f"http://{host}:{int(creds.get('port', 5985))}/wsman",
         auth=(creds["username"], creds["password"]),
@@ -74,16 +81,32 @@ def _win(script: str) -> str:
         operation_timeout_sec=20,
         read_timeout_sec=30,
     )
-    r = session.run_ps(script)
-    if r.status_code != 0:
-        raise RuntimeError(r.std_err.decode(errors="replace")[:300])
-    return r.std_out.decode(errors="replace").strip()
+    try:
+        r = session.run_ps(script)
+        if r.status_code != 0:
+            err = r.std_err.decode(errors="replace").strip()[:280]
+            raise RuntimeError(
+                f"PowerShell exit code {r.status_code} on {host}: {err or 'no error text returned'}"
+            )
+        return r.std_out.decode(errors="replace").strip()
+    finally:
+        # pywinrm keeps an HTTP(S) connection (requests/urllib3) open per Session with no public
+        # close(); every uncleaned call leaked one, exhausting local ports under repeated runs
+        # (the WinError 10035 seen in testing). Close whatever transport-level session we can find.
+        try:
+            transport_session = getattr(getattr(session, "protocol", None), "transport", None)
+            http_session = getattr(transport_session, "session", None)
+            if http_session is not None:
+                http_session.close()
+        except Exception as e:
+            log.warning("Could not close WinRM session to %s: %s", host, str(e)[:150])
 
 
-def _linux(command: str) -> str:
+def _linux(command: str, *, inquiry_user: str | None = None) -> str:
     """Run a shell command on the Linux server over SSH and return stdout."""
     host = _host("linux")
-    creds = pam.checkout(host)
+    creds = (pam.checkout_for_inquiry(inquiry_user, active.host_id("linux"), host)
+             if inquiry_user else pam.checkout(active.host_id("linux"), host))
     pkey = None
     if creds.get("private_key"):
         pkey = pam.load_pkey(creds["private_key"], creds.get("passphrase") or None)

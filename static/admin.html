@@ -90,9 +90,13 @@
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
         AI performance
       </button>
-      <button class="nav-item" data-section="configuration">
+      <button class="nav-item" data-section="connections">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><line x1="6" y1="12" x2="6.01" y2="12"/><line x1="10" y1="12" x2="18" y2="12"/></svg>
+        Connections
+      </button>
+      <button class="nav-item" data-section="behaviour">
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v2m0 16v2M4.22 4.22l1.42 1.42m12.72 12.72 1.42 1.42M2 12h2m16 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-        Settings
+        Behaviour
       </button>
       <button class="nav-item" data-section="users">
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87m-4-12a4 4 0 0 1 0 7.75"/></svg>
@@ -202,17 +206,51 @@
     </div>
 
     <!-- PERFORMANCE -->
-    <div id="section-performance" class="section max-w-2xl">
+    <div id="section-performance" class="section max-w-6xl">
       <h1 class="text-[19px] font-semibold mb-6">Performance <span class="text-gray-600 font-normal text-[15px]">— last 7 days</span></h1>
       <div id="perf-panel" class="card p-5">
-      <div id="bot-panel" class="card p-5 mt-4"></div>        
+        <p class="text-[14px] text-gray-500">Loading…</p>
+      </div>
+      <div id="bot-panel" class="card p-5 mt-4"></div>
+
+      <div class="flex items-center justify-between mt-8 mb-4">
+        <h2 class="text-[16px] font-semibold">Cost by ticket type</h2>
+        <select id="cost-days" class="bg-[#1A2028] text-[13px] text-gray-300 rounded-lg px-2 py-1 border border-[#1A2028]">
+          <option value="1">24 hours</option>
+          <option value="7" selected>7 days</option>
+          <option value="30">30 days</option>
+          <option value="90">90 days</option>
+        </select>
+      </div>
+      <div id="cost-panel" class="card p-5">
         <p class="text-[14px] text-gray-500">Loading…</p>
       </div>
     </div>
 
     <!-- CONFIGURATION -->
-    <div id="section-configuration" class="section max-w-2xl">
-      <h1 class="text-[19px] font-semibold mb-6">Settings</h1>
+    <div id="section-connections" class="section max-w-4xl">
+      <h1 class="text-[19px] font-semibold mb-6">Connections</h1>
+
+      <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">Systems</h2>
+      <div id="cfg-nav-connections" class="flex flex-wrap gap-2 mb-4"></div>
+      <div id="cfg-panel-connections" class="card p-5 mb-6"><p class="text-[14px] text-gray-500">Loading...</p></div>
+
+      <div id="cfg-import" class="hidden">
+      <div class="card p-5 mb-6 flex flex-col gap-3">
+        <h3 class="text-[16px] font-semibold">Import an existing .env</h3>
+        <p class="text-[13px] text-gray-500">Paste the file contents. Nothing is saved until you press Apply. Secrets are encrypted and never shown again.</p>
+        <textarea id="env-text" rows="6" spellcheck="false" class="mono bg-[#0A0D10] border border-[#232B33] rounded-lg p-3 text-[13px]"></textarea>
+        <div class="flex gap-3">
+          <button id="env-preview" class="px-4 py-2 rounded-lg border border-[#232B33] text-[14px] hover:text-[#FFB000]">Preview</button>
+          <button id="env-apply" disabled class="px-4 py-2 rounded-lg bg-[#FFB000] text-[#0A0D10] font-semibold text-[14px] disabled:opacity-40">Apply</button>
+        </div>
+        <div id="env-result"></div>
+      </div>
+      </div>
+    </div>
+
+    <div id="section-behaviour" class="section max-w-4xl">
+      <h1 class="text-[19px] font-semibold mb-6">Behaviour</h1>
 
       <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">Appearance</h2>
       <div class="card p-5 mb-6">
@@ -229,21 +267,16 @@
         </div>
       </div>
 
-      <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">Playbook source</h2>
-      <div id="kb-status" class="card p-5 mb-6">
-        <p class="text-[14px] text-gray-500">Loading…</p>
-      </div>
-
       <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">Operational settings</h2>
       <div class="card p-5 mb-6 flex flex-col gap-4">
-        <div class="field"><label for="op-appr">Approval timeout (minutes, then auto-reject and escalate)</label><input id="op-appr" type="number" min="1" max="240"></div>
         <div class="field"><label for="op-min">Minutes a person takes per ticket (used for the “time saved” estimate)</label><input id="op-min" type="number" min="1" max="600"></div>
         <div class="field"><label for="op-ret">Knowledge-answer log retention (days)</label><input id="op-ret" type="number" min="7" max="365"></div>
         <button id="op-save" class="self-start px-4 py-2 rounded-lg bg-[#FFB000] text-[#0A0D10] font-semibold text-[14px] hover:bg-[#E0A000]">Save</button>
       </div>
 
-      <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-gray-600 mb-4">Coming next</h2>
-      <div class="card p-5 text-[14px] text-gray-500">Risk table, SLA fallbacks, service allowlist.</div>
+      <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">Agent and model</h2>
+      <div id="cfg-nav-behaviour" class="flex flex-wrap gap-2 mb-4"></div>
+      <div id="cfg-panel-behaviour" class="card p-5 mb-6"><p class="text-[14px] text-gray-500">Loading...</p></div>
     </div>
 
     <!-- USERS -->
@@ -256,7 +289,7 @@
         <div class="grid grid-cols-4 gap-3">
           <div class="field"><label for="nuem">Email</label><input id="nuem"></div>
           <div class="field"><label for="nunm">Name</label><input id="nunm"></div>
-          <div class="field"><label for="nurole">Role</label><select id="nurole"><option>viewer</option><option>approver</option><option>admin</option></select></div>
+          <div class="field"><label for="nurole">Role</label><select id="nurole"><option value="users">User</option><option value="approvers">Approver</option><option value="auditors">Auditor</option><option value="admin">Admin</option><option value="super_admin">Super Admin</option></select></div>
           <div class="field"><label for="nupw">Temp password</label><input id="nupw" type="password"></div>
         </div>
         <button id="nuadd" class="mt-4 px-4 py-2 rounded-lg bg-[#FFB000] text-[#0A0D10] font-semibold text-[14px]">Add user</button>
@@ -264,6 +297,26 @@
       <div class="card tbl-wrap"><table class="dtbl">
         <thead><tr><th>User</th><th>Name</th><th>Role</th><th>Status</th><th>Last login</th><th><span class="sr-only">Actions</span></th></tr></thead>
         <tbody id="ubody"></tbody></table></div>
+
+      <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mt-10 mb-4">Active Directory Group Mappings</h2>
+      <div class="card p-5 mb-6">
+        <p class="text-[13px] text-gray-500 mb-3">Map an AD group to a local role (Requires Identity settings to be configured and tested)</p>
+        <div class="field mb-3 relative">
+          <input id="ad-q" aria-label="Search AD groups" placeholder="Search AD groups (e.g., L2_Engineers)…" autocomplete="off">
+          <div id="ad-res" class="absolute z-10 w-full bg-[#0E1217] border border-[#232B33] rounded-lg mt-1 empty:hidden max-h-48 overflow-y-auto"></div>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div class="field"><label>Selected Group</label><input id="ad-group-name" readonly class="text-gray-400 cursor-not-allowed"></div>
+          <div class="field"><label>Role</label><select id="ad-role"><option value="users">User</option><option value="approvers">Approver</option><option value="auditors">Auditor</option><option value="admin">Admin</option><option value="super_admin">Super Admin</option></select></div>
+          <div class="flex items-end"><button id="ad-add" disabled class="px-4 py-2 w-full rounded-lg bg-[#FFB000] text-[#0A0D10] font-semibold text-[14px] disabled:opacity-40">Map Group</button></div>
+        </div>
+        <input type="hidden" id="ad-group-id">
+      </div>
+      
+      <div class="card tbl-wrap mb-10"><table class="dtbl">
+        <thead><tr><th>AD Group</th><th>Mapped Role</th><th>Last Updated</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody id="ad-body"></tbody></table>
+      </div>
     </div>
 
     <!-- AUDIT -->
@@ -303,7 +356,12 @@
     <!-- RAG -->
     <div id="section-rag" class="section max-w-4xl">
       <h1 class="text-[19px] font-semibold mb-6">Knowledge answers <span class="text-gray-600 font-normal text-[15px]">— last 30 days</span></h1>
-      <div id="rag-panel" class="card p-5 text-[14px] text-gray-500">Loading…</div>
+      <div id="rag-panel" class="card p-5 text-[14px] text-gray-500 mb-6">Loading…</div>
+
+      <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">Playbook source</h2>
+      <div id="kb-status" class="card p-5 mb-6" style="max-height: 320px; overflow-y: auto;">
+        <p class="text-[14px] text-gray-500">Loading…</p>
+      </div>
     </div>
 
   </main>
@@ -324,6 +382,20 @@
 <script src="/static/js/agent_status.js"></script>
 <script>
 // ── Nav ──────────────────────────────────────────────────────────────────────
+// -- Role-aware page --
+const NEED = {overview:'monitor.view', controls:'config.manage', performance:'monitor.view', connections:'config.manage',
+              behaviour:'config.manage', users:'users.manage', audit:'audit.view', runs:'monitor.view', health:'monitor.view',
+              rag:'monitor.view'};
+const ROLE_OPTS = [['users','User'], ['approvers','Approver'], ['auditors','Auditor'], ['admin','Admin'], ['super_admin','Super Admin']];
+const ME = fetch('/api/auth/me').then(r => r.ok ? r.json() : {caps: []}).catch(() => ({caps: []}));
+ME.then(me => {
+  const caps = new Set(me.caps || []);
+  document.querySelectorAll('.nav-item').forEach(b => { if (!caps.has(NEED[b.dataset.section])) b.style.display = 'none'; });
+  const first = [...document.querySelectorAll('.nav-item')].find(b => b.style.display !== 'none');
+  const act = document.querySelector('.nav-item.active');
+  if (first && act && act.style.display === 'none') first.click();
+});
+
 document.querySelectorAll('.nav-item').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
@@ -331,12 +403,14 @@ document.querySelectorAll('.nav-item').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('section-' + btn.dataset.section).classList.add('active');
     if (btn.dataset.section === 'performance' && !perfLoaded) loadPerf();
-    if (btn.dataset.section === 'configuration' && !kbLoaded) loadKbStatus();
+    if (btn.dataset.section === 'performance' && perfLoaded) loadCost();
+    if ((btn.dataset.section === 'connections' || btn.dataset.section === 'behaviour') && !cfgLoaded) loadConfigPane();
     const s = btn.dataset.section;
     if (s === 'users' && !usersLoaded) loadUsers();
     if (s === 'audit') loadAudit();
     if (s === 'runs') loadRuns();
     if (s === 'health') loadHealth();
+    if (s === 'rag' && !kbLoaded) loadKbStatus();
     if (s === 'rag') loadRag();
   });
 });
@@ -410,9 +484,12 @@ setInterval(loadOverview, 5000);
 
 // ── Controls ─────────────────────────────────────────────────────────────────
 fetch('/api/chat/status').then(r=>r.json()).then(d=>chat.checked=d.enabled);
-fetch('/api/agent/auto').then(r=>r.json()).then(d=>auto.checked=d.enabled);
-fetch('/api/admin/autonomy').then(r=>r.json()).then(d=>aut.value=d.mode);
-fetch('/api/admin/ticket-mode').then(r=>r.json()).then(d=>tm.value=d.mode);
+ME.then(me => {
+  if (!(me.caps || []).includes('config.manage')) return;
+  fetch('/api/agent/auto').then(r=>r.json()).then(d=>auto.checked=d.enabled);
+  fetch('/api/admin/autonomy').then(r=>r.json()).then(d=>aut.value=d.mode);
+  fetch('/api/admin/ticket-mode').then(r=>r.json()).then(d=>tm.value=d.mode);
+});
 
 chat.onchange = () => j('/api/admin/chat', {enabled:chat.checked})
   .then(() => toast('Chat ' + (chat.checked ? 'on' : 'off')))
@@ -428,7 +505,8 @@ tm.onchange = () => j('/api/admin/ticket-mode', {mode:tm.value})
   .catch(e => toast(e.message, false));
 
 const split = s => s.split(',').map(x=>x.trim()).filter(Boolean);
-fetch('/api/admin/p1').then(r=>r.json()).then(d => {
+ME.then(me => (me.caps || []).includes('config.manage') ? fetch('/api/admin/p1').then(r=>r.json()) : null).then(d => {
+  if (!d) return;
   br.value = d.bridge_link || '';
   to.value = (d.to || []).join(', ');
   cc.value = (d.cc || []).join(', ');
@@ -447,7 +525,7 @@ function fmt(n) { return n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n); }
 
 function loadPerf() {
   perfLoaded = true;
-  fetch('/api/agent/llm-stats').then(r=>r.json()).then(d => {
+  fetch('/api/admin/llm-stats').then(r=>r.json()).then(d => {
     if (d.error) { document.getElementById('perf-panel').innerHTML = '<p class="text-[14px] text-red-400">Stats unavailable</p>'; return; }
     const kinds = Object.entries(d.by_kind).sort((a,b) => b[1].calls - a[1].calls);
     const maxCalls = Math.max(...kinds.map(([,s]) => s.calls), 1);
@@ -462,14 +540,16 @@ function loadPerf() {
         <span class="w-14 text-right text-gray-500">${s.avg_gen_s != null ? s.avg_gen_s+'s' : '—'}</span>
       </div>`).join('');
     document.getElementById('perf-panel').innerHTML = `
-      <div class="grid grid-cols-4 gap-4 mb-6">
-        ${[['Calls (7d)', fmt(d.calls)], ['Tokens in', fmt(d.tokens_in)], ['Tokens out', fmt(d.tokens_out)], ['Calls (24h)', fmt(d.last_24h)]]
+      <div class="grid grid-cols-4 gap-y-6 gap-x-4 mb-6">
+        ${[['Calls (7d)', fmt(d.calls)], ['Tokens in', fmt(d.tokens_in)], ['Tokens out', fmt(d.tokens_out)], 
+           ['Wasted tokens', fmt(d.wasted_tokens)], ['Avg TTFT (s)', d.avg_ttft_s != null ? d.avg_ttft_s.toFixed(3) : '—'], ['Calls (24h)', fmt(d.last_24h)],
+           ['Call latency p50 (s)', d.p50_call_s ?? '—'], ['Call latency p95 (s)', d.p95_call_s ?? '—']]
           .map(([l,v]) => `<div><p class="text-[12px] text-gray-500 mb-1">${l}</p><p class="mono text-[23px] font-bold">${v}</p></div>`).join('')}
       </div>
       <div class="border-t border-[#1A2028] pt-4">
         <div class="flex justify-between text-[12px] text-gray-500 mb-3">
           <span>By kind</span>
-          <span>avg gen ${d.avg_gen_s != null ? d.avg_gen_s+'s' : '—'} · avg wait ${d.avg_wait_s != null ? d.avg_wait_s+'s' : '—'}</span>
+          <span>avg gen ${d.avg_gen_s != null ? d.avg_gen_s+'s' : '—'} · avg wait ${d.avg_wait_s != null ? d.avg_wait_s+'s' : '—'} · avg ttft ${d.avg_ttft_s != null ? d.avg_ttft_s+'s' : '—'}</span>
         </div>
         <div class="flex flex-col gap-2.5">${kindRows}</div>
       </div>`;
@@ -477,7 +557,39 @@ function loadPerf() {
     document.getElementById('perf-panel').innerHTML = '<p class="text-[14px] text-red-400">Could not load stats.</p>';
   });
   loadBot();
+  loadCost();
 }
+
+function loadCost() {
+  const days = document.getElementById('cost-days').value;
+  const panel = document.getElementById('cost-panel');
+  panel.innerHTML = '<p class="text-[14px] text-gray-500">Loading…</p>';
+  fetch('/api/admin/token-cost?days=' + days).then(r => r.json()).then(d => {
+    if (d.error) { panel.innerHTML = '<p class="text-[14px] text-red-400">Cost data unavailable.</p>'; return; }
+    if (!d.rows || !d.rows.length) { panel.innerHTML = '<p class="text-[14px] text-gray-500">No LLM calls in this window.</p>'; return; }
+    const maxTotal = Math.max(...d.rows.map(r => r.tokens_total), 1);
+    const rows = d.rows.map(r => `
+      <div class="flex items-center gap-3 text-[13px] py-2 border-b border-[#1A2028] last:border-0">
+        <span class="w-40 text-gray-300 truncate shrink-0" title="${r.skill}">${r.skill}</span>
+        <div class="flex-1 bg-[#1A2028] rounded-full h-1.5">
+          <div class="h-full bg-[#FFB000] rounded-full" style="width:${Math.round(r.tokens_total/maxTotal*100)}%"></div>
+        </div>
+        <span class="w-16 text-right text-gray-500">${r.runs} run${r.runs === 1 ? '' : 's'}</span>
+        <span class="w-20 text-right text-gray-300">${fmt(r.tokens_total)} tok</span>
+        <span class="w-20 text-right text-gray-500">${r.tokens_per_run != null ? fmt(r.tokens_per_run) + '/run' : '—'}</span>
+        <span class="w-16 text-right ${r.wasted_pct > 10 ? 'text-red-400' : 'text-gray-500'}">${r.wasted_pct}% waste</span>
+      </div>`).join('');
+    panel.innerHTML = `
+      <div class="flex justify-between text-[12px] text-gray-500 mb-3">
+        <span>Skill (closest proxy for ticket type)</span>
+        <span>runs · tokens · tokens/run · wasted %</span>
+      </div>
+      <div class="flex flex-col">${rows}</div>`;
+  }).catch(() => {
+    panel.innerHTML = '<p class="text-[14px] text-red-400">Could not load cost data.</p>';
+  });
+}
+document.getElementById('cost-days').onchange = () => { if (perfLoaded) loadCost(); };
 
 let kbLoaded = false;
 function loadKbStatus() {
@@ -516,10 +628,13 @@ function loadUsers() {
   api('GET', '/api/admin/users').then(rows => {
     ubody.innerHTML = rows.map(u => `<tr>
       <td ${TD}>${esc(u.user_id)}</td><td ${TD}>${esc(u.name)}</td>
-      <td ${TD}><select data-u="${esc(u.user_id)}" class="ur bg-[#0A0D10] border border-[#232B33] rounded px-2 py-1">
-        ${['viewer','approver','admin'].map(r => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
+      <td ${TD}>${u.roles_checked_at != null
+        ? esc(u.role.split(',').map(r => (ROLE_OPTS.find(o => o[0] === r) || [r, r])[1]).join(', ')) + ' <span class="pill">AD</span>'
+        : `<select data-u="${esc(u.user_id)}" class="ur bg-[#0A0D10] border border-[#232B33] rounded px-2 py-1">
+        ${ROLE_OPTS.map(([v, l]) => `<option value="${v}" ${v === u.role ? 'selected' : ''}>${l}</option>`).join('')}</select>`}</td>
       <td ${TD}><span class="pill">${esc(u.status)}</span></td><td ${TD}>${when(u.last_login)}</td>
-      <td ${TD}><button data-u="${esc(u.user_id)}" data-s="${u.status}" class="ut text-[#FFB000] mr-3">${u.status === 'active' ? 'Disable' : 'Enable'}</button>
+      <td ${TD}><button data-u="${esc(u.user_id)}" class="us text-gray-400 mr-3">Sign out</button>
+        <button data-u="${esc(u.user_id)}" data-s="${u.status}" class="ut text-[#FFB000] mr-3">${u.status === 'active' ? 'Disable' : 'Enable'}</button>
         <button data-u="${esc(u.user_id)}" class="up text-gray-400">Reset pw</button></td></tr>`).join('');
   }).catch(e => toast(e.message, false));
 }
@@ -538,6 +653,10 @@ ubody.onclick = async e => {
   if (b.classList.contains('up')) {
     const p = await askDialog({ title: `Reset password for ${b.dataset.u}`, body: 'Enter a new password. Minimum 8 characters.', okLabel: 'Reset password', password: true });
     if (p) api('PATCH', '/api/admin/users/' + u, {password: p}).then(() => toast('Password reset')).catch(x => toast(x.message, false));
+  }
+  if (b.classList.contains('us')) {
+    if (!await askDialog({ title: `Sign out ${b.dataset.u}?`, body: 'All their sessions end now. Their AD groups are read again when they sign back in.', okLabel: 'Sign out', danger: true })) return;
+    api('POST', '/api/admin/users/' + u + '/revoke').then(() => toast('Signed out')).catch(x => toast(x.message, false));
   }
 };
 let nuT;
@@ -560,8 +679,80 @@ nures.addEventListener('mousedown', e => {
 nuadd.onclick = () => api('POST', '/api/admin/users', {user_id:nuem.value, name:nunm.value, role:nurole.value, password:nupw.value})
   .then(() => { toast('User added'); nuem.value = nunm.value = nupw.value = nuq.value = ''; loadUsers(); }).catch(e => toast(e.message, false));
 
+// --- AD Group Mapping ---
+function loadAdMappings() {
+  api('GET', '/api/admin/ad-mappings').then(rows => {
+    const tbody = document.getElementById('ad-body');
+    tbody.innerHTML = rows.map(r => `<tr>
+      <td ${TD}>${esc(r.group_name)}</td>
+      <td ${TD}><span class="pill">${esc(r.role)}</span></td>
+      <td ${TD}>${when(r.updated_at)}</td>
+      <td ${TD}><button data-id="${esc(r.group_id)}" class="ad-del text-red-400">Remove</button></td>
+    </tr>`).join('') || '<tr><td colspan="4" class="text-center text-gray-500">No AD groups mapped.</td></tr>';
+  }).catch(e => toast(e.message, false));
+}
+
+document.getElementById('ad-body').onclick = async e => {
+  const b = e.target.closest('button.ad-del'); if (!b) return;
+  if (!await askDialog({ title: 'Remove this mapping?', body: 'Users relying on this group will lose access at their next login.', okLabel: 'Remove', danger: true })) return;
+  api('DELETE', '/api/admin/ad-mappings/' + encodeURIComponent(b.dataset.id))
+    .then(() => { toast('Mapping removed'); loadAdMappings(); }).catch(x => toast(x.message, false));
+};
+
+let adT;
+const adq = document.getElementById('ad-q');
+const adres = document.getElementById('ad-res');
+const adId = document.getElementById('ad-group-id');
+const adName = document.getElementById('ad-group-name');
+const adAdd = document.getElementById('ad-add');
+
+if (adq) {
+  adq.oninput = () => { 
+    clearTimeout(adT); 
+    adT = setTimeout(() => {
+      if (adq.value.trim().length < 2) { adres.innerHTML = ''; return; }
+      fetch('/api/admin/ad-groups/search?q=' + encodeURIComponent(adq.value.trim())).then(r => r.json()).then(L => {
+        adres.innerHTML = (Array.isArray(L) ? L : []).map(g => 
+          `<button type="button" data-id="${esc(g.id)}" data-name="${esc(g.name)}" class="block w-full text-left px-3 py-2 text-[13px] hover:bg-[#1A2028] text-gray-300 border-b border-[#232B33] last:border-0">${esc(g.name)}</button>`
+        ).join('') || '<div class="px-3 py-2 text-[13px] text-gray-500">No groups found</div>';
+      }).catch(() => {});
+    }, 300); 
+  };
+
+  adres.addEventListener('mousedown', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    e.preventDefault();
+    adId.value = b.dataset.id;
+    adName.value = b.dataset.name;
+    adq.value = '';
+    adres.innerHTML = '';
+    adAdd.disabled = false;
+  });
+
+  adAdd.onclick = () => {
+    adAdd.disabled = true;
+    api('POST', '/api/admin/ad-mappings', {
+      group_id: adId.value, group_name: adName.value, role: document.getElementById('ad-role').value
+    }).then(() => { 
+      toast('Group mapped successfully'); 
+      adId.value = ''; adName.value = ''; adq.value = '';
+      loadAdMappings(); 
+    }).catch(e => {
+      toast(e.message, false);
+      adAdd.disabled = false;
+    });
+  };
+}
+
+// Hook into existing navigation
+const originalLoadUsers = loadUsers;
+loadUsers = function() {
+    originalLoadUsers();
+    loadAdMappings();
+};
+
 // Audit
-const afQs = () => `actor=${encodeURIComponent(af-actor.value)}`; // placeholder replaced below
+// afQs removed — auditQs() below is the correct implementation
 function auditQs() {
   const g = id => encodeURIComponent(document.getElementById(id).value.trim());
   return `actor=${g('af-actor')}&action=${g('af-action')}&ticket=${g('af-ticket')}&days=${g('af-days')}`;
@@ -598,11 +789,28 @@ function loadRuns() {
   api('GET', '/api/admin/runs?outcome=' + encodeURIComponent(document.getElementById('rf-outcome').value)).then(rows => {
     rbody.innerHTML = rows.map(r => {
       const live = r.status === 'running' || r.status === 'awaiting_approval';
-      return `<tr><td ${TD}><span class="mono text-[#FFB000]">${esc(r.ticket)}</span></td>
-      <td ${TD}>${esc(r.skill || '—')}</td><td ${TD}>${esc(r.outcome || '—')}</td><td ${TD}>${esc(r.status)}</td>
-      <td ${TD}>${r.steps || 0}</td><td ${TD}>${fmt((r.tokens_in || 0) + (r.tokens_out || 0))}</td><td ${TD}>${when(r.started)}</td>
-      <td ${TD}>${live ? `<button data-id="${esc(r.id)}" data-a="cancel" class="text-red-400">Cancel</button>`
-                        : `<button data-id="${esc(r.id)}" data-a="rerun" class="text-[#FFB000]">Re-run</button>`}</td></tr>`;
+      
+      const mainRow = `<tr class="cursor-pointer hover:bg-[#1A2028]" onclick="this.nextElementSibling.classList.toggle('hidden')">
+        <td ${TD}><span class="mono text-[#FFB000]">${esc(r.ticket)}</span></td>
+        <td ${TD}>${esc(r.skill || '—')}</td><td ${TD}>${esc(r.outcome || '—')}</td><td ${TD}>${esc(r.status)}</td>
+        <td ${TD}>${r.steps || 0}</td><td ${TD}>${fmt((r.tokens_in || 0) + (r.tokens_out || 0))}</td><td ${TD}>${when(r.started)}</td>
+        <td ${TD} onclick="event.stopPropagation()">${live ? `<button data-id="${esc(r.id)}" data-a="cancel" class="text-red-400">Cancel</button>`
+                          : `<button data-id="${esc(r.id)}" data-a="rerun" class="text-[#FFB000]">Re-run</button>`}</td></tr>`;
+                          
+      const detailRow = `<tr class="hidden bg-[#0A0D10]">
+        <td colspan="8" class="p-4 border-b border-[#232B33]">
+            <div class="grid grid-cols-3 gap-4 text-[13px] text-gray-400">
+                <div><span class="text-gray-500">Run ID:</span> <span class="mono">${esc(r.id)}</span></div>
+                <div><span class="text-gray-500">Server:</span> ${esc(r.server || '—')}</div>
+                <div><span class="text-gray-500">Requester:</span> ${esc(r.requester || '—')}</div>
+                <div><span class="text-gray-500">Duration:</span> ${r.ended && r.started ? Math.round(r.ended - r.started) + 's' : '—'}</div>
+                <div><span class="text-gray-500">Tokens In/Out:</span> ${fmt(r.tokens_in || 0)} / ${fmt(r.tokens_out || 0)}</div>
+                <div><span class="text-gray-500">Nudges:</span> ${r.nudges || 0}</div>
+            </div>
+        </td>
+      </tr>`;
+      
+      return mainRow + detailRow;
     }).join('') || '<tr><td colspan="8" class="text-center text-gray-500">No runs match this filter.</td></tr>';
   }).catch(e => toast(e.message, false));
 }
@@ -652,16 +860,179 @@ function loadBot() {
 }
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
-api('GET', '/api/admin/settings').then(d => {
-  document.getElementById('op-appr').value = d.approval_timeout_min;
+ME.then(me => (me.caps || []).includes('config.manage') ? api('GET', '/api/admin/settings') : null).then(d => {
+  if (!d) return;
   document.getElementById('op-min').value = d.manual_minutes_per_ticket;
   document.getElementById('op-ret').value = d.rag_retention_days;
 }).catch(() => {});
 document.getElementById('op-save').onclick = () => api('POST', '/api/admin/settings', {
-  approval_timeout_min: document.getElementById('op-appr').value,
   manual_minutes_per_ticket: document.getElementById('op-min').value,
   rag_retention_days: document.getElementById('op-ret').value
 }).then(d => { toast(d.changed ? 'Settings saved' : 'No changes'); loadSummary(); }).catch(e => toast(e.message, false));
+
+// -- Configuration pane --------------------------------------------------
+let cfgLoaded = false, cfgData = null;
+let cfgCur = { connections: 'ticketing', behaviour: 'model' };
+const cfgRestart = new Set(), cfgTest = {};
+
+function loadConfigPane() {
+  api('GET', '/api/admin/config/sections').then(d => {
+    cfgData = d; cfgLoaded = true; renderCfg('connections'); renderCfg('behaviour');
+  }).catch(e => {
+    const msg = `<p class="text-[14px] text-red-400">${esc(e.message)}</p>`;
+    document.getElementById('cfg-panel-connections').innerHTML = msg;
+    document.getElementById('cfg-panel-behaviour').innerHTML = msg;
+  });
+}
+
+function cfgDot(sec) {
+  const t = cfgTest[sec.id];
+  const c = t ? (t.ok ? '#1F9D55' : '#D94452') : (sec.missing.length ? '#FFB000' : '#5B6670');
+  return `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${c}"></span>`;
+}
+
+function renderCfg(panel) {
+  if (!cfgData) return;
+  const navEl = document.getElementById('cfg-nav-' + panel);
+  const panelEl = document.getElementById('cfg-panel-' + panel);
+  const secs = cfgData.sections.filter(s => s.panel === panel);
+  const cur = cfgCur[panel];
+  const imp = panel === 'connections' && cur === '__import';
+
+  navEl.innerHTML = secs.map(s =>
+    `<button data-sec="${s.id}" class="px-3 py-1.5 rounded-lg border text-[14px] flex items-center gap-2 ${s.id === cur ? 'border-[#FFB000] text-[#FFB000]' : 'border-[#232B33] text-gray-400'}">${cfgDot(s)}${esc(s.title)}</button>`).join('')
+    + (panel === 'connections'
+        ? `<button data-sec="bootstrap" class="px-3 py-1.5 rounded-lg border text-[14px] ${cur === 'bootstrap' ? 'border-[#FFB000] text-[#FFB000]' : 'border-[#232B33] text-gray-400'}">Database</button>
+           <button data-sec="__import" class="px-3 py-1.5 rounded-lg border text-[14px] ml-auto ${imp ? 'border-[#FFB000] text-[#FFB000]' : 'border-[#232B33] text-gray-400'}">Import .env</button>`
+        : '');
+
+  if (panel === 'connections') {
+    document.getElementById('cfg-import').classList.toggle('hidden', !imp);
+    panelEl.classList.toggle('hidden', imp);
+    if (imp) return;
+    if (cur === 'bootstrap') { renderBoot(panelEl); return; }
+  }
+
+  const sec = secs.find(s => s.id === cur) || secs[0];
+  if (!sec) { panelEl.innerHTML = '<p class="text-[14px] text-gray-500">Nothing here yet.</p>'; return; }
+  const t = cfgTest[sec.id];
+  const prov = sec.provider
+    ? `<p class="text-[13px] text-gray-500 mb-3">Provider: <select disabled class="bg-[#0A0D10] border border-[#232B33] rounded px-2 py-1">${sec.provider.providers.map(p => `<option ${p.id === sec.provider.active ? 'selected' : ''}>${esc(p.title)}</option>`).join('')}</select>
+       <span class="ml-2">Capabilities: ${sec.provider.providers.filter(p => p.id === sec.provider.active).map(p => p.capabilities.map(esc).join(', ')).join('')}</span></p>` : '';
+  const warn = sec.missing.length ? `<p class="text-[13px] text-[#FFB000] mb-3">Required and not set: ${sec.missing.map(esc).join(', ')}</p>` : '';
+  const res = t ? `<p class="text-[13px] mt-3 ${t.ok ? 'text-green-300' : 'text-red-300'}">${t.ok ? 'OK' : 'Failed'} (${t.ms} ms): ${esc(t.detail)}</p>` : '';
+  panelEl.innerHTML = `
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-[16px] font-semibold">${esc(sec.title)}</h3>
+      ${sec.testable ? `<button id="cfg-test" class="px-3 py-1.5 rounded-lg border border-[#232B33] text-[14px] hover:text-[#FFB000]">Test</button>` : ''}
+    </div>${prov}${warn}
+    <div class="flex flex-col gap-4">${sec.fields.map(cfgField).join('')}</div>${res}
+    ${sec.testable ? '<p class="text-[12px] text-gray-600 mt-3">Test uses the values the app is running on. After saving a field marked restart, restart the app first.</p>' : ''}`;
+}
+
+function renderBoot(panelEl) {
+  const t = cfgTest.bootstrap;
+  panelEl.innerHTML = `
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-[16px] font-semibold">Database and encryption</h3>
+      <button id="cfg-test" class="px-3 py-1.5 rounded-lg border border-[#232B33] text-[14px] hover:text-[#FFB000]">Test</button>
+    </div>
+    <p class="text-[13px] text-gray-500 mb-4">Read from the server's .env or environment when the app starts. They cannot be stored in the database they unlock, so they are not editable here. To change one, edit the .env and restart the app.</p>
+    <div class="flex flex-col gap-3">${cfgData.bootstrap.map(b => `
+      <div class="flex items-center justify-between border-t border-[#1A2028] pt-3">
+        <div><p class="text-[14px]">${esc(b.label)}</p><p class="mono text-[12px] text-gray-500">${esc(b.env)}</p></div>
+        <span class="text-[13px] ${b.set ? 'text-green-300' : 'text-red-300'}">${esc(b.shown)}</span>
+      </div>`).join('')}</div>
+    ${t ? `<p class="text-[13px] mt-4 ${t.ok ? 'text-green-300' : 'text-red-300'}">${t.ok ? 'OK' : 'Failed'} (${t.ms} ms): ${esc(t.detail)}</p>` : ''}`;
+}
+
+function cfgField(f) {
+  const chip = (f.pending_restart ? '<span class="pill ml-2" style="color:#FFB000">restart needed</span>' : '')
+             + (f.required ? '<span class="pill ml-2">required</span>' : '');
+  const head = `<label class="text-[14px]">${esc(f.label)}${chip}</label>`;
+  const help = f.help ? `<p class="text-[12px] text-gray-500">${esc(f.help)}</p>` : '';
+  if (f.kind === 'secret') {
+    const st = f.is_set ? `Set${f.version ? ', version ' + f.version : ''}${f.updated ? ', updated ' + when(f.updated) : ''}` : (f.source === 'env' ? 'Set in the environment' : 'Not set');
+    return `<div class="field">${head}<div class="flex items-center gap-3"><span class="text-[13px] text-gray-400">${esc(st)}</span>
+      <button data-replace="${esc(f.key)}" class="text-[#FFB000] text-[13px]">${f.is_set ? 'Replace' : 'Set'}</button></div>${help}</div>`;
+  }
+  const ctl = f.kind === 'select'
+    ? `<select data-k="${esc(f.key)}" class="bg-[#0A0D10] border border-[#232B33] rounded px-2 py-1.5">${f.options.map(o => `<option ${o === f.value ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`
+    : `<input data-k="${esc(f.key)}" value="${esc(f.value)}" ${f.kind === 'int' || f.kind === 'float' ? `type="number" step="${f.kind === 'int' ? 1 : 'any'}"` : 'type="text"'}
+         ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''} class="flex-1 bg-[#0A0D10] border border-[#232B33] rounded px-2 py-1.5">`;
+  return `<div class="field">${head}<div class="flex items-center gap-3">${ctl}
+    <button data-save="${esc(f.key)}" class="text-[#FFB000] text-[13px]">Save</button>
+    ${f.source === 'saved' ? `<button data-reset="${esc(f.key)}" class="text-gray-400 text-[13px]">Reset</button>` : ''}
+    <span class="text-[12px] text-gray-600">${esc(f.source)}</span></div>${help}</div>`;
+}
+
+function cfgSave(key, value) {
+  return api('POST', '/api/admin/config', {key, value}).then(d => {
+    if (!d.live) cfgRestart.add(key);
+    toast(d.live ? 'Saved' : 'Saved. Restart the app to apply');
+    loadConfigPane();
+  }).catch(e => toast(e.message, false));
+}
+
+function wireCfgPanel(panel) {
+  document.getElementById('cfg-nav-' + panel).onclick = e => {
+    const b = e.target.closest('button[data-sec]'); if (!b) return;
+    cfgCur[panel] = b.dataset.sec; renderCfg(panel);
+  };
+  document.getElementById('cfg-panel-' + panel).onclick = async e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const cur = cfgCur[panel];
+    if (b.id === 'cfg-test') {
+      b.disabled = true; b.textContent = 'Testing...';
+      api('POST', '/api/admin/config/test/' + cur).then(r => { cfgTest[cur] = r; renderCfg(panel); })
+        .catch(x => { cfgTest[cur] = {ok: false, ms: 0, detail: x.message}; renderCfg(panel); });
+    }
+    if (b.dataset.save) {
+      const el = document.querySelector(`#cfg-panel-${panel} [data-k="${CSS.escape(b.dataset.save)}"]`);
+      cfgSave(b.dataset.save, el.value);
+    }
+    if (b.dataset.reset) {
+      if (!await askDialog({title: 'Reset this setting?', body: 'The saved value is removed. The .env value or the default applies again.', okLabel: 'Reset', danger: true})) return;
+      api('POST', '/api/admin/config/reset', {key: b.dataset.reset})
+        .then(() => { toast('Reset'); loadConfigPane(); }).catch(x => toast(x.message, false));
+    }
+    if (b.dataset.replace) {
+      const v = await askDialog({title: 'Enter the new value', body: 'It is encrypted when saved and cannot be read back.', okLabel: 'Save secret', password: true});
+      if (v) cfgSave(b.dataset.replace, v);
+    }
+  };
+}
+wireCfgPanel('connections');
+wireCfgPanel('behaviour');
+
+// .env import
+let envOk = false;
+document.getElementById('env-text').oninput = () => { envOk = false; document.getElementById('env-apply').disabled = true; };
+document.getElementById('env-preview').onclick = () => {
+  const text = document.getElementById('env-text').value;
+  api('POST', '/api/admin/config/import/preview', {text}).then(p => {
+    const rows = p.items.map(i => `<tr class="border-t border-[#1A2028]"><td class="py-1 mono">${esc(i.name)}</td><td>${esc(i.category)}</td>
+      <td>${esc(i.label || '')}</td><td>${esc(i.status || '')}${i.error ? ': ' + esc(i.error) : ''}${i.blocked ? ' (needs TRIAGE_SECRET_KEY)' : ''}</td>
+      <td class="mono">${i.masked ? '********' : esc(i.value ?? '')}</td></tr>`).join('');
+    document.getElementById('env-result').innerHTML = `<table class="w-full text-[13px] text-left"><thead class="text-gray-500"><tr><th>Name</th><th>Kind</th><th>Goes to</th><th>Status</th><th>Value</th></tr></thead>${rows}</table>
+      ${p.keep_in_env.length ? `<p class="text-[12px] text-gray-500 mt-3">Stays in the .env: ${p.keep_in_env.map(esc).join(', ')}</p>` : ''}`;
+    envOk = !p.items.some(i => i.status === 'invalid') && p.items.some(i => i.category === 'setting' || i.category === 'secret');
+    document.getElementById('env-apply').disabled = !envOk;
+  }).catch(e => toast(e.message, false));
+};
+document.getElementById('env-apply').onclick = async () => {
+  if (!envOk) return;
+  const r = await fetch('/api/admin/config/import/apply', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text: document.getElementById('env-text').value})});
+  const raw = await r.text();
+  let d = {}; try { d = JSON.parse(raw); } catch (_) {}
+  if (!r.ok) { toast(Array.isArray(d.detail) ? d.detail.map(x => x.name + ': ' + x.error).join('; ') : (d.detail || ('Import failed: HTTP ' + r.status + ' ' + raw.slice(0, 120))), false); return; }
+  toast(`Imported: ${d.saved} saved, ${d.unchanged} unchanged` + (d.restart_needed.length ? '. Restart the app to apply some of them' : ''));
+  d.restart_needed.forEach(k => cfgRestart.add(k));
+  document.getElementById('env-text').value = ''; document.getElementById('env-result').innerHTML = '';
+  document.getElementById('env-apply').disabled = true; envOk = false;
+  loadConfigPane();
+};
 
 function loadSummary() {
   const days = document.getElementById('sm-days').value;

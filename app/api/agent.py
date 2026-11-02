@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from app.agent import policy
-from app import store
+from app import config, store
 from app import jobs
 from app.llm import usage
 from app.agent.agent import THREAD_TOOLS, resume, start
@@ -21,6 +21,9 @@ from app.agent.report import build_report, describe, outcome_code, _fmt_call
 from app.tools.snow import add_work_note, get_incident, list_queue
 from app import escalation, checker
 from app.tools import active
+import json
+from app import config
+from app.tools.ticketing_tools import escalate_incident 
 
 log = logging.getLogger("uvicorn.error")
 router = APIRouter(prefix="/api/agent")
@@ -32,10 +35,12 @@ for _r in RUNS.values():            # rebuild what resume() needs after a restar
         if _e.get("type") == "start" and _e.get("tools"):
             THREAD_TOOLS[_e["thread_id"]] = tuple(_e["tools"])
 _lock = threading.Lock()
-POLL_SECONDS = int(os.getenv("POLL_SECONDS", "15"))
-APPROVAL_TIMEOUT = int(os.getenv("APPROVAL_TIMEOUT_MIN", "30")) * 60   # no answer -> auto-reject -> escalate
-P1_BUDGET = int(os.getenv("P1_TIME_BUDGET_MIN", "15")) * 60            # run longer than this -> propose a P1
-RUN_STALL_TIMEOUT = int(os.getenv("RUN_STALL_TIMEOUT_MIN", "10")) * 60  # no progress -> run marked failed
+def _p1_budget() -> int:               # run longer than this -> propose a P1
+    return config.get("agent.p1_time_budget_min") * 60
+
+
+def _stall_timeout() -> int:           # no progress -> run marked failed
+    return config.get("agent.run_stall_timeout_min") * 60
 
 
 class RunRequest(BaseModel):
@@ -59,7 +64,12 @@ def _actor(request: Request | None) -> str:
     return request.client.host if request and request.client else "unknown"
 
 
+def _active_runs() -> list:
+    """Runs using the agent right now. A run waiting for approval does not count, so it frees its place."""
+    return [r for r in RUNS.values() if r["status"] == "running"]
+
 def _active():
+    """First run that is running or waiting for approval. Used only by the single-run status views."""
     return next((r for r in RUNS.values() if r["status"] in ("running", "awaiting_approval")), None)
 
 
@@ -117,6 +127,20 @@ def _post_service_context(run: dict, actions) -> None:
     except Exception as e:
         log.warning("Service context failed for %s: %s", run["ticket"], str(e)[:200])
 
+def _guard(run: dict, ev: dict, sigs: list) -> str | None:
+    """Stops a runaway run: over the token budget, or the same tool call repeated."""
+    limit = int(config.get("agent.max_tokens_per_run") or 0)
+    t = usage.run_totals(run["id"])
+    used = t["tokens_in"] + t["tokens_out"]
+    if limit and used > limit:
+        return f"Token budget exceeded ({used} of {limit} tokens)."
+    if ev["type"] == "tool_call":
+        sig = f"{ev['name']}|{json.dumps(ev.get('args'), sort_keys=True, default=str)}"
+        sigs.append(sig)
+        if sigs.count(sig) >= 3:
+            return f"Loop detected: {ev['name']} called 3 times with the same arguments."
+    return None
+
 def _consume(run: dict, events, kind: str = "triage"):
     """Runs in a background thread: copies agent events into the run and tracks its status."""
     run["status"] = "running"
@@ -125,11 +149,36 @@ def _consume(run: dict, events, kind: str = "triage"):
     usage.bind_run(run["id"], kind)        # model calls made while this runs are counted against this run
     active.bind_run(run)                   # a resumed run gets its stored server back; a new run binds in resolve_server
     auto_resume = False
+    sigs: list = []
     try:
         for ev in events:
+            stop = _guard(run, ev, sigs)
+            if stop:
+                _add_event(run, {"type": "error", "message": stop})
+                run["status"] = "error"
+                store.audit(run["id"], run["ticket"], "policy", "run_stopped", stop)
+                try:
+                    escalate_incident.invoke({"number": run["ticket"], "reason": f"TRIAGE-1 stopped: {stop}"})
+                except Exception as e:
+                    log.warning("Could not escalate %s after a stop: %s", run["ticket"], str(e)[:200])
+                store.save_run(run)
+                break
             if ev["type"] == "start":
                 run.update(thread_id=ev["thread_id"], skill=ev["skill"], server=ev["server"],
                            skill_version=ev.get("skill_version"), host=ev.get("host"))
+                host_ref = ev.get("host") or {}
+                host_id = host_ref.get("id") or str(ev.get("server") or "").split(" (")[0]
+                if host_id and "_host_lock_ctx" not in run:
+                    from app.tools.host_lock import host_lock
+                    ctx = host_lock(host_id, run_id=run["id"])
+                    try:
+                        ctx.__enter__()
+                    except TimeoutError as e:
+                        _add_event(run, {"type": "error", "message": str(e)})
+                        run["status"] = "error"
+                        store.save_run(run)
+                        return
+                    run["_host_lock_ctx"] = ctx
             _add_event(run, ev)
             if ev["type"] == "approval_required":
                 _post_service_context(run, ev["actions"])
@@ -182,9 +231,18 @@ def _consume(run: dict, events, kind: str = "triage"):
     if auto_resume and run["status"] == "running":
         usage.unbind_run(run["id"])
         return _consume(run, resume(run["thread_id"], True, "Auto-approved by policy."), kind="resume")
+    # The run is truly finished (not about to recurse via auto-resume): release the per-host lock
+    # now, on every path -- done, error, or stopped. A missed release here previously left the lock
+    # held forever, hanging every later run against the same host with zero events ("status":
+    # "running", empty steps) until the 10-minute acquire timeout.
+    ctx = run.pop("_host_lock_ctx", None)
+    if ctx is not None:
+        try:
+            ctx.__exit__(None, None, None)
+        except Exception as e:
+            log.warning("Could not release host lock for %s: %s", run["ticket"], str(e)[:200])
     if run["status"] == "running":
-        # Verify while the run still holds the active slot: the checker reuses the run's server
-        # (aws.ACTIVE), and the next run would clear it.
+        # Multi-Agent Pipeline: Trigger independent verification
         try:
             checker.verify_run(run, lambda text, verdict=None: _add_event(
                 run, {"type": "verification", "text": text, "verdict": verdict}))
@@ -202,12 +260,12 @@ def _consume(run: dict, events, kind: str = "triage"):
     store.save_run(run)
     store.audit(run["id"], run["ticket"], "agent", f"run_{run['status']}")
 
-
 def start_run(ticket: str, source: str = "manual", actor: str = "system"):
     """Starts a run unless another is active. Returns the run, or None if busy.
     source: manual | chat | auto (only recorded in the audit trail)."""
+    cap = cap = int(config.get("runs.max_concurrent") or 1)
     with _lock:
-        if _active():
+        if len(_active_runs()) >= cap:
             return None
         run = {"id": uuid.uuid4().hex[:8], "ticket": ticket, "status": "running", "events": [],
                "thread_id": None, "skill": None, "server": None, "pending": None,
@@ -381,8 +439,6 @@ def audit_log(limit: int = 100):
 _auto = {"enabled": False, "thread": None, "tried": set()}
 
 
-AUTO_MAX_FAILS = int(os.getenv("AUTO_MAX_FAILS", "3"))
-
 _AUTO_RUNS: list = []          # run ids started from auto-intake, judged by the circuit breaker
 
 
@@ -399,7 +455,7 @@ def _auto_loop():
                     continue
                 bad = lr["status"] in ("error", "interrupted") or lr.get("outcome") == "incomplete"
                 fails = fails + 1 if bad else 0
-                if fails >= AUTO_MAX_FAILS:
+                if fails >= config.get("agent.auto_max_fails"):
                     _auto["enabled"] = False
                     store.set_setting("auto_enabled", False, "circuit-breaker")
                     store.audit(None, None, "auto-mode", "auto_mode_tripped", f"{fails} failed runs in a row")
@@ -414,7 +470,7 @@ def _auto_loop():
                         jobs.enqueue(n, "auto", "auto-mode", 3)
         except Exception as e:
             log.warning("Auto-poll error: %s", str(e)[:200])
-        time.sleep(POLL_SECONDS)
+        time.sleep(config.get("agent.poll_seconds"))
 
 @router.get("/auto")
 def get_auto():
@@ -451,7 +507,7 @@ def _expire_approval(r: dict):
     _add_event(r, {"type": "decision", "approve": False, "by": "system (approval timed out)"})
     store.save_run(r)
     store.audit(r["id"], r["ticket"], "system", "approval_timeout",
-                f"tools={tools}; no response in {APPROVAL_TIMEOUT // 60} min")
+                f"tools={tools}; no response in {_approval_timeout() // 60} min")
     escalation.propose(r, "approval timed out")
     try:
         store.supabase.table("approvals").update({
@@ -466,7 +522,7 @@ def _expire_approval(r: dict):
 
 
 def _fail_stalled(r: dict):
-    mins = RUN_STALL_TIMEOUT // 60
+    mins = _stall_timeout() // 60
     _add_event(r, {"type": "error",
                    "message": f"No progress for {mins} min (LLM or a tool may be hung). "
                               "The slot was released; check the ticket and re-run if needed."})
@@ -502,7 +558,7 @@ def cancel_run(run_id: str, who: str) -> str:
 
 
 def _approval_timeout() -> int:
-    return int(store.get_setting("approval_timeout_min", APPROVAL_TIMEOUT // 60)) * 60
+    return config.get("agent.approval_timeout_min") * 60
 
 
 def _watchdog():
@@ -511,12 +567,12 @@ def _watchdog():
         try:
             now = time.time()
             for r in list(RUNS.values()):
-                if r["status"] in ("running", "awaiting_approval") and now - r.get("started", now) > P1_BUDGET:
-                    escalation.propose(r, f"time budget of {P1_BUDGET // 60} min exceeded")                
+                if r["status"] in ("running", "awaiting_approval") and now - r.get("started", now) > _p1_budget():
+                    escalation.propose(r, f"time budget of {_p1_budget() // 60} min exceeded")                
                 idle = now - r.get("last_event", r.get("created", now))
                 if r["status"] == "awaiting_approval" and idle > _approval_timeout():
                     _expire_approval(r)
-                elif r["status"] == "running" and idle > RUN_STALL_TIMEOUT:
+                elif r["status"] == "running" and idle > _stall_timeout():
                     _fail_stalled(r)
         except Exception as e:
             log.warning("Watchdog error: %s", str(e)[:200])
@@ -526,12 +582,13 @@ threading.Thread(target=_watchdog, daemon=True, name="run-watchdog").start()
 
 
 def _dispatcher():
-    """Starts the best queued job whenever the single run slot is free."""
+    """Starts the best queued job whenever a run slot is free."""
     while True:
         time.sleep(2)
         try:
-            if _active():
-                continue
+            cap = cap = int(config.get("runs.max_concurrent") or 1)
+            if len(_active_runs()) >= cap or not _model_online():
+                continue                  # keep jobs queued while full or the model is offline
             job = jobs.pick_next(jobs.queued())
             if not job:
                 continue
@@ -542,7 +599,6 @@ def _dispatcher():
                     _AUTO_RUNS.append(run["id"])
         except Exception as e:
             log.warning("Dispatcher error: %s", str(e)[:200])
-
 
 threading.Thread(target=_dispatcher, daemon=True, name="job-dispatcher").start()
 
@@ -556,7 +612,8 @@ def _model_online() -> bool:
         return _MODEL["ok"]
     import requests
     try:
-        base = os.getenv("COLAB_API_URL", "").rsplit("/", 1)[0]
+        url = os.getenv("COLAB_API_URL", "")
+        base = url.split("/v1")[0] if "/v1" in url else url.rsplit("/", 1)[0]
         _MODEL["ok"] = requests.get(f"{base}/health", timeout=2).status_code == 200
     except Exception:
         _MODEL["ok"] = False

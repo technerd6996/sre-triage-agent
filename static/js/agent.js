@@ -37,7 +37,7 @@ const post = (path, body) => api(path, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 });
 
-let runId = null, nextIdx = 0, timer = null, curStatus = null;
+let runId = null, nextIdx = 0, timer = null, curStatus = null, userSelected = false;
 
 const STATUS = {
     running: ['Working…', 'text-[#FFB000] border-[#FFB000]'],
@@ -83,10 +83,10 @@ async function loadRuns() {
             row.onclick = () => attach(r.id);
             box.append(row);
         });
-        // follow a run that auto mode started, once we are not busy watching another one
+        // follow a run that auto mode started, only if the person hasn't picked a run to look at themselves
         const active = runs.find((r) => r.status === 'running' || r.status === 'awaiting_approval');
         const idle = !runId || curStatus === 'done' || curStatus === 'error';
-        if (active && idle && active.id !== runId) attach(active.id);
+        if (active && idle && !userSelected && active.id !== runId) attach(active.id, { auto: true });
     } catch (e) { /* the next refresh retries */ }
 }
 
@@ -114,13 +114,14 @@ async function startRun(ticket) {
     try {
         const r = await post('/api/agent/run', { ticket });
         if (!r.run_id) { toast(`Queued at position ${r.position}. It starts automatically when the current run finishes.`); return; }
-        attach(r.run_id);
+        attach(r.run_id);   // already a manual call — attach() now marks this as user-selected by default
     } catch (e) { toast(e.message, false); }
 }
 
-function attach(id) {
+function attach(id, { auto = false } = {}) {
     clearTimeout(timer);
     runId = id; nextIdx = 0; curStatus = null;
+    userSelected = !auto;
     $('steps').replaceChildren();
     showApproval(null);
     poll();
@@ -254,7 +255,7 @@ $('auto').onchange = async (e) => {
 $('refresh').onclick = loadQueue;
 
 api('/api/auth/me').then((m) => {
-    if (m.role === 'admin') api('/api/agent/auto').then((a) => { $('auto').checked = a.enabled; }).catch(() => {});
+    if ((m.caps || []).includes('config.manage')) api('/api/agent/auto').then((a) => { $('auto').checked = a.enabled; }).catch(() => {});
     else $('auto-wrap').style.display = 'none';
 }).catch(() => {});
 loadQueue();

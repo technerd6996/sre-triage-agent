@@ -2,22 +2,29 @@
 import logging
 import os
 import re
-import smtplib
 import time
 import uuid
-from email.message import EmailMessage
-from email.utils import make_msgid
 
 from app import store
-from app.tools.snow import _request, _incident_id, add_work_note
+from app.ports import registry
+from app.ports.errors import PortError
+from app.ports.notifications import CAP_BROADCAST
+from app.tools.snow import add_work_note
 
 log = logging.getLogger("triage.escalation")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 UPDATE_MIN = int(os.getenv("P1_UPDATE_MIN", "30"))
 
 
+def _broadcast() -> bool:
+    try:
+        return CAP_BROADCAST in registry.get_notifications().capabilities
+    except PortError:                      # unknown transport: show the recipient lists, the send will report it
+        return False
+
+
 def conf() -> dict:
-    if os.getenv("NOTICE_TRANSPORT", "smtp").lower() == "sns":
+    if _broadcast():
         return {"bridge": store.get_setting("bridge_link", "") or "",
                 "to": ["All confirmed subscribers of the SNS topic"], "cc": []}
     return {"bridge": store.get_setting("bridge_link", "") or "",
@@ -25,10 +32,22 @@ def conf() -> dict:
 
 
 def touches_critical(run: dict) -> bool:
-    from app.agent.policy import _critical
-    crit = _critical()
-    return any(str((e.get("args") or {}).get("service_name", "")).lower() in crit
-               for e in run.get("events", []) if e.get("type") == "tool_call")
+    """True if any service this run touched is marked critical in the CMDB, for this run's host."""
+    from app.ports import registry                            # lazy import avoids a circular import
+    host = str(run.get("server") or "").split(" (")[0]
+    ctx = registry.get_context()
+    seen = set()
+    for e in run.get("events", []):
+        if e.get("type") != "tool_call":
+            continue
+        svc = str((e.get("args") or {}).get("service_name", "")).lower()
+        if not svc or svc in seen:
+            continue
+        seen.add(svc)
+        is_crit, _ = ctx.is_critical(host, svc)
+        if is_crit:
+            return True
+    return False
 
 
 def _services(run: dict) -> list:
@@ -93,58 +112,8 @@ def view(run: dict) -> dict | None:
 
 
 def _send(to: list, cc: list, subject: str, body: str) -> str:
-    """Picks the transport from NOTICE_TRANSPORT (smtp | ses | sns). Returns a message id."""
-    mode = os.getenv("NOTICE_TRANSPORT", "smtp").lower()
-    if mode == "ses":
-        return _send_ses(to, cc, subject, body)
-    if mode == "sns":
-        return _send_sns(subject, body)
-    return _send_smtp(to, cc, subject, body)
-
-
-def _send_smtp(to: list, cc: list, subject: str, body: str) -> str:
-    host = os.getenv("SMTP_HOST")
-    if not host:
-        raise RuntimeError("SMTP_HOST is not set in .env")
-    msg = EmailMessage()
-    msg["From"] = os.getenv("SMTP_FROM") or os.getenv("SMTP_USER", "")
-    msg["To"] = ", ".join(to)
-    if cc:
-        msg["Cc"] = ", ".join(cc)
-    msg["Subject"] = subject
-    msg["Message-ID"] = make_msgid()
-    msg.set_content(body)
-    with smtplib.SMTP(host, int(os.getenv("SMTP_PORT", "587")), timeout=20) as s:
-        s.starttls()
-        if os.getenv("SMTP_USER"):
-            s.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASSWORD", ""))
-        s.send_message(msg, to_addrs=to + cc)
-    return msg["Message-ID"]
-
-
-def _send_ses(to: list, cc: list, subject: str, body: str) -> str:
-    import boto3
-    sender = os.getenv("SES_FROM")
-    if not sender:
-        raise RuntimeError("SES_FROM is not set in .env")
-    client = boto3.client("ses", region_name=os.getenv("AWS_REGION"))
-    dest = {"ToAddresses": to}
-    if cc:
-        dest["CcAddresses"] = cc
-    r = client.send_email(Source=sender, Destination=dest,
-                          Message={"Subject": {"Data": subject[:200]}, "Body": {"Text": {"Data": body}}})
-    return r["MessageId"]
-
-
-def _send_sns(subject: str, body: str) -> str:
-    """SNS delivers to the topic's subscribers, so the To and Cc lists on the card are not used."""
-    import boto3
-    topic = os.getenv("SNS_TOPIC_ARN")
-    if not topic:
-        raise RuntimeError("SNS_TOPIC_ARN is not set in .env")
-    client = boto3.client("sns", region_name=os.getenv("AWS_REGION"))
-    r = client.publish(TopicArn=topic, Subject=subject[:100], Message=body)
-    return r["MessageId"]
+    """Sends through the active notifications adapter (smtp | ses | sns). Returns a message id."""
+    return registry.get_notifications().send(to, cc, subject, body)
 
 
 def declare(run: dict, approver: str, body: str) -> None:
@@ -152,9 +121,9 @@ def declare(run: dict, approver: str, body: str) -> None:
     p, c, inc = run["p1"], conf(), run["ticket"]
     p["draft"] = body
     if not p.get("snow_done"):
-        _request("PATCH", f"incident/{_incident_id(inc)}", json={
-            "impact": "1", "urgency": "1",
-            "work_notes": f"P1 declared by {approver}. Reason: {p['reason']}. Bridge: {c['bridge'] or 'not configured'}"})
+        registry.get_ticketing().set_severity(
+            inc, 1, 1,
+            f"P1 declared by {approver}. Reason: {p['reason']}. Bridge: {c['bridge'] or 'not configured'}")
         p["snow_done"] = True
         store.audit(run["id"], inc, approver, "p1_declared", p["reason"])
     done = store.supabase.table("notices").select("id").eq("incident", inc).eq("type", "p1_declared").execute().data

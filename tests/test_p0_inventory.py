@@ -88,7 +88,7 @@ def test_context_adapter(monkeypatch):
 def test_registry(monkeypatch):
     for v in ("HOSTS_PROVIDER", "CONTEXT_PROVIDER"):
         monkeypatch.delenv(v, raising=False)
-    assert [m.provider for m in registry.available("hosts")] == ["aws"]
+    assert {m.provider for m in registry.available("hosts")} == {"aws", "cmdb"}
     assert [m.provider for m in registry.available("context")] == ["servicenow"]
     assert isinstance(registry.get_hosts(), AwsHosts)
     assert isinstance(registry.get_context(), ServiceNowContext)

@@ -15,6 +15,7 @@ from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_core.messages import ToolMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
+import threading
 
 from app.agent.policy import interrupt_config
 from app.agent.skills import build_playbook
@@ -24,18 +25,31 @@ from app.tools.snow import SNOW_TOOLS, get_incident
 from app.tools.aws_tools import AWS_TOOLS
 from app.agent.hosts import resolve_server, resolve_default_windows
 from app.tools import active
+from app.tools.infra_perf import PERF_TOOLS
+TOOLS = SNOW_TOOLS + INFRA_TOOLS + PERF_TOOLS + AWS_TOOLS
 active.STRICT = True  # agent runs never fall back to the static hosts in .env
 
 load_dotenv()
 
-TOOLS = SNOW_TOOLS + INFRA_TOOLS + AWS_TOOLS
 TOOL_MAP = {t.name: t for t in TOOLS}
 
 # Persistent checkpointer using local SQLite (bypasses Windows C++ build errors)
 CHECKPOINT_DB = os.getenv("CHECKPOINT_DB") or str(Path(__file__).resolve().parents[2] / "triage_checkpoints.db")
-_checkpointer_conn = sqlite3.connect(CHECKPOINT_DB, check_same_thread=False)
-CHECKPOINTER = SqliteSaver(_checkpointer_conn)
-CHECKPOINTER.setup()
+# Persistent checkpointer using local SQLite (bypasses Windows C++ build errors)
+# One connection per thread, in WAL mode, so concurrent runs don't serialize on a single connection.
+sqlite3.connect(CHECKPOINT_DB).execute("PRAGMA journal_mode=WAL").connection.close()
+
+_checkpointer_local = threading.local()
+
+def _get_checkpointer() -> SqliteSaver:
+    conn = getattr(_checkpointer_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(CHECKPOINT_DB, check_same_thread=False, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        _checkpointer_local.conn = conn
+    return SqliteSaver(conn)
+_get_checkpointer().setup()
 
 THREAD_TOOLS = {}               # thread_id -> tuple of allowed tool names
 
@@ -60,16 +74,28 @@ NUDGE = ("The ticket is still open. Follow the playbook now: call resolve_incide
 
 
 @cache
-def get_agent(tool_names: tuple[str, ...] = ()):
+def get_agent(tool_names: tuple[str, ...] = (), profile: str = "triage"):
     active_tools = [TOOL_MAP[n] for n in tool_names if n in TOOL_MAP] or TOOLS
+    
+    if profile == "checker":
+        from app.agent.prompts import CHECKER_PROMPT
+        sys_prompt = CHECKER_PROMPT
+    else:
+        sys_prompt = BASE_PROMPT
+        
     return create_agent(
         model=ColabChat(url=os.getenv("COLAB_API_URL")),
         tools=active_tools,
-        system_prompt=BASE_PROMPT,
+        system_prompt=sys_prompt,
         middleware=[HumanInTheLoopMiddleware(interrupt_on=interrupt_config(active_tools))],
-        checkpointer=CHECKPOINTER,
+        checkpointer=_get_checkpointer(),
     )
 
+def deploy_agent(profile: str, ticket_number: str, tool_names: tuple[str, ...] = ()):
+    """Deploys a specialized agent on demand."""
+    agent = get_agent(tool_names, profile=profile)
+    thread_id = f"{ticket_number}-{profile}-{uuid.uuid4().hex[:6]}"
+    return agent, _config(thread_id)
 
 def _config(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}, "recursion_limit": 30}
@@ -158,7 +184,7 @@ def start(ticket_number: str, thread_id: str = ""):
         return
     short, desc = ticket.get("short_description", ""), ticket.get("description", "")
     text = f"{short} {desc}"
-    inst, why = resolve_server(text)
+    inst, why = resolve_server(text, ticket.get("cmdb_ci", ""))
     playbook, skill, allowed_tools, skill_version = build_playbook(text, inst["platform"] if inst else None)
 
     if not inst and skill == "ad-account-locked":
