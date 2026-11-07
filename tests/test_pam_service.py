@@ -24,7 +24,7 @@ def svc(monkeypatch):
     rows = []
     monkeypatch.setattr(pam_service, "_audit", lambda run, ticket, action, detail: rows.append((action, detail)))
     monkeypatch.setattr(pam_service, "_run_ticket", lambda r: "INC1")
-    monkeypatch.setattr(pam_service.usage, "agent_context", lambda: ("r1", "triage"))
+    monkeypatch.setattr(pam_service.usage, "agent_context", lambda: {"run_id": "r1", "kind": "triage"})
     monkeypatch.setattr(pam_service, "_recent", deque())
     pam_service._per_run.clear()
 
@@ -44,7 +44,7 @@ def test_checkout_returns_the_secret_and_audits_without_it(svc):
 def test_no_run_is_refused(svc, monkeypatch):
     rows, use = svc
     use(Fake({}))
-    monkeypatch.setattr(pam_service.usage, "agent_context", lambda: (None, "triage"))
+    monkeypatch.setattr(pam_service.usage, "agent_context", lambda: {"run_id": None, "kind": "triage"})
     with pytest.raises(RuntimeError, match="no active agent run"):
         pam_service.checkout("i-1")
     assert rows[0][0] == "pam_denied"

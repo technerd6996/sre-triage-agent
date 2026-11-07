@@ -1909,9 +1909,9 @@ def _yn(v) -> str:
 def _result(name: str, content) -> str | None:
     d = _j(content)
     if d.get("error"):
-        return f"âœ— Failed: {str(d['error'])[:160]}"
+        return f"✗ Failed: {str(d['error'])[:160]}"
     if name == "check_reachability":
-        return "âœ“ Server is reachable" if d.get("reachable") else "âœ— Server is not reachable"
+        return "✓ Server is reachable" if d.get("reachable") else "✗ Server is not reachable"
     if name == "check_disk_usage" and d.get("disks"):
         disks = ", ".join(f"{x.get('disk')} {x.get('used_pct')}%" for x in d["disks"])
         over = d.get("over_threshold")
@@ -1928,9 +1928,9 @@ def _result(name: str, content) -> str | None:
         return (f"Freed {d['freed_mb']} MB of temp files" if "freed_mb" in d
                 else f"Deleted {d.get('files_deleted', 0)} temp files")
     if name == "resolve_incident":
-        return "âœ“ Ticket resolved"
+        return "✓ Ticket resolved"
     if name == "escalate_incident":
-        return "â†‘ Ticket escalated to a human engineer"
+        return "↑ Ticket escalated to a human engineer"
     return None
 
 
@@ -1948,16 +1948,16 @@ def describe(ev: dict) -> str | None:
         return _result(ev.get("name"), ev.get("content"))
     if t == "approval_required":
         acts = "; ".join(_fmt_call(a.get("name"), a.get("args")) for a in ev.get("actions", []))
-        return f"â¸ Waiting for an engineer to approve: {acts}"
+        return f"⏸ Waiting for an engineer to approve: {acts}"
     if t == "decision":
         who = ev.get("by", "an engineer")
-        return f"âœ“ Approved by {who}" if ev.get("approve") else f"âœ— Rejected by {who}"
+        return f"✓ Approved by {who}" if ev.get("approve") else f"✗ Rejected by {who}"
     if t == "final":
         return str(ev.get("text", ""))[:300]
     if t == "error":
-        return f"âœ— Error: {str(ev.get('message', ''))[:200]}"
+        return f"✗ Error: {str(ev.get('message', ''))[:200]}"
     if t == "warning":
-        return f"âš  {ev.get('message', '')}"
+        return f"⚠ {ev.get('message', '')}"
     return None
 
 
@@ -1983,7 +1983,7 @@ def _build_report_old(run: dict, full: bool = True) -> str:
     """The structured work note posted to ServiceNow when a run finishes.
 
     full=True (default): include the step-by-step list.
-    full=False: short summary only â€” used when the checker will post the full consolidated note.
+    full=False: short summary only — used when the checker will post the full consolidated note.
     """
     lines = ["TRIAGE-1 AUTOMATED TRIAGE REPORT", "",
              f"Ticket:   {run['ticket']}",
@@ -11925,7 +11925,7 @@ body { font-family: 'IBM Plex Sans', sans-serif; background-color: var(--bg); co
 .content p { margin-bottom: 0.85rem; }
 .content ul { list-style-type: none; padding-left: 0; margin-bottom: 0.85rem; }
 .content ul li { position: relative; padding-left: 1.5rem; margin-bottom: 0.35rem; }
-.content ul li::before { content: "â€¢"; position: absolute; left: 0.5rem; color: var(--accent); font-weight: bold; }
+.content ul li::before { content: "•"; position: absolute; left: 0.5rem; color: var(--accent); font-weight: bold; }
 .content strong { color: var(--text); font-weight: 600; }
 .content pre { background: var(--panel); padding: 1.25rem; border-radius: 0.5rem; overflow-x: auto; border: 1px solid var(--border-strong); margin-bottom: 1rem; font-size: 14.5px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.2); }
 .content code { font-family: 'JetBrains Mono', monospace; color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); padding: 0.15rem 0.4rem; border-radius: 0.25rem; font-size: 14px;}
@@ -12365,7 +12365,7 @@ const post = (path, body) => api(path, {
 let runId = null, nextIdx = 0, timer = null, curStatus = null, userSelected = false;
 
 const STATUS = {
-    running: ['Workingâ€¦', 'text-[#FFB000] border-[#FFB000]'],
+    running: ['Working…', 'text-[#FFB000] border-[#FFB000]'],
     awaiting_approval: ['Waiting for approval', 'text-[#FF8A00] border-[#FF8A00]'],
     done: ['Finished', 'text-[#3DDC84] border-[#3DDC84]'],
     error: ['Error', 'text-red-400 border-red-400'],
@@ -12404,7 +12404,7 @@ async function loadRuns() {
             const row = el('button', `text-left p-3 rounded-lg bg-[#12161C] border ${border} hover:border-[#FFB000]`);
             row.append(el('div', 'mono text-[14px] text-[#FFB000]', r.ticket),
                        el('div', 'text-[13px] text-gray-400',
-                          `${(STATUS[r.status] || [r.status])[0]}${r.server ? ' Â· ' + r.server : ''}`));
+                          `${(STATUS[r.status] || [r.status])[0]}${r.server ? ' · ' + r.server : ''}`));
             row.onclick = () => attach(r.id);
             box.append(row);
         });
@@ -12439,7 +12439,7 @@ async function startRun(ticket) {
     try {
         const r = await post('/api/agent/run', { ticket });
         if (!r.run_id) { toast(`Queued at position ${r.position}. It starts automatically when the current run finishes.`); return; }
-        attach(r.run_id);   // already a manual call â€” attach() now marks this as user-selected by default
+        attach(r.run_id);   // already a manual call — attach() now marks this as user-selected by default
     } catch (e) { toast(e.message, false); }
 }
 
@@ -12499,12 +12499,12 @@ function stepRow(icon, iconCls, title, detail) {
 
 function addEvent(ev) {
     let row = null;
-    if (ev.type === 'tool_call') row = stepRow('â–¶', 'text-[#0084FF]', ev.name, JSON.stringify(ev.args));
-    else if (ev.type === 'tool_result') row = stepRow('âœ“', 'text-[#3DDC84]', `${ev.name} result`, ev.content);
-    else if (ev.type === 'decision') row = stepRow(ev.approve ? 'âœ”' : 'âœ–', ev.approve ? 'text-[#3DDC84]' : 'text-red-400', (ev.approve ? 'Approved by ' : 'Rejected by ') + (ev.by || 'an engineer'));
-    else if (ev.type === 'nudge') row = stepRow('â†»', 'text-[#FFB000]', 'Nudged the agent to finish', ev.text);
+    if (ev.type === 'tool_call') row = stepRow('▶', 'text-[#0084FF]', ev.name, JSON.stringify(ev.args));
+    else if (ev.type === 'tool_result') row = stepRow('✓', 'text-[#3DDC84]', `${ev.name} result`, ev.content);
+    else if (ev.type === 'decision') row = stepRow(ev.approve ? '✔' : '✖', ev.approve ? 'text-[#3DDC84]' : 'text-red-400', (ev.approve ? 'Approved by ' : 'Rejected by ') + (ev.by || 'an engineer'));
+    else if (ev.type === 'nudge') row = stepRow('↻', 'text-[#FFB000]', 'Nudged the agent to finish', ev.text);
     else if (ev.type === 'warning') row = stepRow('!', 'text-[#FFB000]', 'Warning', ev.message);
-    else if (ev.type === 'error') row = stepRow('âœ–', 'text-red-400', 'Error', ev.message);
+    else if (ev.type === 'error') row = stepRow('✖', 'text-red-400', 'Error', ev.message);
     else if (ev.type === 'final') {
         row = el('div', 'p-4 rounded-lg bg-[#0F1A14] border border-[#1F9D55]');
         row.append(el('div', 'mono text-[13px] uppercase tracking-[0.14em] text-[#3DDC84] mb-1', 'Summary'),
@@ -12768,15 +12768,15 @@ function renderDocuments() {
     } else {
         body.innerHTML = filtered.map((document) => `
             <tr>
-                <td><div class="document-name"><span class="document-name-icon" aria-hidden="true">â–¤</span><span>${esc(document.filename)}</span></div></td>
+                <td><div class="document-name"><span class="document-name-icon" aria-hidden="true">▤</span><span>${esc(document.filename)}</span></div></td>
                 <td class="number-cell">${formatNumber(document.chunks)}</td>
                 <td class="number-cell">${formatNumber(document.edges)}</td>
                 <td class="action-cell"><button type="button" class="action-button" data-action="delete-doc" data-name="${esc(encodeURIComponent(document.filename))}" aria-label="Delete ${esc(document.filename)}">Delete</button></td>
             </tr>`).join('');
     }
     $('document-list-footer').textContent = searchTerms(query).length
-        ? `Showing ${filtered.length} of ${state.documents.length} documents Â· Search matches filename keywords`
-        : `${formatNumber(state.documents.length)} indexed ${state.documents.length === 1 ? 'document' : 'documents'} Â· ${formatNumber(state.documents.reduce((sum, d) => sum + Number(d.chunks || 0), 0))} vector chunks`;
+        ? `Showing ${filtered.length} of ${state.documents.length} documents · Search matches filename keywords`
+        : `${formatNumber(state.documents.length)} indexed ${state.documents.length === 1 ? 'document' : 'documents'} · ${formatNumber(state.documents.reduce((sum, d) => sum + Number(d.chunks || 0), 0))} vector chunks`;
 }
 
 function renderGraph() {
@@ -12802,18 +12802,18 @@ function renderGraph() {
         }).join('');
     }
     $('graph-list-footer').textContent = searchTerms(query).length
-        ? `Showing ${filtered.length} of ${state.edges.length} relationships Â· Search covers source, relation, destination and owner`
+        ? `Showing ${filtered.length} of ${state.edges.length} relationships · Search covers source, relation, destination and owner`
         : `${formatNumber(state.edges.length)} relationships in the current graph`;
 }
 
 function markLoadFailed(results) {
     const [docs, graph] = results;
     if (docs.status === 'rejected') {
-        if (!state.documents.length) $('doc-list').innerHTML = '<tr><td colspan="4" class="table-state">Could not load documents. Use â€œRefresh dataâ€ to try again.</td></tr>';
+        if (!state.documents.length) $('doc-list').innerHTML = '<tr><td colspan="4" class="table-state">Could not load documents. Use “Refresh data” to try again.</td></tr>';
         $('document-list-footer').textContent = 'Document list unavailable';
     }
     if (graph.status === 'rejected') {
-        if (!state.edges.length) $('graph-list').innerHTML = '<tr><td colspan="5" class="table-state">Could not load relationships. Use â€œRefresh dataâ€ to try again.</td></tr>';
+        if (!state.edges.length) $('graph-list').innerHTML = '<tr><td colspan="5" class="table-state">Could not load relationships. Use “Refresh data” to try again.</td></tr>';
         $('graph-list-footer').textContent = 'Relationship list unavailable';
     }
 }
@@ -12855,10 +12855,10 @@ function renderSelectedFiles() {
     container.hidden = files.length === 0;
     container.innerHTML = files.map((file, index) => {
         const extension = (file.name.split('.').pop() || 'FILE').slice(0, 4).toUpperCase();
-        return `<div class="selected-file"><span class="file-type-icon">${esc(extension)}</span><span class="selected-file-name">${esc(file.name)}</span><span class="selected-file-size">${formatBytes(file.size)}</span><button type="button" class="remove-file" data-action="remove-selected-file" data-index="${index}" aria-label="Remove ${esc(file.name)} from selection" title="Remove file" ${state.busy ? 'disabled' : ''}>Ã—</button></div>`;
+        return `<div class="selected-file"><span class="file-type-icon">${esc(extension)}</span><span class="selected-file-name">${esc(file.name)}</span><span class="selected-file-size">${formatBytes(file.size)}</span><button type="button" class="remove-file" data-action="remove-selected-file" data-index="${index}" aria-label="Remove ${esc(file.name)} from selection" title="Remove file" ${state.busy ? 'disabled' : ''}>×</button></div>`;
     }).join('');
     $('selected-summary').textContent = files.length
-        ? `${files.length} ${files.length === 1 ? 'file' : 'files'} selected Â· ${formatBytes(files.reduce((sum, file) => sum + file.size, 0))}`
+        ? `${files.length} ${files.length === 1 ? 'file' : 'files'} selected · ${formatBytes(files.reduce((sum, file) => sum + file.size, 0))}`
         : 'No files selected';
     $('btn-ingest').disabled = state.busy || files.length === 0;
     $('btn-clear-files').disabled = state.busy || files.length === 0;
@@ -12877,7 +12877,7 @@ function selectFiles(files) {
     renderSelectedFiles();
     const count = state.selectedFiles.length;
     const ready = additions.length
-        ? `${count} ${count === 1 ? 'file is' : 'files are'} ready. Click â€œIngest filesâ€ to add ${count === 1 ? 'it' : 'them'}. A file with an existing name replaces the indexed version.`
+        ? `${count} ${count === 1 ? 'file is' : 'files are'} ready. Click “Ingest files” to add ${count === 1 ? 'it' : 'them'}. A file with an existing name replaces the indexed version.`
         : '';
     if (skipped || ready) setStatus($('upload-status'), [ready, skipped].filter(Boolean).join('\n\n'), skipped ? 'error' : 'info');
     $('file-upload').value = '';
@@ -12892,7 +12892,7 @@ async function uploadDocument() {
     const files = [...state.selectedFiles];
     const results = [];
     setBusy(true);
-    setStatus($('upload-status'), `Preparing to ingest ${files.length} file(s)â€¦`, 'info');
+    setStatus($('upload-status'), `Preparing to ingest ${files.length} file(s)…`, 'info');
     try {
         for (let index = 0; index < files.length; index += 1) {
             const file = files[index];
@@ -12902,16 +12902,16 @@ async function uploadDocument() {
             try {
                 const response = await fetch('/api/rag/upload', { method: 'POST', body: form });
                 const data = await responseData(response);
-                results.push(`âœ“ ${file.name}: ${data.message || 'Ingestion completed.'}`);
+                results.push(`✓ ${file.name}: ${data.message || 'Ingestion completed.'}`);
             } catch (error) {
-                results.push(`âœ• ${file.name}: ${error.message || 'Upload failed.'}`);
+                results.push(`✕ ${file.name}: ${error.message || 'Upload failed.'}`);
             }
-            setStatus($('upload-status'), results.join('\n'), results.some((line) => line.startsWith('âœ•')) ? 'error' : 'success');
+            setStatus($('upload-status'), results.join('\n'), results.some((line) => line.startsWith('✕')) ? 'error' : 'success');
         }
         state.selectedFiles = [];
         renderSelectedFiles();
         await Promise.allSettled([fetchDocuments(), fetchGraph()]);
-        showNotice(results.some((line) => line.startsWith('âœ•')) ? 'Ingestion finished with one or more errors. Review the file results in the runbook panel.' : 'All selected files were ingested successfully.', results.some((line) => line.startsWith('âœ•')) ? 'error' : 'success');
+        showNotice(results.some((line) => line.startsWith('✕')) ? 'Ingestion finished with one or more errors. Review the file results in the runbook panel.' : 'All selected files were ingested successfully.', results.some((line) => line.startsWith('✕')) ? 'error' : 'success');
     } finally {
         setBusy(false);
         renderSelectedFiles();
@@ -12921,19 +12921,19 @@ async function uploadDocument() {
 async function deleteDocument(filename) {
     if (state.busy) return;
     const confirmed = await confirmDialog({
-        title: `Delete â€œ${filename}â€?`,
+        title: `Delete “${filename}”?`,
         body: 'This removes its vector chunks and any graph edges that belong only to this document. Shared, seed and manual edges are kept.'
     });
     if (!confirmed) return;
     setBusy(true);
-    setStatus($('upload-status'), `Deleting ${filename}â€¦`, 'info');
+    setStatus($('upload-status'), `Deleting ${filename}…`, 'info');
     try {
         const response = await fetch(`/api/rag/documents/${encodeURIComponent(filename)}`, { method: 'DELETE' });
         const data = await responseData(response);
         const graph = data.graph || {};
-        setStatus($('upload-status'), `Deleted ${filename}.\n${formatNumber(graph.edges_removed)} edges removed Â· ${formatNumber(graph.edges_kept_shared)} shared edges kept Â· ${formatNumber(graph.nodes_removed)} orphan nodes removed.`, 'success');
+        setStatus($('upload-status'), `Deleted ${filename}.\n${formatNumber(graph.edges_removed)} edges removed · ${formatNumber(graph.edges_kept_shared)} shared edges kept · ${formatNumber(graph.nodes_removed)} orphan nodes removed.`, 'success');
         await Promise.allSettled([fetchDocuments(), fetchGraph()]);
-        showNotice(`Deleted â€œ${filename}â€ and refreshed the index.`, 'success');
+        showNotice(`Deleted “${filename}” and refreshed the index.`, 'success');
     } catch (error) {
         setStatus($('upload-status'), `Could not delete ${filename}: ${error.message}`, 'error');
     } finally {
@@ -12952,7 +12952,7 @@ async function addGraphEdge(event) {
         return;
     }
     setBusy(true);
-    setStatus($('graph-status'), 'Adding relationshipâ€¦', 'info');
+    setStatus($('graph-status'), 'Adding relationship…', 'info');
     try {
         const response = await fetch('/api/rag/graph', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -12992,7 +12992,7 @@ async function uploadGraphCsv() {
     }
     const file = state.csvFile;
     setBusy(true);
-    setStatus($('graph-status'), `Importing ${file.name}â€¦`, 'info');
+    setStatus($('graph-status'), `Importing ${file.name}…`, 'info');
     try {
         const form = new FormData();
         form.append('file', file);
@@ -13012,9 +13012,9 @@ async function uploadGraphCsv() {
 
 async function deleteGraphEdge(src, rel, dst) {
     if (state.busy) return;
-    if (!await confirmDialog({ title: 'Delete this relationship?', body: `${src} â†’ ${rel} â†’ ${dst}` })) return;
+    if (!await confirmDialog({ title: 'Delete this relationship?', body: `${src} → ${rel} → ${dst}` })) return;
     setBusy(true);
-    setStatus($('graph-status'), 'Deleting relationshipâ€¦', 'info');
+    setStatus($('graph-status'), 'Deleting relationship…', 'info');
     try {
         const params = new URLSearchParams({ src, rel, dst });
         const response = await fetch(`/api/rag/graph?${params.toString()}`, { method: 'DELETE' });
@@ -13187,7 +13187,7 @@ async function initUserSession() {
         currentUser = await res.json();
         STORE_KEY = `triage1_chats_v1:${currentUser.user_id}`;
         const label = document.getElementById('user-label');
-        if (label) label.textContent = `${currentUser.name} Â· ${currentUser.role_label || currentUser.role}`;
+        if (label) label.textContent = `${currentUser.name} · ${currentUser.role_label || currentUser.role}`;
         const lo = document.getElementById('logout-btn');
         if (lo) lo.onclick = async () => {
             await fetch('/api/auth/logout', { method: 'POST' });
@@ -13327,7 +13327,7 @@ function renderChatList() {
         }
 
         if (deletingId === id) {
-            div.innerHTML = `<span class="text-[14px] text-red-400 truncate">Delete â€œ${esc(chat.title)}â€?</span>
+            div.innerHTML = `<span class="text-[14px] text-red-400 truncate">Delete “${esc(chat.title)}”?</span>
                 <span class="flex gap-1 shrink-0 ml-2">
                     <button data-yes aria-label="Yes, delete ${esc(chat.title)}" class="px-2 py-0.5 text-[13px] rounded bg-red-500/20 text-red-300 hover:bg-red-500/30">Yes</button>
                     <button data-no aria-label="No, keep ${esc(chat.title)}" class="px-2 py-0.5 text-[13px] rounded bg-[#232B33] text-gray-300 hover:bg-[#2E3744]">No</button>
@@ -13342,7 +13342,7 @@ function renderChatList() {
         btn.type = 'button';
         btn.className = `flex items-center gap-3 flex-1 text-left truncate text-[15px] ${isActive ? 'text-amber-500 font-medium' : 'text-gray-400 hover:text-gray-200'}`;
         btn.title = chat.title;
-        const dot = chat.closed ? ICON.lock : (isActive ? 'â—' : 'â—‹');
+        const dot = chat.closed ? ICON.lock : (isActive ? '●' : '○');
         btn.innerHTML = `<span class="text-[12px] shrink-0">${dot}</span> <span class="truncate">${esc(chat.title)}</span>${chat.closed ? '<span class="text-[12px] mono text-gray-500 shrink-0 ml-1">closed</span>' : ''}`;
         if (isActive) btn.setAttribute('aria-current', 'true');
         btn.onclick = () => switchChat(id);
@@ -13439,7 +13439,7 @@ function switchChat(id) {
     applyComposerState();
 }
 
-const RELATED_RE = /^[ \t]*(?:[-*â€¢][ \t]+)?(?:\*\*)?Related(?:\*\*)?:(?:\*\*)?[ \t]*(.*)$/gim;
+const RELATED_RE = /^[ \t]*(?:[-*•][ \t]+)?(?:\*\*)?Related(?:\*\*)?:(?:\*\*)?[ \t]*(.*)$/gim;
 
 function normalizeRelated(content) {
     const matches = [...content.matchAll(RELATED_RE)];
@@ -13456,22 +13456,22 @@ function sourceBadgeHTML(sources, answer) {
     const mentioned = [...new Set(body.match(/\b(?:RB|SOP)-\d{3}\b|\bINC-\d{4}-\d{3}\b/g) || [])];
     const phantom = mentioned.filter(id => !retrieved.includes(id));
     const phantomHTML = phantom.length
-        ? ` <span class="src-badge src-gen">âš  Mentions ${phantom.map(esc).join(', ')}, which was not retrieved. May be inaccurate.</span>`
+        ? ` <span class="src-badge src-gen">⚠ Mentions ${phantom.map(esc).join(', ')}, which was not retrieved. May be inaccurate.</span>`
         : '';
     const fromGraph = /Source:\s*graph\b/i.test(answer);
 
     const cited = retrieved.filter(id =>
         new RegExp(`(?<![\\w-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(answer));
     if (cited.length) {
-        return `<span class="src-badge src-kb">ðŸ“š From your knowledge base: ${cited.map(esc).join(', ')}</span>${phantomHTML}`;
+        return `<span class="src-badge src-kb">📚 From your knowledge base: ${cited.map(esc).join(', ')}</span>${phantomHTML}`;
     }
     if (fromGraph) {
-        return `<span class="src-badge src-kb">ðŸ•¸ From your knowledge graph</span>${phantomHTML}`;
+        return `<span class="src-badge src-kb">🕸 From your knowledge graph</span>${phantomHTML}`;
     }
     if (retrieved.length) {
-        return `<span class="src-badge src-gen">âš  Retrieved ${retrieved.map(esc).join(', ')} but the answer doesn't cite them. Verify before acting.</span>`;
+        return `<span class="src-badge src-gen">⚠ Retrieved ${retrieved.map(esc).join(', ')} but the answer doesn't cite them. Verify before acting.</span>`;
     }
-    return `<span class="src-badge src-gen">âš  Not from your knowledge base. Verify against your runbooks before acting.</span>`;
+    return `<span class="src-badge src-gen">⚠ Not from your knowledge base. Verify against your runbooks before acting.</span>`;
 }
 
 function formatSeverity(content) {
@@ -13482,7 +13482,7 @@ function formatSeverity(content) {
     if (match) {
         const sev = match[1].toUpperCase();
         const cleanContent = content.replace(match[0], '').trim();
-        const marker = `<div class="sev-card sev-${sev}"><span class="w-2 h-2 rounded-full bg-current"></span>SEVERITY â€” ${sev}</div>`;
+        const marker = `<div class="sev-card sev-${sev}"><span class="w-2 h-2 rounded-full bg-current"></span>SEVERITY — ${sev}</div>`;
         html = marker + renderMarkdown(cleanContent);
     } else {
         html = renderMarkdown(content);
@@ -13544,7 +13544,7 @@ function appendDOM(role, content, info) {
     return div.querySelector('.content');
 }
 
-const THINKING_STEPS = ['Thinkingâ€¦', 'Searching runbooksâ€¦', 'Checking the knowledge graphâ€¦', 'Putting the answer togetherâ€¦'];
+const THINKING_STEPS = ['Thinking…', 'Searching runbooks…', 'Checking the knowledge graph…', 'Putting the answer together…'];
 
 function startThinking(node) {
     node.innerHTML = `<div class="thinking"><span class="thinking-dots"><i></i><i></i><i></i></span><span class="thinking-label shimmer">${THINKING_STEPS[0]}</span></div>`;
@@ -13566,7 +13566,7 @@ function setComposer(enabled, placeholder) {
 function applyComposerState() {
     const chat = chats[activeChatId];
     if (chat.closed) setComposer(false, 'This chat is closed. Start a new chat to continue.');
-    else if (chat.wrap === 'asking') setComposer(false, 'Choose Yes or No above to continueâ€¦');
+    else if (chat.wrap === 'asking') setComposer(false, 'Choose Yes or No above to continue…');
     else setComposer(true);
 }
 
@@ -13586,7 +13586,7 @@ function renderWrapUp(chatId) {
     yes.type = no.type = 'button';
     const answer = (wantsMore) => {
         const chat = chats[chatId];
-        const line = `${WRAP_Q} â€” **${wantsMore ? 'Yes' : 'No'}**`;
+        const line = `${WRAP_Q} — **${wantsMore ? 'Yes' : 'No'}**`;
         body.innerHTML = formatSeverity(line);          // replaces the buttons with the answered line
         chat.wrap = null;
         (chat.notes ??= []).push({ at: chat.history.length, text: line });
@@ -13612,7 +13612,7 @@ function renderClosedFooter() {
 
 function closeChat(chatId, rerender) {
     const chat = chats[chatId];
-    const text = 'ðŸ”’ This chat is now closed. Thank you for contacting TRIAGE-1.';
+    const text = '🔒 This chat is now closed. Thank you for contacting TRIAGE-1.';
     chat.closed = true;
     chat.wrap = null;
     chat.run = null;
@@ -13694,7 +13694,7 @@ function looksFixed(t) {
 
 function handleFixed(text) {
     const chat = chats[activeChatId];
-    const reply = 'Glad to hear it is sorted! ðŸŽ‰';
+    const reply = 'Glad to hear it is sorted! 🎉';
     chat.history.push({ role: 'user', content: text, skip: true }, { role: 'assistant', content: reply, skip: true });
     appendDOM('assistant', reply);
     chat.wrap = 'asking';
@@ -13832,16 +13832,16 @@ async function streamResponse(query) {
                 const r = data.result;
                 let line = `**${data.server}** (${data.platform}): `;
                 if (r.cpu_pct !== undefined) {
-                    line += `${r.cpu_pct}% CPU used` + (r.over_threshold ? ` Ã¢â‚¬â€ over the ${r.threshold_pct}% threshold.` : '.');
+                    line += `${r.cpu_pct}% CPU used` + (r.over_threshold ? ` â€” over the ${r.threshold_pct}% threshold.` : '.');
                 } else if (r.used_pct !== undefined) {
-                    line += `${r.used_pct}% memory used` + (r.over_threshold ? ` Ã¢â‚¬â€ over the ${r.threshold_pct}% threshold.` : '.');
+                    line += `${r.used_pct}% memory used` + (r.over_threshold ? ` â€” over the ${r.threshold_pct}% threshold.` : '.');
                 } else if (Array.isArray(r.processes) && r.processes.length) {
                     const top = r.processes[0];
                     const shareKey = r.sort_by === 'cpu' ? 'cpu_pct' : 'mem_pct';
                     const share = top[shareKey];
                     line += `top ${r.sort_by === 'cpu' ? 'CPU' : 'memory'} user is **${top.name}** (pid ${top.pid}, ${share}%)`;
                     line += top.service ? `, service \`${top.service}\`` : '';
-                    line += r.culprit_service ? '.' : ' Ã¢â‚¬â€ not a service this agent can restart by name.';
+                    line += r.culprit_service ? '.' : ' â€” not a service this agent can restart by name.';
                 } else if (r.summary) {
                     line += r.summary;
                 } else {
@@ -13947,9 +13947,9 @@ async function streamResponse(query) {
         if (sourceLine) {
             let badgeHTML = meta.kind === 'canned' ? '' : sourceBadgeHTML(meta.sources, fullText);
             if (meta.incident?.status === 'created') {
-                badgeHTML += ` <a href="/agent" class="src-badge src-kb" style="text-decoration:none; margin-left:6px;">ðŸŽ« Ticket ${esc(meta.incident.number)} created for ${esc(meta.incident.server)} Â· View Agent Run â†’</a>`;
+                badgeHTML += ` <a href="/agent" class="src-badge src-kb" style="text-decoration:none; margin-left:6px;">🎫 Ticket ${esc(meta.incident.number)} created for ${esc(meta.incident.server)} · View Agent Run →</a>`;
             } else if (meta.incident?.status === 'busy') {
-                badgeHTML += ` <span class="src-badge src-gen" style="margin-left:6px;">â³ Agent is busy with another ticket (Server: ${esc(meta.incident.server)})</span>`;
+                badgeHTML += ` <span class="src-badge src-gen" style="margin-left:6px;">⏳ Agent is busy with another ticket (Server: ${esc(meta.incident.server)})</span>`;
             }
             sourceLine.innerHTML = badgeHTML;
         }
@@ -13983,7 +13983,7 @@ function showGreeting() {
     const body = appendDOM('assistant', "Hi! I'm TRIAGE-1. Ask me a question, or report an issue and I'll raise a ticket and start working on it.");
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.textContent = 'ðŸ›  Report an Issue';
+    btn.textContent = '🛠 Report an Issue';
     btn.className = 'mt-4 px-4 py-2 rounded-lg bg-[#FFB000] text-black font-semibold text-[15px] hover:bg-[#E6A000]';
     btn.onclick = () => startIssueFlow();
     body.appendChild(btn);
@@ -14217,7 +14217,7 @@ function renderCreateIncidentAction(container, description, server, mode, fresh 
         ? 'Ready to raise a ticket?'
         : (server ? `This looks like a live issue on ${server}.` : 'This looks like a live issue.');
     bar.append(mkEl('span', 'incident-action-text', msg));
-    const btn = mkEl('button', 'incident-action-btn', 'ðŸŽ« Create incident');
+    const btn = mkEl('button', 'incident-action-btn', '🎫 Create incident');
     btn.type = 'button';
     btn.onclick = () => startIssueFlow({ description, server });
     bar.append(btn);
@@ -14271,9 +14271,9 @@ function startIssueFlow(prefill) {
     const label = (t, first) => mkEl('label', `block text-[13px] mono uppercase tracking-wider text-gray-400 ${first ? '' : 'mt-4'} mb-2`, t);
     const field = 'w-full rounded-lg bg-[#0A0D10] border border-[#2E3744] px-3 py-2.5 text-[15px] text-white outline-none focus:border-[#FFB000]';
 
-    const ci = makeTypeahead('Start typing a server nameâ€¦', async (q) => {
+    const ci = makeTypeahead('Start typing a server name…', async (q) => {
         const r = await fetch('/api/servers?q=' + encodeURIComponent(q));
-        return (await r.json()).map((s) => ({ primary: s.name, secondary: `${s.platform} Â· ${s.state}` }));
+        return (await r.json()).map((s) => ({ primary: s.name, secondary: `${s.platform} · ${s.state}` }));
     }, pre.server || '', (row) => { chosen.ci = row ? row.primary : null; });
 
     const levels = (selected) => {
@@ -14295,7 +14295,7 @@ function startIssueFlow(prefill) {
 
     const desc = mkEl('textarea', field + ' resize-none');
     desc.rows = 3;
-    desc.placeholder = 'What is going wrong? For example: disk is almost full, service is downâ€¦';
+    desc.placeholder = 'What is going wrong? For example: disk is almost full, service is down…';
     const err = mkEl('div', 'text-[14px] text-red-400 min-h-[18px] mt-3');
     const cancel = mkEl('button', 'px-4 py-2 rounded-lg border border-[#2E3744] text-gray-300 text-[15px] hover:border-gray-500', 'Cancel');
     cancel.type = 'button';
@@ -14310,7 +14310,7 @@ function startIssueFlow(prefill) {
         mkEl('div', 'mt-4'), grid,
     );
     if (pre.description) {
-        card.append(mkEl('p', 'mt-4 text-[13.5px] text-gray-500', `Description (from your message): ${pre.description.slice(0, 110)}${pre.description.length > 110 ? 'â€¦' : ''}`));
+        card.append(mkEl('p', 'mt-4 text-[13.5px] text-gray-500', `Description (from your message): ${pre.description.slice(0, 110)}${pre.description.length > 110 ? '…' : ''}`));
     } else {
         card.append(label('Description', false), desc);
     }
@@ -14331,7 +14331,7 @@ function startIssueFlow(prefill) {
         if (!chosen.ci) { err.textContent = 'Pick a configuration item (server) from the list.'; return; }
         if (description.length < 10) { err.textContent = 'Please describe the problem in a few words.'; return; }
         submit.disabled = true;
-        submit.textContent = 'Creating incidentâ€¦';
+        submit.textContent = 'Creating incident…';
         const transcript = ticketTranscript(chatId);
         try {
             const r = await fetch('/api/issues', {
@@ -14409,15 +14409,15 @@ if (fileInput) {
 
 const AGENT_STATES = {
     online: {
-        dot: 'w-3 h-3 rounded-full bg-[#FFB000] animate-pulse', label: 'Listening', side: 'â— online',
+        dot: 'w-3 h-3 rounded-full bg-[#FFB000] animate-pulse', label: 'Listening', side: '● online',
         tip: 'The AI model is reachable and ready for questions.'
     },
     model: {
-        dot: 'w-3 h-3 rounded-full bg-gray-500', label: 'Offline', side: 'â— offline',
+        dot: 'w-3 h-3 rounded-full bg-gray-500', label: 'Offline', side: '● offline',
         tip: 'The AI model is not responding, so answers will fail for now. If this lasts, tell your administrator that the model service needs restarting.'
     },
     network: {
-        dot: 'w-3 h-3 rounded-full bg-red-500', label: 'No connection', side: 'â— offline',
+        dot: 'w-3 h-3 rounded-full bg-red-500', label: 'No connection', side: '● offline',
         tip: 'This page cannot reach the TRIAGE-1 server. Check your network connection, or ask your administrator whether the server is running.'
     }
 };
@@ -14483,19 +14483,19 @@ initUserSession();
 
 // ---- live progress card (per ticket) and global status box (for every user) ----
 const RUN_STATUS_LABEL = {
-    running: 'âš™ TRIAGE-1 is workingâ€¦',
-    awaiting_approval: 'â¸ Waiting for an engineer to approve an action',
-    done: 'âœ“ Finished',
-    error: 'âœ— Stopped with an error',
-    interrupted: 'âœ— Interrupted by a server restart',
+    running: '⚙ TRIAGE-1 is working…',
+    awaiting_approval: '⏸ Waiting for an engineer to approve an action',
+    done: '✓ Finished',
+    error: '✗ Stopped with an error',
+    interrupted: '✗ Interrupted by a server restart',
 };
 
 function watchRun(container, runId, number, server, chatId) {
     const card = mkEl('div', 'mt-3 p-4 rounded-xl bg-[#12161C] border border-[#2E3744]');
-    const head = mkEl('div', 'mono text-[14px] font-semibold text-[#FFB000] mb-1', `${number} Â· ${server}`);
-    const status = mkEl('div', 'mono text-[13px] text-gray-400 mb-2', 'Startingâ€¦');
+    const head = mkEl('div', 'mono text-[14px] font-semibold text-[#FFB000] mb-1', `${number} · ${server}`);
+    const status = mkEl('div', 'mono text-[13px] text-gray-400 mb-2', 'Starting…');
     const list = mkEl('ul', 'space-y-1 text-[14.5px] text-gray-200');
-    const link = mkEl('a', 'inline-block mt-3 mono text-[13px] text-[#FFB000] hover:underline', 'Open Agent Console â†’');
+    const link = mkEl('a', 'inline-block mt-3 mono text-[13px] text-[#FFB000] hover:underline', 'Open Agent Console →');
     link.href = '/agent';
     card.append(head, status, list, link);
     container.appendChild(card);
@@ -14541,8 +14541,8 @@ function watchRun(container, runId, number, server, chatId) {
             if (!r.ok) return;
             const d = await r.json();
             if (!d.active) { bar.classList.add('hidden'); return; }
-            t1.textContent = `TRIAGE-1 Â· ${d.ticket}${d.server ? ' Â· ' + d.server : ''}`;
-            t2.textContent = d.text || 'Workingâ€¦';
+            t1.textContent = `TRIAGE-1 · ${d.ticket}${d.server ? ' · ' + d.server : ''}`;
+            t2.textContent = d.text || 'Working…';
             bar.classList.remove('hidden');
         } catch (e) { /* ignore */ }
     }
@@ -14648,14 +14648,14 @@ body { font-family: 'IBM Plex Sans', sans-serif; background-color: #0A0D10; colo
 
     <header class="h-16 flex items-center justify-between px-8 border-b border-[#232B33] bg-[#12161C] shrink-0">
         <div class="flex items-center gap-3">
-            <div class="w-8 h-8 rounded bg-amber-500 text-[#0A0D10] flex items-center justify-center font-bold mono">â–®</div>
+            <div class="w-8 h-8 rounded bg-amber-500 text-[#0A0D10] flex items-center justify-center font-bold mono">▮</div>
             <div>
                 <h1 class="font-semibold text-[15px]">RAG Document Manager</h1>
                 <p class="mono text-[10px] text-gray-500 tracking-wider">SUPABASE & NEO4J CONTROLS</p>
             </div>
         </div>
         <a href="/" class="mono text-[11px] text-gray-400 hover:text-amber-500 border border-[#232B33] rounded px-4 py-2 transition-colors">
-            â† BACK TO CHAT
+            ← BACK TO CHAT
         </a>
     </header>
 
@@ -14739,7 +14739,7 @@ async function fetchDocuments() {
     const tbody = document.getElementById('doc-list');
     tbody.innerHTML = docs.map(d => `
         <tr class="border-b border-[#232B33]">
-            <td class="py-3 font-medium text-gray-300">ðŸ“„ ${esc(d.filename)}</td>
+            <td class="py-3 font-medium text-gray-300">📄 ${esc(d.filename)}</td>
             <td class="py-3 mono text-xs text-gray-400">${d.chunks} parts</td>
             <td class="py-3 mono text-xs text-gray-400">${d.edges} edges</td>
             <td class="py-3 text-right">
@@ -14759,15 +14759,15 @@ async function uploadDocument() {
     document.body.style.cursor = 'wait';
 
     for (const file of files) {
-        status.textContent += `â³ ${file.name} ...\n`;
+        status.textContent += `⏳ ${file.name} ...\n`;
         const formData = new FormData();
         formData.append("file", file);
         try {
             const res = await fetch('/api/rag/upload', { method: 'POST', body: formData });
             const data = await res.json();
-            status.textContent = status.textContent.replace(`â³ ${file.name} ...`, `âœ… ${file.name}: ${data.message}`);
+            status.textContent = status.textContent.replace(`⏳ ${file.name} ...`, `✅ ${file.name}: ${data.message}`);
         } catch (e) {
-            status.textContent = status.textContent.replace(`â³ ${file.name} ...`, `âŒ ${file.name}: upload failed`);
+            status.textContent = status.textContent.replace(`⏳ ${file.name} ...`, `❌ ${file.name}: upload failed`);
         }
     }
 
@@ -14783,7 +14783,7 @@ async function deleteDocument(filename) {
     const data = await res.json();
     const g = data.graph || {};
     document.getElementById('upload-status').textContent =
-        `ðŸ—‘ï¸ ${filename}: ${g.edges_removed || 0} edges removed, ${g.edges_kept_shared || 0} shared edges kept, ${g.nodes_removed || 0} orphan nodes removed.`;
+        `🗑️ ${filename}: ${g.edges_removed || 0} edges removed, ${g.edges_kept_shared || 0} shared edges kept, ${g.nodes_removed || 0} orphan nodes removed.`;
     fetchDocuments();
     fetchGraph();
 }
@@ -14829,15 +14829,15 @@ async function uploadGraphCsv() {
     const input = document.getElementById('graph-csv');
     if (!input.files[0]) return alert("Select a CSV file first.");
     const status = document.getElementById('graph-status');
-    status.textContent = 'â³ Importing...';
+    status.textContent = '⏳ Importing...';
     const formData = new FormData();
     formData.append("file", input.files[0]);
     try {
         const res = await fetch('/api/rag/graph/upload', { method: 'POST', body: formData });
         const data = await res.json();
-        status.textContent = (res.ok ? 'âœ… ' : 'âŒ ') + data.message;
+        status.textContent = (res.ok ? '✅ ' : '❌ ') + data.message;
     } catch (e) {
-        status.textContent = 'âŒ Import failed.';
+        status.textContent = '❌ Import failed.';
     }
     input.value = '';
     fetchGraph();
@@ -14879,7 +14879,7 @@ fetchGraph();
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Admin Â· TRIAGE-1</title>
+  <title>Admin · TRIAGE-1</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -15014,17 +15014,17 @@ fetchGraph();
           <button onclick="window.print()" class="px-3 py-1.5 rounded-lg border border-[#232B33] text-[14px] hover:text-[#FFB000]">Print / PDF</button>
         </div>
       </div>
-      <div id="sm-panel" class="mb-8"><p class="text-[14px] text-gray-500">Loadingâ€¦</p></div>
+      <div id="sm-panel" class="mb-8"><p class="text-[14px] text-gray-500">Loading…</p></div>
       <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-gray-600 mb-3">Live now</h2>
       <div class="grid grid-cols-2 gap-4 mb-6">
         <div class="card p-5">
           <p class="text-[12px] text-gray-500 mb-1">ServiceNow queue</p>
-          <p id="ov-queue" class="mono text-[29px] font-bold">â€”</p>
+          <p id="ov-queue" class="mono text-[29px] font-bold">—</p>
           <p class="text-[13px] text-gray-500 mt-1">tickets waiting</p>
         </div>
         <div class="card p-5">
           <p class="text-[12px] text-gray-500 mb-1">Pending approvals</p>
-          <p id="ov-approvals" class="mono text-[29px] font-bold">â€”</p>
+          <p id="ov-approvals" class="mono text-[29px] font-bold">—</p>
           <p class="text-[13px] text-gray-500 mt-1">awaiting decision</p>
         </div>
       </div>
@@ -15074,18 +15074,18 @@ fetchGraph();
 
       <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">P1 notice</h2>
       <div class="card p-5 flex flex-col gap-4">
-        <div class="field"><label for="br">Bridge link</label><input id="br" type="url" placeholder="https://â€¦"></div>
-        <div class="field"><label for="to">To (comma-separated)</label><input id="to" type="text" placeholder="ops@example.com, â€¦"></div>
-        <div class="field"><label for="cc">Cc (comma-separated)</label><input id="cc" type="text" placeholder="mgmt@example.com, â€¦"></div>
+        <div class="field"><label for="br">Bridge link</label><input id="br" type="url" placeholder="https://…"></div>
+        <div class="field"><label for="to">To (comma-separated)</label><input id="to" type="text" placeholder="ops@example.com, …"></div>
+        <div class="field"><label for="cc">Cc (comma-separated)</label><input id="cc" type="text" placeholder="mgmt@example.com, …"></div>
         <button id="p1save" class="self-start px-4 py-2 rounded-lg bg-[#FFB000] text-[#0A0D10] font-semibold text-[14px] hover:bg-[#E0A000]">Save</button>
       </div>
     </div>
 
     <!-- PERFORMANCE -->
     <div id="section-performance" class="section max-w-6xl">
-      <h1 class="text-[19px] font-semibold mb-6">Performance <span class="text-gray-600 font-normal text-[15px]">â€” last 7 days</span></h1>
+      <h1 class="text-[19px] font-semibold mb-6">Performance <span class="text-gray-600 font-normal text-[15px]">— last 7 days</span></h1>
       <div id="perf-panel" class="card p-5">
-        <p class="text-[14px] text-gray-500">Loadingâ€¦</p>
+        <p class="text-[14px] text-gray-500">Loading…</p>
       </div>
       <div id="bot-panel" class="card p-5 mt-4"></div>
 
@@ -15099,7 +15099,7 @@ fetchGraph();
         </select>
       </div>
       <div id="cost-panel" class="card p-5">
-        <p class="text-[14px] text-gray-500">Loadingâ€¦</p>
+        <p class="text-[14px] text-gray-500">Loading…</p>
       </div>
     </div>
 
@@ -15145,7 +15145,7 @@ fetchGraph();
 
       <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">Operational settings</h2>
       <div class="card p-5 mb-6 flex flex-col gap-4">
-        <div class="field"><label for="op-min">Minutes a person takes per ticket (used for the â€œtime savedâ€ estimate)</label><input id="op-min" type="number" min="1" max="600"></div>
+        <div class="field"><label for="op-min">Minutes a person takes per ticket (used for the “time saved” estimate)</label><input id="op-min" type="number" min="1" max="600"></div>
         <div class="field"><label for="op-ret">Knowledge-answer log retention (days)</label><input id="op-ret" type="number" min="7" max="365"></div>
         <button id="op-save" class="self-start px-4 py-2 rounded-lg bg-[#FFB000] text-[#0A0D10] font-semibold text-[14px] hover:bg-[#E0A000]">Save</button>
       </div>
@@ -15160,7 +15160,7 @@ fetchGraph();
       <h1 class="text-[19px] font-semibold mb-6">Users</h1>
       <div class="card p-5 mb-6">
         <p class="text-[13px] text-gray-500 mb-3">Add user (search ServiceNow to fill name and email)</p>
-        <div class="field mb-3 relative"><input id="nuq" aria-label="Search ServiceNow users" placeholder="Search ServiceNow usersâ€¦" autocomplete="off">
+        <div class="field mb-3 relative"><input id="nuq" aria-label="Search ServiceNow users" placeholder="Search ServiceNow users…" autocomplete="off">
           <div id="nures" class="absolute z-10 w-full bg-[#0E1217] border border-[#232B33] rounded-lg mt-1 empty:hidden"></div></div>
         <div class="grid grid-cols-4 gap-3">
           <div class="field"><label for="nuem">Email</label><input id="nuem"></div>
@@ -15178,7 +15178,7 @@ fetchGraph();
       <div class="card p-5 mb-6">
         <p class="text-[13px] text-gray-500 mb-3">Map an AD group to a local role (Requires Identity settings to be configured and tested)</p>
         <div class="field mb-3 relative">
-          <input id="ad-q" aria-label="Search AD groups" placeholder="Search AD groups (e.g., L2_Engineers)â€¦" autocomplete="off">
+          <input id="ad-q" aria-label="Search AD groups" placeholder="Search AD groups (e.g., L2_Engineers)…" autocomplete="off">
           <div id="ad-res" class="absolute z-10 w-full bg-[#0E1217] border border-[#232B33] rounded-lg mt-1 empty:hidden max-h-48 overflow-y-auto"></div>
         </div>
         <div class="grid grid-cols-3 gap-3">
@@ -15225,18 +15225,18 @@ fetchGraph();
     <div id="section-health" class="section max-w-2xl">
       <h1 class="text-[19px] font-semibold mb-6">System health</h1>
       <button id="hl-go" class="mb-4 px-4 py-2 rounded-lg bg-[#FFB000] text-[#0A0D10] font-semibold text-[14px]">Check now</button>
-      <div id="api-pill" class="card px-5 py-3 mb-4 text-[14px]">API health: press â€œCheck nowâ€.</div>
-      <div id="hl-panel" class="card p-5 text-[14px] text-gray-500">Press â€œCheck nowâ€.</div>
+      <div id="api-pill" class="card px-5 py-3 mb-4 text-[14px]">API health: press “Check now”.</div>
+      <div id="hl-panel" class="card p-5 text-[14px] text-gray-500">Press “Check now”.</div>
     </div>
 
     <!-- RAG -->
     <div id="section-rag" class="section max-w-4xl">
-      <h1 class="text-[19px] font-semibold mb-6">Knowledge answers <span class="text-gray-600 font-normal text-[15px]">â€” last 30 days</span></h1>
-      <div id="rag-panel" class="card p-5 text-[14px] text-gray-500 mb-6">Loadingâ€¦</div>
+      <h1 class="text-[19px] font-semibold mb-6">Knowledge answers <span class="text-gray-600 font-normal text-[15px]">— last 30 days</span></h1>
+      <div id="rag-panel" class="card p-5 text-[14px] text-gray-500 mb-6">Loading…</div>
 
       <h2 class="mono text-[12px] tracking-[0.14em] uppercase text-[#FF8A00] mb-4">Playbook source</h2>
       <div id="kb-status" class="card p-5 mb-6" style="max-height: 320px; overflow-y: auto;">
-        <p class="text-[14px] text-gray-500">Loadingâ€¦</p>
+        <p class="text-[14px] text-gray-500">Loading…</p>
       </div>
     </div>
 
@@ -15257,7 +15257,7 @@ fetchGraph();
 </dialog>
 <script src="/static/js/agent_status.js"></script>
 <script>
-// â”€â”€ Nav â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Nav ──────────────────────────────────────────────────────────────────────
 // -- Role-aware page --
 const NEED = {overview:'monitor.view', controls:'config.manage', performance:'monitor.view', connections:'config.manage',
               behaviour:'config.manage', users:'users.manage', audit:'audit.view', runs:'monitor.view', health:'monitor.view',
@@ -15291,7 +15291,7 @@ document.querySelectorAll('.nav-item').forEach(btn => {
   });
 });
 
-// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Helpers ──────────────────────────────────────────────────────────────────
 const j = (p, b) => fetch(p, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(b)})
   .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
 
@@ -15335,7 +15335,7 @@ function askDialog({ title, body = '', okLabel = 'Confirm', cancelLabel = 'Cance
   });
 }
 
-// â”€â”€ Overview â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Overview ─────────────────────────────────────────────────────────────────
 function loadOverview() {
   fetch('/api/agent/status').then(r=>r.json()).then(d => {
     document.getElementById('ov-queue').textContent = d.queue === null ? '?' : d.queue;
@@ -15349,7 +15349,7 @@ function loadOverview() {
           <span class="mono font-bold text-[#FFB000]">${d.run.ticket}</span>
           <span class="pill">${waiting ? 'awaiting approval' : 'running'}</span>
         </div>
-        <p class="text-[13px] text-gray-500 mt-1">${d.run.server} Â· ${mins > 0 ? mins+'m ' : ''}${secs}s elapsed</p>`;
+        <p class="text-[13px] text-gray-500 mt-1">${d.run.server} · ${mins > 0 ? mins+'m ' : ''}${secs}s elapsed</p>`;
     } else {
       runEl.textContent = 'No run in progress.';
     }
@@ -15358,7 +15358,7 @@ function loadOverview() {
 loadOverview();
 setInterval(loadOverview, 5000);
 
-// â”€â”€ Controls â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Controls ─────────────────────────────────────────────────────────────────
 fetch('/api/chat/status').then(r=>r.json()).then(d=>chat.checked=d.enabled);
 ME.then(me => {
   if (!(me.caps || []).includes('config.manage')) return;
@@ -15395,7 +15395,7 @@ p1save.onclick = () => fetch('/api/admin/p1', {method:'POST',
   toast(r.ok ? 'P1 settings saved' : (d.detail || 'Error'), r.ok);
 });
 
-// â”€â”€ Performance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Performance ───────────────────────────────────────────────────────────────
 let perfLoaded = false;
 function fmt(n) { return n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n); }
 
@@ -15413,19 +15413,19 @@ function loadPerf() {
         </div>
         <span class="w-6 text-right text-gray-300">${s.calls}</span>
         <span class="w-20 text-right text-gray-500">${fmt(s.tokens_in+s.tokens_out)} tok</span>
-        <span class="w-14 text-right text-gray-500">${s.avg_gen_s != null ? s.avg_gen_s+'s' : 'â€”'}</span>
+        <span class="w-14 text-right text-gray-500">${s.avg_gen_s != null ? s.avg_gen_s+'s' : '—'}</span>
       </div>`).join('');
     document.getElementById('perf-panel').innerHTML = `
       <div class="grid grid-cols-4 gap-y-6 gap-x-4 mb-6">
         ${[['Calls (7d)', fmt(d.calls)], ['Tokens in', fmt(d.tokens_in)], ['Tokens out', fmt(d.tokens_out)], 
-           ['Wasted tokens', fmt(d.wasted_tokens)], ['Avg TTFT (s)', d.avg_ttft_s != null ? d.avg_ttft_s.toFixed(3) : 'â€”'], ['Calls (24h)', fmt(d.last_24h)],
-           ['Call latency p50 (s)', d.p50_call_s ?? 'â€”'], ['Call latency p95 (s)', d.p95_call_s ?? 'â€”']]
+           ['Wasted tokens', fmt(d.wasted_tokens)], ['Avg TTFT (s)', d.avg_ttft_s != null ? d.avg_ttft_s.toFixed(3) : '—'], ['Calls (24h)', fmt(d.last_24h)],
+           ['Call latency p50 (s)', d.p50_call_s ?? '—'], ['Call latency p95 (s)', d.p95_call_s ?? '—']]
           .map(([l,v]) => `<div><p class="text-[12px] text-gray-500 mb-1">${l}</p><p class="mono text-[23px] font-bold">${v}</p></div>`).join('')}
       </div>
       <div class="border-t border-[#1A2028] pt-4">
         <div class="flex justify-between text-[12px] text-gray-500 mb-3">
           <span>By kind</span>
-          <span>avg gen ${d.avg_gen_s != null ? d.avg_gen_s+'s' : 'â€”'} Â· avg wait ${d.avg_wait_s != null ? d.avg_wait_s+'s' : 'â€”'} Â· avg ttft ${d.avg_ttft_s != null ? d.avg_ttft_s+'s' : 'â€”'}</span>
+          <span>avg gen ${d.avg_gen_s != null ? d.avg_gen_s+'s' : '—'} · avg wait ${d.avg_wait_s != null ? d.avg_wait_s+'s' : '—'} · avg ttft ${d.avg_ttft_s != null ? d.avg_ttft_s+'s' : '—'}</span>
         </div>
         <div class="flex flex-col gap-2.5">${kindRows}</div>
       </div>`;
@@ -15439,7 +15439,7 @@ function loadPerf() {
 function loadCost() {
   const days = document.getElementById('cost-days').value;
   const panel = document.getElementById('cost-panel');
-  panel.innerHTML = '<p class="text-[14px] text-gray-500">Loadingâ€¦</p>';
+  panel.innerHTML = '<p class="text-[14px] text-gray-500">Loading…</p>';
   fetch('/api/admin/token-cost?days=' + days).then(r => r.json()).then(d => {
     if (d.error) { panel.innerHTML = '<p class="text-[14px] text-red-400">Cost data unavailable.</p>'; return; }
     if (!d.rows || !d.rows.length) { panel.innerHTML = '<p class="text-[14px] text-gray-500">No LLM calls in this window.</p>'; return; }
@@ -15452,13 +15452,13 @@ function loadCost() {
         </div>
         <span class="w-16 text-right text-gray-500">${r.runs} run${r.runs === 1 ? '' : 's'}</span>
         <span class="w-20 text-right text-gray-300">${fmt(r.tokens_total)} tok</span>
-        <span class="w-20 text-right text-gray-500">${r.tokens_per_run != null ? fmt(r.tokens_per_run) + '/run' : 'â€”'}</span>
+        <span class="w-20 text-right text-gray-500">${r.tokens_per_run != null ? fmt(r.tokens_per_run) + '/run' : '—'}</span>
         <span class="w-16 text-right ${r.wasted_pct > 10 ? 'text-red-400' : 'text-gray-500'}">${r.wasted_pct}% waste</span>
       </div>`).join('');
     panel.innerHTML = `
       <div class="flex justify-between text-[12px] text-gray-500 mb-3">
         <span>Skill (closest proxy for ticket type)</span>
-        <span>runs Â· tokens Â· tokens/run Â· wasted %</span>
+        <span>runs · tokens · tokens/run · wasted %</span>
       </div>
       <div class="flex flex-col">${rows}</div>`;
   }).catch(() => {
@@ -15471,7 +15471,7 @@ let kbLoaded = false;
 function loadKbStatus() {
   kbLoaded = true;
   fetch('/api/agent/skills-status').then(r => r.json()).then(d => {
-    const src = d.source === 'kb' ? 'ðŸŸ¢ ServiceNow KB' : 'ðŸŸ¡ Local files (SKILLS_SOURCE=file)';
+    const src = d.source === 'kb' ? '🟢 ServiceNow KB' : '🟡 Local files (SKILLS_SOURCE=file)';
     const err = d.error ? `<p class="text-[13px] text-red-400 mt-2">${d.error}</p>` : '';
     const rows = Object.entries(d.skills || {}).map(([name, ver]) =>
       `<div class="flex justify-between text-[13px] py-1 border-b border-[#1A2028] last:border-0">
@@ -15494,7 +15494,7 @@ function loadKbStatus() {
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const api = (m, p, b) => fetch(p, {method:m, headers:{'Content-Type':'application/json'}, body:b ? JSON.stringify(b) : undefined})
   .then(async r => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status); return d; });
-const when = t => t ? new Date(t * 1000).toLocaleString() : 'â€”';
+const when = t => t ? new Date(t * 1000).toLocaleString() : '—';
 const TD = '';
 
 // Users
@@ -15541,7 +15541,7 @@ nuq.oninput = () => { clearTimeout(nuT); nuT = setTimeout(() => {
   fetch('/api/users?q=' + encodeURIComponent(nuq.value.trim())).then(r => r.json()).then(L => {
     nures.innerHTML = (Array.isArray(L) ? L : []).map(u =>
       `<button type="button" data-name="${esc(u.name)}" data-email="${esc(u.email || u.user_name || '')}"
-        class="block w-full text-left px-3 py-1.5 text-[13px] hover:bg-[#1A2028]">${esc(u.name)} Â· ${esc(u.email || u.user_name || '')}</button>`).join('');
+        class="block w-full text-left px-3 py-1.5 text-[13px] hover:bg-[#1A2028]">${esc(u.name)} · ${esc(u.email || u.user_name || '')}</button>`).join('');
   }).catch(() => {});
 }, 300); };
 nures.addEventListener('mousedown', e => {
@@ -15628,7 +15628,7 @@ loadUsers = function() {
 };
 
 // Audit
-// afQs removed â€” auditQs() below is the correct implementation
+// afQs removed — auditQs() below is the correct implementation
 function auditQs() {
   const g = id => encodeURIComponent(document.getElementById(id).value.trim());
   return `actor=${g('af-actor')}&action=${g('af-action')}&ticket=${g('af-ticket')}&days=${g('af-days')}`;
@@ -15650,7 +15650,7 @@ function loadJobs() {
     const el = document.getElementById('jobs-panel');
     el.innerHTML = rows.length ? `<p class="mb-2">Queued (${rows.length}), next first</p>` + rows.map(j =>
       `<div class="flex justify-between py-1 border-t border-[#1A2028]"><span><span class="mono text-[#FFB000]">${esc(j.ticket)}</span>
-        <span class="pill ml-2">${esc(j.source)} Â· P${j.priority}</span></span>
+        <span class="pill ml-2">${esc(j.source)} · P${j.priority}</span></span>
         <button data-job="${esc(j.id)}" class="text-red-400">Remove</button></div>`).join('') : 'No queued jobs.';
     el.onclick = async e => {
       const b = e.target.closest('button'); if (!b) return;
@@ -15668,7 +15668,7 @@ function loadRuns() {
       
       const mainRow = `<tr class="cursor-pointer hover:bg-[#1A2028]" onclick="this.nextElementSibling.classList.toggle('hidden')">
         <td ${TD}><span class="mono text-[#FFB000]">${esc(r.ticket)}</span></td>
-        <td ${TD}>${esc(r.skill || 'â€”')}</td><td ${TD}>${esc(r.outcome || 'â€”')}</td><td ${TD}>${esc(r.status)}</td>
+        <td ${TD}>${esc(r.skill || '—')}</td><td ${TD}>${esc(r.outcome || '—')}</td><td ${TD}>${esc(r.status)}</td>
         <td ${TD}>${r.steps || 0}</td><td ${TD}>${fmt((r.tokens_in || 0) + (r.tokens_out || 0))}</td><td ${TD}>${when(r.started)}</td>
         <td ${TD} onclick="event.stopPropagation()">${live ? `<button data-id="${esc(r.id)}" data-a="cancel" class="text-red-400">Cancel</button>`
                           : `<button data-id="${esc(r.id)}" data-a="rerun" class="text-[#FFB000]">Re-run</button>`}</td></tr>`;
@@ -15677,9 +15677,9 @@ function loadRuns() {
         <td colspan="8" class="p-4 border-b border-[#232B33]">
             <div class="grid grid-cols-3 gap-4 text-[13px] text-gray-400">
                 <div><span class="text-gray-500">Run ID:</span> <span class="mono">${esc(r.id)}</span></div>
-                <div><span class="text-gray-500">Server:</span> ${esc(r.server || 'â€”')}</div>
-                <div><span class="text-gray-500">Requester:</span> ${esc(r.requester || 'â€”')}</div>
-                <div><span class="text-gray-500">Duration:</span> ${r.ended && r.started ? Math.round(r.ended - r.started) + 's' : 'â€”'}</div>
+                <div><span class="text-gray-500">Server:</span> ${esc(r.server || '—')}</div>
+                <div><span class="text-gray-500">Requester:</span> ${esc(r.requester || '—')}</div>
+                <div><span class="text-gray-500">Duration:</span> ${r.ended && r.started ? Math.round(r.ended - r.started) + 's' : '—'}</div>
                 <div><span class="text-gray-500">Tokens In/Out:</span> ${fmt(r.tokens_in || 0)} / ${fmt(r.tokens_out || 0)}</div>
                 <div><span class="text-gray-500">Nudges:</span> ${r.nudges || 0}</div>
             </div>
@@ -15703,10 +15703,10 @@ document.getElementById('rf-outcome').onchange = loadRuns;
 // Health
 function loadApiHealth() {
   const el = document.getElementById('api-pill');
-  el.textContent = 'API health: checkingâ€¦'; el.title = '';
+  el.textContent = 'API health: checking…'; el.title = '';
   api('GET', '/api/admin/api-health').then(d => {
     const bad = d.results.filter(r => !r.ok), up = d.results.length - bad.length;
-    el.innerHTML = `${bad.length ? 'ðŸŸ¡' : 'ðŸŸ¢'} API health: <b>${up}/${d.results.length}</b> online`;
+    el.innerHTML = `${bad.length ? '🟡' : '🟢'} API health: <b>${up}/${d.results.length}</b> online`;
     el.title = bad.length ? 'Offline:\n' + bad.map(r => `${r.path} (${r.status ?? 'no response'})`).join('\n') : 'All APIs responding';
     el.style.cursor = 'help';
   }).catch(() => { el.textContent = 'API health: unavailable'; });
@@ -15714,11 +15714,11 @@ function loadApiHealth() {
 
 function loadHealth() {
   loadApiHealth();
-  const p = document.getElementById('hl-panel'); p.textContent = 'Checkingâ€¦';
+  const p = document.getElementById('hl-panel'); p.textContent = 'Checking…';
   Promise.all([fetch('/api/ready').then(r => r.json()), fetch('/api/agent/status').then(r => r.json()).catch(() => ({}))]).then(([h, s]) => {
     const rows = Object.entries(h.checks || {}).map(([k, c]) => `<div class="flex justify-between py-1.5 border-b border-[#1A2028]">
-      <span>${c.ok ? 'ðŸŸ¢' : 'ðŸ”´'} ${k}</span><span class="text-gray-500 text-[13px]">${c.ms} ms Â· ${esc(c.detail)}</span></div>`).join('');
-    p.innerHTML = rows + `<div class="mt-3 text-[13px] text-gray-500">Queue: ${s.queue ?? '?'} Â· Auto-work: ${s.auto ? 'on' : 'off'} Â· Autonomy: ${esc(s.autonomy)} Â· Active run: ${s.run ? esc(s.run.ticket) : 'none'}</div>`;
+      <span>${c.ok ? '🟢' : '🔴'} ${k}</span><span class="text-gray-500 text-[13px]">${c.ms} ms · ${esc(c.detail)}</span></div>`).join('');
+    p.innerHTML = rows + `<div class="mt-3 text-[13px] text-gray-500">Queue: ${s.queue ?? '?'} · Auto-work: ${s.auto ? 'on' : 'off'} · Autonomy: ${esc(s.autonomy)} · Active run: ${s.run ? esc(s.run.ticket) : 'none'}</div>`;
   }).catch(() => p.textContent = 'Health check failed.');
 }
 document.getElementById('hl-go').onclick = loadHealth;
@@ -15726,16 +15726,16 @@ document.getElementById('hl-go').onclick = loadHealth;
 // Bot performance
 function loadBot() {
   api('GET', '/api/admin/bot-stats').then(d => {
-    const kv = (l, v) => `<div><p class="text-[12px] text-gray-500 mb-1">${l}</p><p class="mono text-[21px] font-bold">${v ?? 'â€”'}</p></div>`;
-    const list = o => Object.entries(o || {}).map(([k, v]) => `<span class="pill mr-1">${esc(k)}: ${typeof v === 'object' ? v.approved + 'âœ“/' + v.rejected + 'âœ—' : v}</span>`).join('') || 'â€”';
+    const kv = (l, v) => `<div><p class="text-[12px] text-gray-500 mb-1">${l}</p><p class="mono text-[21px] font-bold">${v ?? '—'}</p></div>`;
+    const list = o => Object.entries(o || {}).map(([k, v]) => `<span class="pill mr-1">${esc(k)}: ${typeof v === 'object' ? v.approved + '✓/' + v.rejected + '✗' : v}</span>`).join('') || '—';
     document.getElementById('bot-panel').innerHTML = `<div class="grid grid-cols-4 gap-4 mb-5">
       ${kv('Runs', d.runs)}${kv('Auto-resolved', d.resolved_pct + '%')}${kv('Escalated', d.escalated_pct + '%')}${kv('Failed', d.failed_pct + '%')}
-      ${kv('MTTR (min)', d.mttr_min)}${kv('Steps/run', d.avg_steps)}${kv('Nudges/run', d.avg_nudges)}${kv('Chat tickets (undone)', d.chat_tickets + ' (' + d.chat_undone + ')')}${kv('Approval wait avg/p90 (min)', (d.approval_wait_avg_min ?? 'â€”') + ' / ' + (d.approval_wait_p90_min ?? 'â€”'))}</div>
+      ${kv('MTTR (min)', d.mttr_min)}${kv('Steps/run', d.avg_steps)}${kv('Nudges/run', d.avg_nudges)}${kv('Chat tickets (undone)', d.chat_tickets + ' (' + d.chat_undone + ')')}${kv('Approval wait avg/p90 (min)', (d.approval_wait_avg_min ?? '—') + ' / ' + (d.approval_wait_p90_min ?? '—'))}</div>
       <div class="text-[13px] text-gray-400 space-y-2"><p>Skills: ${list(d.skills)}</p><p>Approvers: ${list(d.approvers)}</p><p>Checker verdicts: ${list(d.checker)}</p></div>`;
   }).catch(() => {});
 }
 
-// â”€â”€ Misc â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Misc ──────────────────────────────────────────────────────────────────────
 ME.then(me => (me.caps || []).includes('config.manage') ? api('GET', '/api/admin/settings') : null).then(d => {
   if (!d) return;
   document.getElementById('op-min').value = d.manual_minutes_per_ticket;
@@ -15913,8 +15913,8 @@ document.getElementById('env-apply').onclick = async () => {
 function loadSummary() {
   const days = document.getElementById('sm-days').value;
   api('GET', '/api/admin/summary?days=' + days).then(d => {
-    const delta = (a, b) => b ? (a === b ? 'same as previous period' : (a > b ? 'â–² ' : 'â–¼ ') + Math.abs(Math.round(100 * (a - b) / b)) + '% vs previous period') : 'no earlier data';
-    const card = (t, v, s) => `<div class="card p-5"><p class="text-[12px] text-gray-500 mb-1">${t}</p><p class="mono text-[27px] font-bold">${v ?? 'â€”'}</p><p class="text-[13px] text-gray-500 mt-1">${s}</p></div>`;
+    const delta = (a, b) => b ? (a === b ? 'same as previous period' : (a > b ? '▲ ' : '▼ ') + Math.abs(Math.round(100 * (a - b) / b)) + '% vs previous period') : 'no earlier data';
+    const card = (t, v, s) => `<div class="card p-5"><p class="text-[12px] text-gray-500 mb-1">${t}</p><p class="mono text-[27px] font-bold">${v ?? '—'}</p><p class="text-[13px] text-gray-500 mt-1">${s}</p></div>`;
     const bad = d.attention.length > 0 || (d.pending || 0) > 0;
     const max = Math.max(...Object.values(d.daily), 1);
     const bars = Object.entries(d.daily).map(([k, v]) => `<div class="flex flex-col items-center gap-1 flex-1 min-w-0">
@@ -15922,12 +15922,12 @@ function loadSummary() {
       <span class="text-[12px] text-gray-600 truncate">${esc(k)}</span></div>`).join('') || '<p class="text-[13px] text-gray-500">No tickets in this period.</p>';
     document.getElementById('sm-panel').innerHTML = `
       <div class="card px-5 py-3 mb-4 flex items-center gap-3 ${bad ? 'border-[#7A5A12]' : 'border-[#1F9D55]'}">
-        <span>${bad ? 'ðŸŸ¡' : 'ðŸŸ¢'}</span>
+        <span>${bad ? '🟡' : '🟢'}</span>
         <span class="text-[14px]">${bad ? `${d.pending || 0} decision(s) waiting, ${d.attention.length} ticket(s) needing attention` : 'All clear: nothing waiting on a person and no failed tickets.'}</span></div>
       <div class="grid grid-cols-4 gap-4 mb-4">
         ${card('Unique tickets handled', d.cur.handled, delta(d.cur.handled, d.prev.handled))}
         ${card('Resolved by the agent', d.resolved_pct != null ? d.resolved_pct + '%' : null, d.cur.resolved + ' of ' + d.cur.finished + ' finished')}
-        ${card('Time saved (estimate)', d.hours_saved + ' h', 'resolved Ã— (' + d.manual_minutes + ' min by hand âˆ’ agent time)')}
+        ${card('Time saved (estimate)', d.hours_saved + ' h', 'resolved × (' + d.manual_minutes + ' min by hand − agent time)')}
         ${card('Average fix time', d.cur.mttr_min != null ? d.cur.mttr_min + ' min' : null, 'resolved tickets only')}
         ${card('Escalated to people', d.cur.escalated, delta(d.cur.escalated, d.prev.escalated))}
         ${card('Awaiting approval', d.pending, 'decisions needed now')}
@@ -15948,14 +15948,14 @@ loadSummary();
 
 function loadRag() {
   api('GET', '/api/admin/rag-stats').then(d => {
-    const kv = (l, v) => `<div><p class="text-[12px] text-gray-500 mb-1">${l}</p><p class="mono text-[21px] font-bold">${v ?? 'â€”'}</p></div>`;
+    const kv = (l, v) => `<div><p class="text-[12px] text-gray-500 mb-1">${l}</p><p class="mono text-[21px] font-bold">${v ?? '—'}</p></div>`;
     const tbl = (rows, h) => `<table class="w-full text-[13px] text-left"><thead class="text-gray-500"><tr><th class="pb-1">${h[0]}</th><th class="w-16 text-right">${h[1]}</th></tr></thead>
       ${rows.map(([a, b]) => `<tr class="border-t border-[#1A2028]"><td class="py-1.5 break-all">${esc(a)}</td><td class="text-right">${b}</td></tr>`).join('') || '<tr><td class="py-2 text-gray-500">None yet</td></tr>'}</table>`;
     document.getElementById('rag-panel').innerHTML = `
       <div class="grid grid-cols-4 gap-4 mb-5">${kv('Queries', d.queries)}${kv('KB hit rate', d.hit_rate != null ? d.hit_rate + '%' : null)}
-        ${kv('Phantom doc cites', d.phantom)}${kv('Latency avg/p90 (s)', (d.avg_total ?? 'â€”') + ' / ' + (d.p90_total ?? 'â€”'))}
+        ${kv('Phantom doc cites', d.phantom)}${kv('Latency avg/p90 (s)', (d.avg_total ?? '—') + ' / ' + (d.p90_total ?? '—'))}
         ${kv('Graph avg (s)', d.avg_graph)}${kv('Vector avg (s)', d.avg_vec)}</div>
-      <p class="text-[13px] text-gray-400 mb-4">Kinds: ${Object.entries(d.kinds).map(([k, v]) => `<span class="pill mr-1">${esc(k)}: ${v}</span>`).join('') || 'â€”'}</p>
+      <p class="text-[13px] text-gray-400 mb-4">Kinds: ${Object.entries(d.kinds).map(([k, v]) => `<span class="pill mr-1">${esc(k)}: ${v}</span>`).join('') || '—'}</p>
       <div class="grid grid-cols-2 gap-6"><div><p class="text-[13px] text-gray-500 mb-2">KB gaps (answered not from KB)</p>${tbl(d.gaps, ['Query', 'Count'])}</div>
       <div><p class="text-[13px] text-gray-500 mb-2">Top retrieved documents</p>${tbl(d.top_docs, ['Document', 'Hits'])}</div></div>`;
   }).catch(e => toast(e.message, false));
@@ -15991,7 +15991,7 @@ document.getElementById('logout-btn').onclick = () =>
     <script src="/static/js/theme.js?v=6"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agent Console Â· TRIAGE-1</title>
+    <title>Agent Console · TRIAGE-1</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16006,7 +16006,7 @@ document.getElementById('logout-btn').onclick = () =>
 
 <header class="h-[72px] shrink-0 flex items-center justify-between px-8 border-b border-[#232B33] bg-[#12161C]">
     <div class="flex items-center gap-4">
-        <a href="/" class="text-[14px] text-gray-400 hover:text-[#FFB000]">â† Chat</a>
+        <a href="/" class="text-[14px] text-gray-400 hover:text-[#FFB000]">← Chat</a>
         <h1 class="mono font-bold text-[19px]">TRIAGE-1 <span class="text-gray-500">/</span> Agent Console</h1>
     </div>
     <div class="flex items-center gap-5">
@@ -16091,7 +16091,7 @@ document.getElementById('logout-btn').onclick = () =>
     <script src="/static/js/theme.js?v=6"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Change password Â· TRIAGE-1</title>
+    <title>Change password · TRIAGE-1</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -16177,7 +16177,7 @@ document.getElementById('logout-btn').onclick = () =>
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Chat unavailable Â· TRIAGE-1</title>
+        <title>Chat unavailable · TRIAGE-1</title>
         <link rel="stylesheet" href="/static/css/theme.css?v=6">
         <script src="/static/js/theme.js?v=6"></script>
         <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -16260,7 +16260,7 @@ document.getElementById('logout-btn').onclick = () =>
                 <span>Model</span><span class="mono text-[#E8ECF1] text-[13px]">Qwen-7B-AWQ</span>
             </div>
             <div class="flex justify-between items-center py-2.5 border-b border-[#232B33] text-[14.5px] text-[#A7B0BC]">
-                <span>Status</span><span id="agent-status" class="mono text-[#FFB000] text-[13px]">â— online</span>
+                <span>Status</span><span id="agent-status" class="mono text-[#FFB000] text-[13px]">● online</span>
             </div>
             <div class="flex justify-between items-center py-2.5 border-b border-[#232B33] text-[14.5px] text-[#A7B0BC]">
                 <span>Current turns</span><span id="turn-count" class="mono text-[#E8ECF1] text-[13px]">0</span>
@@ -16315,7 +16315,7 @@ document.getElementById('logout-btn').onclick = () =>
                 </div>
                 <div>
                     <h1 class="text-[23px] font-bold leading-tight tracking-tight" style="color: var(--text)">SRE L1 Triage Agent</h1>
-                    <p class="text-[14px] font-medium text-gray-400 tracking-[0.18em] uppercase mt-1">Logs Â· Runbooks Â· Root Cause</p>
+                    <p class="text-[14px] font-medium text-gray-400 tracking-[0.18em] uppercase mt-1">Logs · Runbooks · Root Cause</p>
                 </div>
             </div>
             <div class="flex items-center gap-4">
@@ -16327,7 +16327,7 @@ document.getElementById('logout-btn').onclick = () =>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
                     Report an Issue
                 </button>
-                <div id="status-pill" tabindex="0" role="status" title="Checking the AI modelâ€¦" class="status-pill mono text-[15px] text-gray-300 border border-[#2E3744] rounded-full px-5 py-2.5 flex items-center gap-2.5 bg-[#12161C]">
+                <div id="status-pill" tabindex="0" role="status" title="Checking the AI model…" class="status-pill mono text-[15px] text-gray-300 border border-[#2E3744] rounded-full px-5 py-2.5 flex items-center gap-2.5 bg-[#12161C]">
                     <span id="status-dot" class="w-3 h-3 rounded-full bg-[#FFB000] animate-pulse"></span>
                     <span id="status-text">Listening</span>
                 </div>
@@ -16337,7 +16337,7 @@ document.getElementById('logout-btn').onclick = () =>
         <div id="chat-container" class="flex-1 overflow-y-auto px-10 pb-48 pt-10 flex flex-col relative">
             <div id="empty-state" class="flex flex-col items-center justify-center h-full w-full max-w-4xl mx-auto absolute inset-0 pb-16">
                 <div class="flex items-center gap-2 mb-6 bg-[#171C24] border border-[#2E3744] shadow-sm rounded-full px-5 py-2 text-[15px] text-gray-300">
-                    <span class="text-[#0084FF] font-bold">âœ“</span> triage-1 online
+                    <span class="text-[#0084FF] font-bold">✓</span> triage-1 online
                 </div>
                 <h2 class="text-[29px] font-semibold mb-3 text-white tracking-tight">What are we investigating?</h2>
                 <p class="text-[#A7B0BC] text-[16px] mb-12 text-center max-w-lg leading-relaxed">Paste an error log, attach a trace file, or ask a specific infrastructure question below to begin triage.</p>
@@ -16412,7 +16412,7 @@ document.getElementById('logout-btn').onclick = () =>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="var(--bg)">
-    <title>Knowledge Manager Â· TRIAGE-1</title>
+    <title>Knowledge Manager · TRIAGE-1</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -16425,9 +16425,9 @@ document.getElementById('logout-btn').onclick = () =>
 <header class="km-header">
     <a class="brand" href="/" aria-label="Return to TRIAGE-1 chat">
         <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
-        <span class="brand-copy"><span class="brand-title">TRIAGE-1 <span class="brand-divider">/</span> Knowledge</span><span class="brand-subtitle">RUNBOOKS Â· INFRASTRUCTURE GRAPH</span></span>
+        <span class="brand-copy"><span class="brand-title">TRIAGE-1 <span class="brand-divider">/</span> Knowledge</span><span class="brand-subtitle">RUNBOOKS · INFRASTRUCTURE GRAPH</span></span>
     </a>
-    <div class="header-actions"><span class="header-tag"><span class="header-tag-dot"></span> KNOWLEDGE CONTROLS</span><a href="/" class="back-link"><span aria-hidden="true">â†</span> Back to chat</a><span id="theme-slot"></span></div>
+    <div class="header-actions"><span class="header-tag"><span class="header-tag-dot"></span> KNOWLEDGE CONTROLS</span><a href="/" class="back-link"><span aria-hidden="true">←</span> Back to chat</a><span id="theme-slot"></span></div>
 </header>
 
 <main class="km-main">
@@ -16437,45 +16437,45 @@ document.getElementById('logout-btn').onclick = () =>
     </section>
 
     <section class="summary-strip" aria-label="Knowledge base summary">
-        <div class="summary-item"><span class="summary-mark summary-mark-amber" aria-hidden="true">â–¤</span><span class="summary-copy"><span class="summary-label">Indexed documents</span><strong id="stat-documents">â€”</strong></span></div>
+        <div class="summary-item"><span class="summary-mark summary-mark-amber" aria-hidden="true">▤</span><span class="summary-copy"><span class="summary-label">Indexed documents</span><strong id="stat-documents">—</strong></span></div>
         <span class="summary-divider" aria-hidden="true"></span>
-        <div class="summary-item"><span class="summary-mark summary-mark-blue" aria-hidden="true">â–¦</span><span class="summary-copy"><span class="summary-label">Vector chunks</span><strong id="stat-chunks">â€”</strong></span></div>
+        <div class="summary-item"><span class="summary-mark summary-mark-blue" aria-hidden="true">▦</span><span class="summary-copy"><span class="summary-label">Vector chunks</span><strong id="stat-chunks">—</strong></span></div>
         <span class="summary-divider" aria-hidden="true"></span>
-        <div class="summary-item"><span class="summary-mark summary-mark-green" aria-hidden="true">âŒ˜</span><span class="summary-copy"><span class="summary-label">Graph relationships</span><strong id="stat-edges">â€”</strong></span></div>
+        <div class="summary-item"><span class="summary-mark summary-mark-green" aria-hidden="true">⌘</span><span class="summary-copy"><span class="summary-label">Graph relationships</span><strong id="stat-edges">—</strong></span></div>
     </section>
 
     <div id="page-notice" class="page-notice" role="status" aria-live="polite" hidden></div>
 
     <nav id="workspace-tabs" class="workspace-tabs" role="tablist" aria-label="Knowledge manager sections">
-        <button id="tab-documents" class="workspace-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="documents-panel" tabindex="0"><span class="tab-icon tab-icon-amber" aria-hidden="true">â–¤</span><span class="tab-label">Runbook library</span><span id="document-count" class="tab-count">0</span></button>
-        <button id="tab-graph" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="graph-panel" tabindex="-1"><span class="tab-icon tab-icon-blue" aria-hidden="true">âŒ˜</span><span class="tab-label">Infrastructure graph</span><span id="graph-count" class="tab-count">0</span></button>
+        <button id="tab-documents" class="workspace-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="documents-panel" tabindex="0"><span class="tab-icon tab-icon-amber" aria-hidden="true">▤</span><span class="tab-label">Runbook library</span><span id="document-count" class="tab-count">0</span></button>
+        <button id="tab-graph" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="graph-panel" tabindex="-1"><span class="tab-icon tab-icon-blue" aria-hidden="true">⌘</span><span class="tab-label">Infrastructure graph</span><span id="graph-count" class="tab-count">0</span></button>
     </nav>
 
     <section id="documents-panel" class="workspace-panel" role="tabpanel" aria-labelledby="tab-documents">
-        <div class="section-intro"><div><p class="panel-kicker">SUPABASE Â· HYBRID RAG</p><h2>Runbook library</h2><p>Add runbooks, SOPs, and logs to the searchable knowledge base. Uploading a file with an existing name replaces its indexed version.</p></div><span class="section-tag">DOCUMENTS</span></div>
+        <div class="section-intro"><div><p class="panel-kicker">SUPABASE · HYBRID RAG</p><h2>Runbook library</h2><p>Add runbooks, SOPs, and logs to the searchable knowledge base. Uploading a file with an existing name replaces its indexed version.</p></div><span class="section-tag">DOCUMENTS</span></div>
 
         <section class="upload-card" aria-labelledby="upload-heading">
             <div class="subsection-heading"><div><h3 id="upload-heading">Add documents</h3><p>Drop supported files here or browse your computer.</p></div><span class="step-chip">STEP 1</span></div>
             <div id="document-drop-zone" class="drop-zone">
                 <input type="file" id="file-upload" multiple class="visually-hidden" accept=".md,.markdown,.txt,.text,.log,.json,.yaml,.yml,.csv" aria-label="Choose runbook files">
                 <span class="drop-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m-5 5 5-5 5 5"/><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg></span>
-                <div class="drop-copy"><strong>Drag and drop files</strong><span>or <button id="btn-choose-docs" class="text-button" type="button">browse files</button></span><small>Multiple files supported Â· UTF-8 text is indexed</small></div>
-                <span class="drop-hint">MD Â· TXT Â· LOG Â· JSON</span>
+                <div class="drop-copy"><strong>Drag and drop files</strong><span>or <button id="btn-choose-docs" class="text-button" type="button">browse files</button></span><small>Multiple files supported · UTF-8 text is indexed</small></div>
+                <span class="drop-hint">MD · TXT · LOG · JSON</span>
             </div>
             <div id="selected-files" class="selected-files" hidden></div>
-            <div class="upload-actions"><span id="selected-summary" class="muted-meta">No files selected</span><div class="button-row"><button id="btn-clear-files" class="button button-ghost" type="button" disabled>Clear selection</button><button id="btn-ingest" class="button button-primary" type="button" disabled><span aria-hidden="true">â†‘</span> Ingest files</button></div></div>
+            <div class="upload-actions"><span id="selected-summary" class="muted-meta">No files selected</span><div class="button-row"><button id="btn-clear-files" class="button button-ghost" type="button" disabled>Clear selection</button><button id="btn-ingest" class="button button-primary" type="button" disabled><span aria-hidden="true">↑</span> Ingest files</button></div></div>
             <div id="upload-status" class="status-log" role="status" aria-live="polite" hidden></div>
         </section>
 
         <section class="data-section" aria-labelledby="documents-list-heading">
             <div class="list-toolbar"><div><h3 id="documents-list-heading">Indexed documents</h3><p>Documents currently available for retrieval.</p></div><div class="search-control"><label class="search-field"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg><input id="document-search" type="search" placeholder="Search document names" autocomplete="off" aria-label="Search indexed documents" spellcheck="false"></label><button id="clear-document-search" class="search-clear" type="button" aria-label="Clear document search" title="Clear search" hidden>Clear</button></div></div>
-            <div class="table-wrap"><table class="data-table"><thead><tr><th>Document</th><th>Chunks</th><th>Graph edges</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="doc-list"><tr><td colspan="4" class="table-state">Loading documentsâ€¦</td></tr></tbody></table></div>
-            <div id="document-list-footer" class="table-footer">Loading document indexâ€¦</div>
+            <div class="table-wrap"><table class="data-table"><thead><tr><th>Document</th><th>Chunks</th><th>Graph edges</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="doc-list"><tr><td colspan="4" class="table-state">Loading documents…</td></tr></tbody></table></div>
+            <div id="document-list-footer" class="table-footer">Loading document index…</div>
         </section>
     </section>
 
     <section id="graph-panel" class="workspace-panel" role="tabpanel" aria-labelledby="tab-graph" hidden>
-        <div class="section-intro"><div><p class="panel-kicker">NEO4J AURADB Â· GRAPH RAG</p><h2>Infrastructure graph</h2><p>Connect services, hosts, alerts, errors, and fixes using source â†’ relationship â†’ destination.</p></div><span class="section-tag section-tag-blue">RELATIONSHIPS</span></div>
+        <div class="section-intro"><div><p class="panel-kicker">NEO4J AURADB · GRAPH RAG</p><h2>Infrastructure graph</h2><p>Connect services, hosts, alerts, errors, and fixes using source → relationship → destination.</p></div><span class="section-tag section-tag-blue">RELATIONSHIPS</span></div>
 
         <section class="edge-form-card" aria-labelledby="edge-form-heading">
             <div class="subsection-heading"><div><h3 id="edge-form-heading">Add a relationship</h3><p>Describe how one infrastructure entity relates to another.</p></div><span class="step-chip step-chip-blue">STEP 1</span></div>
@@ -16485,17 +16485,17 @@ document.getElementById('logout-btn').onclick = () =>
                     <label class="relation-field"><span>Relationship</span><input type="text" id="g-rel" maxlength="200" placeholder="e.g. proxies to" required></label>
                     <label><span>Destination entity</span><input type="text" id="g-dst" maxlength="200" placeholder="e.g. App Service" required></label>
                 </div>
-                <div class="edge-form-footer"><p class="example-line">Example <code>Nginx</code> <span>â†’</span> <code>proxies to</code> <span>â†’</span> <code>App Service</code></p><button id="btn-add-edge" class="button button-primary" type="submit"><span aria-hidden="true">ï¼‹</span> Add relationship</button></div>
+                <div class="edge-form-footer"><p class="example-line">Example <code>Nginx</code> <span>→</span> <code>proxies to</code> <span>→</span> <code>App Service</code></p><button id="btn-add-edge" class="button button-primary" type="submit"><span aria-hidden="true">＋</span> Add relationship</button></div>
             </form>
-            <details id="csv-import-details" class="csv-details"><summary><span class="csv-summary-icon">CSV</span><span><strong>Import relationships from CSV</strong><small>For bulk imports Â· required columns: <code>src,rel,dst</code></small></span><span class="summary-chevron" aria-hidden="true">âŒ„</span></summary><div class="csv-details-body"><input type="file" id="graph-csv" accept=".csv,text/csv" class="visually-hidden" aria-label="Choose graph CSV file"><div id="csv-selection" class="csv-selection" hidden></div><div class="csv-actions"><span class="muted-meta">Imported edges are kept separately from document-owned edges.</span><div class="button-row"><button id="btn-choose-csv" class="button button-secondary" type="button">Choose CSV</button><button id="btn-import-csv" class="button button-secondary" type="button" disabled>Import CSV</button></div></div></div></details>
+            <details id="csv-import-details" class="csv-details"><summary><span class="csv-summary-icon">CSV</span><span><strong>Import relationships from CSV</strong><small>For bulk imports · required columns: <code>src,rel,dst</code></small></span><span class="summary-chevron" aria-hidden="true">⌄</span></summary><div class="csv-details-body"><input type="file" id="graph-csv" accept=".csv,text/csv" class="visually-hidden" aria-label="Choose graph CSV file"><div id="csv-selection" class="csv-selection" hidden></div><div class="csv-actions"><span class="muted-meta">Imported edges are kept separately from document-owned edges.</span><div class="button-row"><button id="btn-choose-csv" class="button button-secondary" type="button">Choose CSV</button><button id="btn-import-csv" class="button button-secondary" type="button" disabled>Import CSV</button></div></div></div></details>
             <div id="graph-status" class="status-log" role="status" aria-live="polite" hidden></div>
         </section>
 
         <section class="data-section graph-data-section" aria-labelledby="graph-list-heading">
             <div class="list-toolbar"><div><h3 id="graph-list-heading">All relationships</h3><p>Search by source, relationship, destination, or owner.</p></div><div class="search-control"><label class="search-field graph-search-field"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg><input id="graph-search" type="search" placeholder="Search relationships" autocomplete="off" aria-label="Search graph relationships by source, relationship, destination, or owner" spellcheck="false"></label><button id="clear-graph-search" class="search-clear" type="button" aria-label="Clear graph search" title="Clear search" hidden>Clear</button></div></div>
-            <div class="table-wrap graph-table-wrap"><table class="data-table graph-table"><thead><tr><th>Source</th><th>Relationship</th><th>Destination</th><th>Owner / source</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="graph-list"><tr><td colspan="5" class="table-state">Loading graphâ€¦</td></tr></tbody></table></div>
-            <div id="graph-list-footer" class="table-footer">Loading graph relationshipsâ€¦</div>
-            <p class="ownership-note"><span aria-hidden="true">â“˜</span> Document-derived relationships may be removed when their last owning document is deleted. Seed and manual relationships are protected from document deletion.</p>
+            <div class="table-wrap graph-table-wrap"><table class="data-table graph-table"><thead><tr><th>Source</th><th>Relationship</th><th>Destination</th><th>Owner / source</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="graph-list"><tr><td colspan="5" class="table-state">Loading graph…</td></tr></tbody></table></div>
+            <div id="graph-list-footer" class="table-footer">Loading graph relationships…</div>
+            <p class="ownership-note"><span aria-hidden="true">ⓘ</span> Document-derived relationships may be removed when their last owning document is deleted. Seed and manual relationships are protected from document deletion.</p>
         </section>
     </section>
 
@@ -16524,7 +16524,7 @@ document.getElementById('logout-btn').onclick = () =>
     <script src="/static/js/theme.js?v=6"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login Â· TRIAGE-1</title>
+    <title>Login · TRIAGE-1</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
@@ -16614,7 +16614,7 @@ document.getElementById('logout-btn').onclick = () =>
             e.preventDefault();
             err.classList.add('hidden');
             btn.disabled = true;
-            btn.textContent = 'Signing inâ€¦';
+            btn.textContent = 'Signing in…';
             let redirecting = false;
             try {
                 const res = await fetch('/api/auth/login', {
@@ -16666,7 +16666,7 @@ document.getElementById('logout-btn').onclick = () =>
     <script src="/static/js/theme.js?v=6"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Setup Â· TRIAGE-1</title>
+    <title>Setup · TRIAGE-1</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
@@ -16724,7 +16724,7 @@ document.getElementById('logout-btn').onclick = () =>
         function fail(text) { $('msg').textContent = text; $('msg').classList.remove('hidden'); }
         function row(ok, text) {
             const li = document.createElement('li');
-            li.textContent = (ok ? 'âœ“ ' : 'âœ— ') + text;
+            li.textContent = (ok ? '✓ ' : '✗ ') + text;
             if (!ok) li.style.color = 'var(--danger)';
             return li;
         }

@@ -7,8 +7,8 @@ from app import config, envimport
 
 ENV = """
 # comment
-SUPABASE_URL=https://x.supabase.co
-SUPABASE_KEY=sb_secret_abc
+DATABASE_URL=postgresql://u:p@127.0.0.1:5432/x
+TRIAGE_SECRET_KEY=abc
 export SNOW_INSTANCE="https://acme.service-now.com"
 SNOW_PASSWORD='p@ss #1'
 APPROVAL_TIMEOUT_MIN=45
@@ -36,7 +36,7 @@ def test_parse_handles_quotes_comments_and_empty_values():
 
 def test_classification():
     c = envimport.classify
-    assert c("SUPABASE_KEY") == "bootstrap" and c("WIN_PASSWORD") == "host"
+    assert c("TRIAGE_SECRET_KEY") == "bootstrap" and c("WIN_PASSWORD") == "host"
     assert c("TRIAGE_USERS") == "retired" and c("WF_ADMIN") == "retired"
     assert c("SNOW_PASSWORD") == "secret" and c("SNOW_INSTANCE") == "setting"
     assert c("DISK_THRESHOLD_PCT") == "unmanaged"
@@ -51,7 +51,7 @@ def test_preview_flags_invalid_and_never_echoes_values_it_must_hide(rows):
     text = json.dumps(p)
     for hidden in ("p@ss", "hunter2", "sb_secret_abc", "supabase.co"):
         assert hidden not in text
-    assert {"SUPABASE_URL", "WIN_PASSWORD", "DISK_THRESHOLD_PCT"} <= set(p["keep_in_env"])
+    assert {"DATABASE_URL", "WIN_PASSWORD", "DISK_THRESHOLD_PCT"} <= set(p["keep_in_env"])
     assert "TRIAGE_USERS" not in p["keep_in_env"]
 
 

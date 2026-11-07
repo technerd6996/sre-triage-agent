@@ -1,10 +1,8 @@
 fastapi
 uvicorn
 requests
-supabase
 neo4j
 python-dotenv
-dotenv
 python-multipart
 langchain 
 langchain-openai 
@@ -18,3 +16,5 @@ bcrypt
 hvac
 ldap3
 pycryptodome
+psycopg[binary,pool]
+langgraph-checkpoint-postgres

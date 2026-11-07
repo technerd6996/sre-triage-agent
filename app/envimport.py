@@ -6,7 +6,7 @@ from dotenv import dotenv_values
 
 from app import config
 
-BOOTSTRAP = {"SUPABASE_URL", "SUPABASE_URI", "SUPABASE_KEY", "TRIAGE_SECRET_KEY"}      # must stay outside the database
+BOOTSTRAP = {"DATABASE_URL", "TRIAGE_SECRET_KEY"}      # must stay outside the database
 HOST = {"WIN_HOST", "WIN_USER", "WIN_PASSWORD", "WIN_WINRM_TRANSPORT", "LINUX_USER", "LINUX_KEY_PATH"}  # PAM, P3
 RETIRED = {"TRIAGE_USERS", "CRITICAL_SERVICES"}
 _BY_ENV = {s.env: s for s in config.SETTINGS.values() if s.env}

@@ -63,9 +63,7 @@ def _pending_restart(key: str) -> bool:
         return str(value) != running
     return source == "default" and bool(running) and str(value) != running   # a reset not yet applied
 
-_BOOT = (("SUPABASE_URL", "Supabase URL", "addr"),
-         ("SUPABASE_URI", "Database connection", "addr"),
-         ("SUPABASE_KEY", "Supabase key", "secret"),
+_BOOT = (("DATABASE_URL", "Database connection", "addr"),
          ("TRIAGE_SECRET_KEY", "Encryption key", "secret"))
 
 

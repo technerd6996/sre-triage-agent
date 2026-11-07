@@ -5,15 +5,13 @@ start() and resume() are generators that yield simple event dicts for a UI or a 
   start | tool_call | tool_result | final | approval_required | nudge | warning | done | error
 """
 import os
-import sqlite3
 import uuid
 from functools import cache
 from pathlib import Path
-from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_core.messages import ToolMessage
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
 import threading
 
@@ -29,27 +27,23 @@ from app.tools.infra_perf import PERF_TOOLS
 TOOLS = SNOW_TOOLS + INFRA_TOOLS + PERF_TOOLS + AWS_TOOLS
 active.STRICT = True  # agent runs never fall back to the static hosts in .env
 
-load_dotenv()
 
 TOOL_MAP = {t.name: t for t in TOOLS}
 
-# Persistent checkpointer using local SQLite (bypasses Windows C++ build errors)
-CHECKPOINT_DB = os.getenv("CHECKPOINT_DB") or str(Path(__file__).resolve().parents[2] / "triage_checkpoints.db")
-# Persistent checkpointer using local SQLite (bypasses Windows C++ build errors)
-# One connection per thread, in WAL mode, so concurrent runs don't serialize on a single connection.
-sqlite3.connect(CHECKPOINT_DB).execute("PRAGMA journal_mode=WAL").connection.close()
+# Agent state (LangGraph checkpoints) lives in the same local PostgreSQL as everything else.
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+from app import db as _localdb
 
-_checkpointer_local = threading.local()
+_ckpt_pool = ConnectionPool(
+    _localdb.database_url(), min_size=1, max_size=int(os.getenv("CHECKPOINT_POOL_MAX", "10")), open=False,
+    kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row, "connect_timeout": 10})
+_ckpt_pool.open(wait=True, timeout=20)
+_checkpointer = PostgresSaver(_ckpt_pool)
+_checkpointer.setup()
 
-def _get_checkpointer() -> SqliteSaver:
-    conn = getattr(_checkpointer_local, "conn", None)
-    if conn is None:
-        conn = sqlite3.connect(CHECKPOINT_DB, check_same_thread=False, timeout=30)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
-        _checkpointer_local.conn = conn
-    return SqliteSaver(conn)
-_get_checkpointer().setup()
+def _get_checkpointer() -> PostgresSaver:
+    return _checkpointer
 
 THREAD_TOOLS = {}               # thread_id -> tuple of allowed tool names
 

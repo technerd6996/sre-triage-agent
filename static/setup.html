@@ -97,7 +97,7 @@
             const box = $('keybox');
             const p = document.createElement('p');
             p.textContent = r.data.saved_to_env_file
-                ? 'The key was added to your .env file. Back it up: without it, saved secrets cannot be read.'
+                ? 'The key was saved to the protected bootstrap file in the triage folder under ProgramData on the server. Back that file up: without it, saved secrets cannot be read.'
                 : 'Add this line to your environment and back it up: without it, saved secrets cannot be read.';
             const c = document.createElement('code');
             c.textContent = 'TRIAGE_SECRET_KEY=' + r.data.key;

@@ -1,19 +1,14 @@
-"""Supabase persistence for runs, run events and the audit trail."""
+"""Local PostgreSQL persistence for runs, run events and the audit trail."""
 import os
 import time
 
-from dotenv import load_dotenv
-from supabase import create_client, Client
 
-load_dotenv()   # must run before create_client: main.py imports this module before it calls load_dotenv()
+from app import bootstrap_store
+bootstrap_store.load()   # the database URL comes from the bootstrap file, not a .env
 
-from app.secret_check import require_secret_key
+from app import db as _localdb
 
-_url, _key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY")
-if not _url or not _key:
-    raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
-_key = require_secret_key(_key)
-supabase: Client = create_client(_url, _key)
+supabase = _localdb.connect()    # name kept so existing callers (store.supabase.table(...)) keep working
 
 import logging
 log = logging.getLogger("uvicorn.error")

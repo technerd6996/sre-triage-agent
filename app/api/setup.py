@@ -7,10 +7,9 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app import bootstrap, config, store
+from app import bootstrap, bootstrap_store, config, store
 
 router = APIRouter(prefix="/api/setup")
-ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 _attempts: list[float] = []
 
 
@@ -48,15 +47,11 @@ def generate_key(req: Code):
     key = Fernet.generate_key().decode()
     saved = False
     try:
-        text = ENV_FILE.read_text(encoding="utf-8") if ENV_FILE.exists() else ""
-        if "TRIAGE_SECRET_KEY=" not in text:
-            with open(ENV_FILE, "a", encoding="utf-8") as f:
-                f.write(("" if not text or text.endswith("\n") else "\n") + f"TRIAGE_SECRET_KEY={key}\n")
-            saved = True
-    except OSError:
-        pass
-    os.environ["TRIAGE_SECRET_KEY"] = key                      # usable straight away, without a restart
-    store.audit(None, None, "setup", "secret_key_generated", "saved to .env" if saved else "shown once")
+        bootstrap_store.save(TRIAGE_SECRET_KEY=key)            # also usable straight away, without a restart
+        saved = True
+    except Exception:
+        os.environ["TRIAGE_SECRET_KEY"] = key
+    store.audit(None, None, "setup", "secret_key_generated", "saved to bootstrap file" if saved else "shown once")
     return {"key": key, "saved_to_env_file": saved}
 
 

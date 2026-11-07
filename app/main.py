@@ -7,9 +7,9 @@ import logging
 import time
 import requests
 from typing import Annotated, Literal
-from dotenv import load_dotenv
+from app import bootstrap_store
 
-load_dotenv()                      # bootstrap values (database connection, secret key) still come from here
+bootstrap_store.load()             # database connection and encryption key (no .env file; see bootstrap_store.py)
 from app import config             # noqa: E402
 config.hydrate_environ()           # saved settings and secrets fill the environment before anything reads it
 
@@ -20,7 +20,6 @@ from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 from sentence_transformers import SentenceTransformer
-from supabase import create_client, Client
 from neo4j import GraphDatabase
 from app.ports import registry
 from app import store
@@ -37,9 +36,6 @@ from pathlib import Path
 from app.agent.prompts import SYSTEM_PROMPT
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-# Load secrets from .env file
-load_dotenv()
 
 log = logging.getLogger("uvicorn.error")
 
@@ -103,9 +99,9 @@ app.include_router(setup_router)
 # --- Infrastructure Clients ---
 COLAB_API_URL = os.getenv("COLAB_API_URL")
 embedder = SentenceTransformer('all-MiniLM-L6-v2')
-from app.secret_check import require_secret_key
+from app import store as _store
 
-supabase: Client = create_client(os.getenv("SUPABASE_URL"), require_secret_key(os.getenv("SUPABASE_KEY")))
+supabase = _store.supabase
 class _LazyNeo4j:
     """Builds the Neo4j driver on first use, so the app and /setup can start before Neo4j is configured."""
 
@@ -453,7 +449,7 @@ async def serve_agent_ui():
         return f.read()
 
 
-# --- HYBRID RAG (SUPABASE) MANAGEMENT ---
+# --- HYBRID RAG (LOCAL POSTGRES) MANAGEMENT ---
 @app.get("/api/rag/documents")
 def list_documents():
     """Extracts unique filenames from the database, plus how many graph edges each owns."""
@@ -792,7 +788,7 @@ OFFTOPIC_REPLY = ("I'm a triage assistant, so I can only help with error logs, s
                   "SRE or infrastructure questions. Try pasting a log, or ask something like why nginx "
                   "returns a 502 or what is impacted if redis is down.")
 # --- CHAT INFERENCE ---
-# Plain 'def' (not 'async def'): everything inside is blocking I/O (Neo4j, Supabase, embeddings),
+# Plain 'def' (not 'async def'): everything inside is blocking I/O (Neo4j, Postgres, embeddings),
 # so FastAPI runs it in a worker thread instead of freezing the event loop.
 @app.post("/api/chat")
 def chat_endpoint(req: ChatRequest, request: Request):

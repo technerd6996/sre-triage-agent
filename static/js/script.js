@@ -707,16 +707,16 @@ async function streamResponse(query) {
                 const r = data.result;
                 let line = `**${data.server}** (${data.platform}): `;
                 if (r.cpu_pct !== undefined) {
-                    line += `${r.cpu_pct}% CPU used` + (r.over_threshold ? ` â€” over the ${r.threshold_pct}% threshold.` : '.');
+                    line += `${r.cpu_pct}% CPU used` + (r.over_threshold ? ` — over the ${r.threshold_pct}% threshold.` : '.');
                 } else if (r.used_pct !== undefined) {
-                    line += `${r.used_pct}% memory used` + (r.over_threshold ? ` â€” over the ${r.threshold_pct}% threshold.` : '.');
+                    line += `${r.used_pct}% memory used` + (r.over_threshold ? ` — over the ${r.threshold_pct}% threshold.` : '.');
                 } else if (Array.isArray(r.processes) && r.processes.length) {
                     const top = r.processes[0];
                     const shareKey = r.sort_by === 'cpu' ? 'cpu_pct' : 'mem_pct';
                     const share = top[shareKey];
                     line += `top ${r.sort_by === 'cpu' ? 'CPU' : 'memory'} user is **${top.name}** (pid ${top.pid}, ${share}%)`;
                     line += top.service ? `, service \`${top.service}\`` : '';
-                    line += r.culprit_service ? '.' : ' â€” not a service this agent can restart by name.';
+                    line += r.culprit_service ? '.' : ' — not a service this agent can restart by name.';
                 } else if (r.summary) {
                     line += r.summary;
                 } else {

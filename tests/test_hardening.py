@@ -1,4 +1,4 @@
-"""Offline hardening tests: key guard, mojibake fixer, repo hygiene. Run: python -m pytest tests -q"""
+"""Offline hardening tests: mojibake fixer, repo hygiene. Run: python -m pytest tests -q"""
 import base64
 import json
 import re
@@ -6,39 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from app.secret_check import BadSupabaseKey, key_kind, require_secret_key
 from scripts.fix_mojibake import fix_text
 
 ROOT = Path(__file__).resolve().parents[1]
 SKIP = {".git", "venv", ".venv", "__pycache__", "node_modules", ".pytest_cache"}
-
-
-def _jwt(role):
-    b = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
-    return f"{b({'alg': 'HS256'})}.{b({'role': role})}.sig"
-
-
-def test_secret_keys_accepted():
-    assert require_secret_key("sb_secret_abc123") == "sb_secret_abc123"
-    assert require_secret_key(_jwt("service_role"))
-
-
-@pytest.mark.parametrize("key", ["sb_publishable_abc", _jwt("anon")])
-def test_public_keys_refused(key):
-    with pytest.raises(BadSupabaseKey) as e:
-        require_secret_key(key)
-    assert key not in str(e.value)          # never echo the key
-
-
-@pytest.mark.parametrize("key", ["", None, "   ", "not-a-key"])
-def test_empty_or_unknown_refused(key):
-    with pytest.raises(BadSupabaseKey):
-        require_secret_key(key)
-
-
-def test_key_kind():
-    assert key_kind(_jwt("anon")) == "anon"
-    assert key_kind("sb_publishable_x") == "publishable"
 
 
 @pytest.mark.parametrize("bad,good", [

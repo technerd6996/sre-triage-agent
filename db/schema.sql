@@ -1,8 +1,7 @@
 -- TRIAGE-1 schema (tables, indexes, functions). Run on an empty database.
 -- Safe to re-run: every statement uses "if not exists" or "create or replace".
 
--- 1. Extension for sre_runbooks.embedding
-create extension if not exists vector;
+-- 1. (no extensions needed: embeddings are stored as double precision[] and compared in SQL)
 
 -- 2. Sequences used by column defaults
 create sequence if not exists public.audit_id_seq;
@@ -144,7 +143,7 @@ create table if not exists public.settings (
 create table if not exists public.sre_runbooks (
   id bigint not null default nextval('public.sre_runbooks_id_seq'::regclass),
   content text,
-  embedding vector(384),
+  embedding double precision[],
   constraint sre_runbooks_pkey primary key (id)
 );
 
@@ -197,19 +196,24 @@ create index if not exists sre_runbooks_fts_idx on public.sre_runbooks using gin
 create index if not exists verifications_ticket_idx on public.verifications using btree (ticket);
 
 -- 6. Functions
--- STAND-IN for scratch testing. Replace this block with the output of:
---   select pg_get_functiondef(p.oid) from pg_proc p
---   join pg_namespace n on n.oid = p.pronamespace
---   where n.nspname = 'public' and p.proname = 'hybrid_search';
+-- Cosine similarity between two equal-length vectors (0 when either is all zeros).
+create or replace function public.cosine_sim(a double precision[], b double precision[])
+returns double precision language sql immutable parallel safe as $$
+  select coalesce(sum(x * y) / nullif(sqrt(sum(x * x)) * sqrt(sum(y * y)), 0), 0)
+  from unnest(a, b) as t(x, y);
+$$;
+
+drop function if exists public.hybrid_search(text, double precision[], int);
 create or replace function public.hybrid_search(
-  query_text text, query_embedding vector(384), match_count int)
-returns table (id bigint, content text, similarity float, fts_rank float, score float)
+  query_text text, query_embedding double precision[], match_count int)
+returns table (id bigint, content text, similarity double precision, fts_rank double precision, score double precision)
 language sql stable as $$
   with sem as (
-    select r.id, row_number() over (order by r.embedding <=> query_embedding) as rn,
-           1 - (r.embedding <=> query_embedding) as sim
+    select r.id, row_number() over (order by public.cosine_sim(r.embedding, query_embedding) desc) as rn,
+           public.cosine_sim(r.embedding, query_embedding) as sim
     from public.sre_runbooks r
-    order by r.embedding <=> query_embedding
+    where r.embedding is not null
+    order by sim desc
     limit match_count * 4),
   kw as (
     select r.id,
@@ -221,43 +225,40 @@ language sql stable as $$
     where to_tsvector('english', r.content) @@ websearch_to_tsquery('english', query_text)
     limit match_count * 4)
   select b.id, b.content,
-         coalesce(sem.sim, 0)::float, coalesce(kw.rk, 0)::float,
-         (coalesce(1.0 / (60 + sem.rn), 0) + coalesce(1.0 / (60 + kw.rn), 0))::float
+         coalesce(sem.sim, 0)::double precision, coalesce(kw.rk, 0)::double precision,
+         (coalesce(1.0 / (60 + sem.rn), 0) + coalesce(1.0 / (60 + kw.rn), 0))::double precision
   from sem full outer join kw on sem.id = kw.id
   join public.sre_runbooks b on b.id = coalesce(sem.id, kw.id)
   order by 5 desc
   limit match_count;
 $$;
 
--- Hybrid Search Function for RAG events
-CREATE OR REPLACE FUNCTION hybrid_search(query_text text, query_embedding vector(384), match_count int)
-RETURNS TABLE(id bigint, content text, similarity float)
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  RETURN QUERY
-  SELECT sre_runbooks.id, sre_runbooks.content, 
-         1 - (sre_runbooks.embedding <=> query_embedding) AS similarity
-  FROM sre_runbooks
-  ORDER BY sre_runbooks.embedding <=> query_embedding
-  LIMIT match_count;
-END;
-$$;
+-- 7. Constraints
+alter table public.users drop constraint if exists users_role_check;
+alter table public.users add constraint users_role_check check (
+  role ~ '^(auditors|users|approvers|admin|super_admin)(,(auditors|users|approvers|admin|super_admin))*$');
 
--- Enable the vector extension for embeddings
-CREATE EXTENSION IF NOT EXISTS vector;
+-- 8. Columns and tables the application uses that older copies of this file lacked (all idempotent)
+alter table public.users add column if not exists roles_checked_at double precision;
+alter table public.llm_calls add column if not exists model text;
+alter table public.llm_calls add column if not exists skill text;
+alter table public.llm_calls add column if not exists ticket text;
+alter table public.llm_calls add column if not exists step integer;
+alter table public.llm_calls add column if not exists user_id text;
+alter table public.llm_calls add column if not exists ttft_s double precision;
+alter table public.llm_calls add column if not exists prompt_comp jsonb;
+alter table public.llm_calls add column if not exists wasted_tokens integer default 0;
+alter table public.llm_calls add column if not exists trace_id text;
 
--- Create missing sequences
-CREATE SEQUENCE IF NOT EXISTS audit_id_seq;
-CREATE SEQUENCE IF NOT EXISTS rag_events_id_seq;
-CREATE SEQUENCE IF NOT EXISTS sre_runbooks_id_seq;
-
--- Replace the legacy role constraint with the new additive roles
-ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
-ALTER TABLE users ADD CONSTRAINT users_role_check 
-    CHECK (role IN ('super_admin', 'admin', 'approvers', 'users', 'auditors'));
-
-ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
-ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (
-  role ~ '^(auditors|users|approvers|admin|super_admin)(,(auditors|users|approvers|admin|super_admin))*$'
+create table if not exists public.ad_group_mappings (
+  group_id text not null,
+  group_name text,
+  role text,
+  updated_at double precision,
+  updated_by text,
+  constraint ad_group_mappings_pkey primary key (group_id)
 );
+
+create index if not exists idx_runs_created on public.runs (created desc);
+create index if not exists idx_audit_ts on public.audit (ts desc);
+create index if not exists idx_llm_calls_ts on public.llm_calls (ts);
