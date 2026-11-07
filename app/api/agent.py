@@ -351,9 +351,11 @@ def live():
 
 
 @router.get("/runs/{run_id}")
-def get_run(run_id: str, after: int = 0):
+def get_run(run_id: str, request: Request, after: int = 0):
     r = RUNS.get(run_id)
-    if not r:
+    # Chat users (no console.view) may only follow the runs they started themselves
+    caps = set(getattr(request.state, "caps", None) or ())
+    if not r or ("console.view" not in caps and r.get("requester") != _actor(request)):
         raise HTTPException(404, "Unknown run")
     ev = r["events"]
     steps = [{"ts": e.get("ts"), "text": s} for e in ev[max(after, 0):] if (s := describe(e))]

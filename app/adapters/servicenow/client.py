@@ -101,7 +101,7 @@ def _fetch(number: str, identity: str = "agent") -> dict:
         "incident",
         identity=identity,
         params={
-            "sysparm_query": f"number={number}",
+            "sysparm_query": f"number={_q(number)}",
             "sysparm_limit": 1,
             "sysparm_fields": FIELDS,
             "sysparm_display_value": "true",
@@ -186,8 +186,8 @@ def link_duplicate_incident(number: str, host: str, short_description: str) -> d
     sys_id = _incident_id(number)
     problem = _q(short_description.split("\"", 1)[-1].rsplit("\"", 1)[0]) or _q(short_description)
     rows = _request("GET", "incident", params={
-        "sysparm_query": f"cmdb_ci.name={host}^short_descriptionLIKE{problem}"
-                         f"^active=true^numberNOT IN{number}",
+        "sysparm_query": f"cmdb_ci.name={_q(host)}^short_descriptionLIKE{problem}"
+                         f"^active=true^numberNOT IN{_q(number)}",
         "sysparm_fields": "number,sys_id,opened_at",
         "sysparm_limit": 5,
     }).get("result", [])

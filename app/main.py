@@ -47,6 +47,16 @@ app = FastAPI()
 from app.auth import AuthMiddleware
 from app import bootstrap
 app.add_middleware(AuthMiddleware)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Basic hardening headers: no framing (clickjacking), no MIME sniffing, no referrer leaks."""
+    response = await call_next(request)
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
 bootstrap.announce_setup_if_needed()          # prints the setup code in the console on a fresh install
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
@@ -920,7 +930,8 @@ def chat_endpoint(req: ChatRequest, request: Request):
             yield f"data: {json.dumps({'error': 'The AI model is busy with another task. Please try again in a moment.'})}\n\n"
         except Exception as e:
             log.error("LLM request failed: %s", e)
-            yield f"data: {json.dumps({'error': f'LLM server unreachable: {e}'})}\n\n"
+            # the exception text can carry the model endpoint URL, so it stays in the server log only
+            yield f"data: {json.dumps({'error': 'LLM server unreachable. Check the server log for details.'})}\n\n"
         yield "data: [DONE]\n\n"
 
 

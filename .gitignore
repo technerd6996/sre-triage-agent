@@ -17,3 +17,9 @@ __pycache__/
 *.bak
 triage_checkpoints.db
 *.db
+# secrets and local databases must never be committed
+Creds/
+*.pem
+*.ppk
+*.db-shm
+*.db-wal

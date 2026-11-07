@@ -171,8 +171,10 @@ def patch_user(uid: str, req: UserPatch, request: Request):
         if not others:
             raise HTTPException(409, "The last active Super Admin cannot be demoted or disabled")
     _db.table("users").update(patch).eq("user_id", uid).execute()
-    if patch.get("status") == "disabled" or "role" in patch:
-        _db.table("sessions").delete().eq("user_id", uid).execute() if patch.get("status") == "disabled" else None
+    if patch.get("status") == "disabled" or "role" in patch or "password_hash" in patch:
+        if patch.get("status") == "disabled" or "password_hash" in patch:
+            # a reset password must also end existing sessions, or a stolen session outlives the reset
+            _db.table("sessions").delete().eq("user_id", uid).execute()
         forget_user(uid)
     store.audit(None, None, who, "user_changed", f"{uid}: " + ", ".join(k for k in patch if k != "password_hash")
                 + (" password_reset" if "password_hash" in patch else ""))

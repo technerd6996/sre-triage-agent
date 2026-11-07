@@ -111,7 +111,13 @@ def _linux(command: str, *, inquiry_user: str | None = None) -> str:
     if creds.get("private_key"):
         pkey = pam.load_pkey(creds["private_key"], creds.get("passphrase") or None)
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    known_hosts = os.getenv("LINUX_SSH_KNOWN_HOSTS", "").strip()
+    if known_hosts:
+        # Strict mode: only hosts whose key is in this known_hosts file are trusted (blocks MITM)
+        client.load_host_keys(known_hosts)
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    else:
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
         client.connect(
             host,

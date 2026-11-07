@@ -205,7 +205,7 @@ class ServiceNowTicketing:
             fields = {}
             if group:
                 g = s._request("GET", "sys_user_group", identity=self._identity, params={
-                    "sysparm_query": f"name={group}", "sysparm_limit": 1, "sysparm_fields": "sys_id"})
+                    "sysparm_query": f"name={group.replace('^', ' ')}", "sysparm_limit": 1, "sysparm_fields": "sys_id"})
                 if not g:
                     raise ValueError(f"Group {group} not found in SNOW")
                 fields["assignment_group"] = g[0]["sys_id"]

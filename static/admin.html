@@ -470,10 +470,10 @@ function loadOverview() {
       const mins = Math.floor(d.run.seconds / 60), secs = d.run.seconds % 60;
       runEl.innerHTML = `
         <div class="flex items-center gap-3">
-          <span class="mono font-bold text-[#FFB000]">${d.run.ticket}</span>
+          <span class="mono font-bold text-[#FFB000]">${esc(d.run.ticket)}</span>
           <span class="pill">${waiting ? 'awaiting approval' : 'running'}</span>
         </div>
-        <p class="text-[13px] text-gray-500 mt-1">${d.run.server} · ${mins > 0 ? mins+'m ' : ''}${secs}s elapsed</p>`;
+        <p class="text-[13px] text-gray-500 mt-1">${esc(d.run.server)} ·${mins > 0 ? mins+'m ' : ''}${secs}s elapsed</p>`;
     } else {
       runEl.textContent = 'No run in progress.';
     }

@@ -99,6 +99,9 @@ _r(_G, r"/api/admin/audit(\.csv)?", "audit.view")
 _r("POST", r"/api/admin/users/[^/]+/revoke", "users.manage")
 _r("*", r"/api/admin/users(/[^/]+)?", "users.manage")
 _r("*", r"/api/users", "users.manage")                     # ServiceNow user search on the Users page
+# AD group -> role mapping lives on the Users page. It grants roles (up to super_admin), so it must
+# need users.manage; under the config.manage catch-all below an Admin could promote themself.
+_r("*", r"/api/admin/(ad-mappings(/[^/]+)?|ad-groups/search)", "users.manage")
 _r("*", r"/api/admin(/.*)?", "config.manage")              # settings, controls, config pane, cancel and rerun
 
 
