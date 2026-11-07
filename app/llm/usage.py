@@ -5,13 +5,14 @@ with the model's own tokenizer (loaded once in a background thread; falls back t
 if it cannot be downloaded). Each call is logged and saved to the llm_calls table.
 """
 import contextvars
+from app import config
 import logging
 import os
 import threading
 
 log = logging.getLogger("uvicorn.error")
 
-_TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "Qwen/Qwen2.5-7B-Instruct")
+_TOKENIZER_NAME = config.get("limits.tokenizer_name")
 _tok = None
 _tok_state = "pending"          # pending | ok | failed
 _load_lock = threading.Lock()

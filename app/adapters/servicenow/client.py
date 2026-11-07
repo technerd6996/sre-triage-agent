@@ -4,6 +4,7 @@ Each function decorated with @tool is something the LangChain agent can call.
 The docstring is what the LLM reads to decide when to use it, so keep it short.
 """
 import os
+from app import config
 import requests
 from langchain_core.tools import tool
 import time
@@ -174,6 +175,8 @@ CLAIM_NOTE = ("TRIAGE-1 picked up this ticket and has started automated triage.\
               "What happens next: it chooses a playbook, runs read-only diagnostics, and asks a human to "
               "approve any change that carries risk. A full report is added to this ticket when it finishes.")
 
+config.register("prompt.claim_note", "Ticket note when the agent picks up a ticket", CLAIM_NOTE, "text", "prompts", multiline=True, max_len=40000)
+
 def _q(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9@._ -]", "", s or "")        # keeps ^ and other query operators out
 
@@ -202,9 +205,10 @@ def link_duplicate_incident(number: str, host: str, short_description: str) -> d
     return {"linked": True, "parent": parent["number"]}
 
 @tool
-def claim_incident(number: str, work_note: str = CLAIM_NOTE) -> dict:
+def claim_incident(number: str, work_note: str | None = None) -> dict:
     """Take ownership of an existing incident: assign it to the triage agent and move it to In Progress.
     Use this first when a ticket arrives in the L1 queue."""
+    work_note = work_note or config.get("prompt.claim_note")
     sys_id = _incident_id(number)
     _request("PATCH", f"incident/{sys_id}", json={"assigned_to": _user_id(_assignee())})
     _request(
@@ -278,7 +282,16 @@ def list_queue() -> list:
 
 # Used only when ServiceNow has no SLA records on the ticket. (response_min, resolution_min) by priority.
 # These numbers are placeholders. Replace them with your real SLAs.
-SLA_FALLBACK = {"1": (15, 240), "2": (30, 480), "3": (120, 1440), "4": (240, 4320)}
+def sla_fallback() -> dict:
+    """{"1": (response_min, resolution_min), ...} from the admin setting limits.sla_fallback."""
+    out = {}
+    for part in str(config.get("limits.sla_fallback")).split(","):
+        try:
+            p, a, b = part.strip().split(":")
+            out[p.strip()] = (int(a), int(b))
+        except ValueError:
+            continue
+    return {**{"1": (15, 240), "2": (30, 480), "3": (120, 1440), "4": (240, 4320)}, **out}
 
 
 def _human(minutes: float) -> str:
@@ -294,7 +307,7 @@ def _human(minutes: float) -> str:
 
 def get_sla(number: str) -> dict:
     """Response and resolution targets as readable text. Reads the ticket's task_sla records
-    (SLA names containing 'response' / 'resolution'); falls back to SLA_FALLBACK by priority."""
+    (SLA names containing 'response' / 'resolution'); falls back to the admin setting limits.sla_fallback by priority."""
     out = {"response": None, "resolution": None, "source": "servicenow"}
     try:
         rows = _request("GET", "task_sla", params={
@@ -323,7 +336,8 @@ def get_sla(number: str) -> dict:
             prio = (_fetch(number).get("priority") or "3")[:1]
         except Exception:
             prio = "3"
-        resp_m, reso_m = SLA_FALLBACK.get(prio, SLA_FALLBACK["3"])
+        table = sla_fallback()
+        resp_m, reso_m = table.get(prio, table["3"])
         out["response"] = out["response"] or _human(resp_m)
         out["resolution"] = out["resolution"] or _human(reso_m)
         out["source"] = "fallback"

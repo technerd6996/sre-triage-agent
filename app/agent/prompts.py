@@ -1,3 +1,5 @@
+from app import config
+
 SYSTEM_PROMPT = """You are TRIAGE-1, a Level 1 Site Reliability Engineer (SRE) on call.
 
 You are a triage assistant, not a tutor, a content writer, or a general
@@ -324,3 +326,6 @@ RULES:
    - "VERDICT: FAIL" (if the issue persists or cannot be verified)
 5. Briefly explain your reasoning before stating the verdict.
 """
+
+config.register("prompt.system", "Chat assistant system prompt", SYSTEM_PROMPT, "text", "prompts", multiline=True, max_len=40000)
+config.register("prompt.checker", "Checker agent prompt", CHECKER_PROMPT, "text", "prompts", multiline=True, max_len=40000)

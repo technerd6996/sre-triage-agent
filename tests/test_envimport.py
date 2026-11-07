@@ -39,7 +39,8 @@ def test_classification():
     assert c("TRIAGE_SECRET_KEY") == "bootstrap" and c("WIN_PASSWORD") == "host"
     assert c("TRIAGE_USERS") == "retired" and c("WF_ADMIN") == "retired"
     assert c("SNOW_PASSWORD") == "secret" and c("SNOW_INSTANCE") == "setting"
-    assert c("DISK_THRESHOLD_PCT") == "unmanaged"
+    assert c("DISK_THRESHOLD_PCT") == "setting"      # now managed in the admin pane
+    assert c("SOME_UNKNOWN_VARIABLE") == "unmanaged"
 
 
 def test_preview_flags_invalid_and_never_echoes_values_it_must_hide(rows):
@@ -51,7 +52,8 @@ def test_preview_flags_invalid_and_never_echoes_values_it_must_hide(rows):
     text = json.dumps(p)
     for hidden in ("p@ss", "hunter2", "sb_secret_abc", "supabase.co"):
         assert hidden not in text
-    assert {"DATABASE_URL", "WIN_PASSWORD", "DISK_THRESHOLD_PCT"} <= set(p["keep_in_env"])
+    assert {"DATABASE_URL", "WIN_PASSWORD"} <= set(p["keep_in_env"])
+    assert "DISK_THRESHOLD_PCT" not in p["keep_in_env"]
     assert "TRIAGE_USERS" not in p["keep_in_env"]
 
 

@@ -1,5 +1,6 @@
 """First-run helpers: the shipped Default Super Admin, the password rules, and the installed state."""
 import logging
+from app import config
 import secrets
 import time
 
@@ -11,15 +12,15 @@ log = logging.getLogger("uvicorn.error")
 
 DEFAULT_ADMIN_ID = "superadmin@triage.local"
 DEFAULT_ADMIN_PASSWORD = "ChangeMe-Triage1!"      # shipped default: usable once, the first login must replace it
-MIN_PASSWORD = 12
 
 _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def check_new_password(new: str, user_id: str, current: str = "") -> str | None:
     """A message describing the problem, or None when the password is acceptable."""
-    if len(new) < MIN_PASSWORD:
-        return f"Password must be at least {MIN_PASSWORD} characters"
+    minimum = config.get("security.min_password")
+    if len(new) < minimum:
+        return f"Password must be at least {minimum} characters"
     if new == DEFAULT_ADMIN_PASSWORD:
         return "Choose a password different from the shipped default"
     if current and new == current:

@@ -956,7 +956,11 @@ function cfgField(f) {
     return `<div class="field">${head}<div class="flex items-center gap-3"><span class="text-[13px] text-gray-400">${esc(st)}</span>
       <button data-replace="${esc(f.key)}" class="text-[#FFB000] text-[13px]">${f.is_set ? 'Replace' : 'Set'}</button></div>${help}</div>`;
   }
-  const ctl = f.kind === 'select'
+  const ctl = f.multiline
+    ? `<textarea data-k="${esc(f.key)}" rows="10" spellcheck="false" class="flex-1 mono text-[12px] bg-[#0A0D10] border border-[#232B33] rounded px-2 py-1.5">${esc(f.value)}</textarea>`
+    : f.kind === 'bool'
+    ? `<select data-k="${esc(f.key)}" class="bg-[#0A0D10] border border-[#232B33] rounded px-2 py-1.5">${['on', 'off'].map(o => `<option ${(f.value ? 'on' : 'off') === o ? 'selected' : ''}>${o}</option>`).join('')}</select>`
+    : f.kind === 'select'
     ? `<select data-k="${esc(f.key)}" class="bg-[#0A0D10] border border-[#232B33] rounded px-2 py-1.5">${f.options.map(o => `<option ${o === f.value ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`
     : `<input data-k="${esc(f.key)}" value="${esc(f.value)}" ${f.kind === 'int' || f.kind === 'float' ? `type="number" step="${f.kind === 'int' ? 1 : 'any'}"` : 'type="text"'}
          ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''} class="flex-1 bg-[#0A0D10] border border-[#232B33] rounded px-2 py-1.5">`;
@@ -992,7 +996,7 @@ function wireCfgPanel(panel) {
       cfgSave(b.dataset.save, el.value);
     }
     if (b.dataset.reset) {
-      if (!await askDialog({title: 'Reset this setting?', body: 'The saved value is removed. The .env value or the default applies again.', okLabel: 'Reset', danger: true})) return;
+      if (!await askDialog({title: 'Reset this setting?', body: 'The saved value is removed. The built-in default applies again.', okLabel: 'Reset', danger: true})) return;
       api('POST', '/api/admin/config/reset', {key: b.dataset.reset})
         .then(() => { toast('Reset'); loadConfigPane(); }).catch(x => toast(x.message, false));
     }

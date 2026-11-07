@@ -33,6 +33,9 @@ class Setting:
     legacy_key: str = ""        # an older settings row this value used to live in
     help: str = ""
     bridge: bool = False        # code still reads it with os.getenv: a saved value is copied into the environment
+    multiline: bool = False     # shown as a text area (prompts)
+    max_len: int = 0            # longest accepted text (0 = no limit)
+    check: object = None        # optional validator: check(value) raises ValueError with a message for the admin
 
     @property
     def secret(self) -> bool:
@@ -90,9 +93,15 @@ SETTINGS = {s.key: s for s in (
 
 def _add(key, label, env, kind="text", default="", group="ticketing", **kw):
     """Settings the rest of the code still reads with os.getenv; they apply after a restart."""
-    # Set live=True for ticketing fields so changes apply immediately without restarts
-    is_live = True if group == "ticketing" else False
+    # live: ticketing fields apply immediately; others only when the code reads the value per call (live=True)
+    is_live = kw.pop("live", True if group == "ticketing" else False)
     SETTINGS[key] = Setting(key, label, env, kind, default, group, live=is_live, bridge=True, **kw)
+
+
+def register(key, label, default, kind="text", group="limits", env="", live=True, **kw):
+    """A tunable that used to be a constant in code. `default` is the old hardcoded value; the admin pane overrides it."""
+    SETTINGS[key] = Setting(key, label, env, kind, default, group, live=live, **kw)
+    return SETTINGS[key]
 
 _add("agent.llm_checker", "LLM checker (shadow)", "LLM_CHECKER", "bool", True, group="agent")
 _add("ticketing.instance", "ServiceNow instance URL", "SNOW_INSTANCE", help="For example https://company.service-now.com")
@@ -135,6 +144,68 @@ _add("notifications.smtp_from", "SMTP sender", "SMTP_FROM", group="notifications
 _add("notifications.smtp_password", "SMTP password", "SMTP_PASSWORD", "secret", group="notifications")
 
 
+# ---- Servers, thresholds and limits that used to be environment-only or hardcoded ----
+# live=True: the code reads the value on every use, so a saved change applies at once.
+# live=False: read once at start-up, so a saved change applies after a restart.
+_add("infra.disk_threshold_pct", "Disk full threshold (%)", "DISK_THRESHOLD_PCT", "float", 85.0, "infra", live=True, lo=1, hi=100)
+_add("infra.memory_threshold_pct", "Memory high threshold (%)", "MEMORY_THRESHOLD_PCT", "float", 90.0, "infra", live=True, lo=1, hi=100)
+_add("infra.cpu_threshold_pct", "CPU high threshold (%)", "CPU_THRESHOLD_PCT", "float", 90.0, "infra", live=True, lo=1, hi=100)
+_add("infra.top_process_min_share_pct", "Top process minimum share (%)", "TOP_PROCESS_MIN_SHARE_PCT", "float", 30.0, "infra", live=True, lo=1, hi=100)
+_add("infra.log_clean_min_days", "Never clean logs newer than (days)", "LOG_CLEAN_MIN_DAYS", "int", 3, "infra", live=True, lo=0, hi=3650)
+_add("infra.ssh_port", "Linux SSH port", "LINUX_SSH_PORT", "int", 22, "infra", live=True, lo=1, hi=65535)
+_add("infra.ssh_known_hosts", "SSH known_hosts file (strict host keys; empty = accept any key)", "LINUX_SSH_KNOWN_HOSTS", "text", "", "infra", live=True,
+     help="Path on the server. When set, only hosts listed in this file are trusted (blocks man-in-the-middle).")
+_add("infra.service_allowlist", "Services the agent may touch (comma separated, empty = any)", "SERVICE_ALLOWLIST", "text", "", "infra", live=True)
+_add("infra.service_denylist", "Services the agent must never touch (comma separated)", "SERVICE_DENYLIST", "text", "", "infra", live=True)
+_add("infra.l3_lambda", "L3 notify Lambda name", "L3_LAMBDA", "text", "triage1-l3-notify", "infra", live=True)
+_add("cmdb.host_table", "CMDB host table", "CMDB_HOST_TABLE", "text", "cmdb_ci_server", "infra", live=True)
+_add("cmdb.ip_field", "CMDB IP address field", "CMDB_IP_FIELD", "text", "ip_address", "infra", live=True)
+_add("cmdb.walk_depth", "CMDB relationship walk depth", "CMDB_WALK_DEPTH", "int", 3, "infra", live=True, lo=1, hi=10)
+_add("cmdb.criticality_autonomy_max", "Highest CI criticality the agent may act on alone", "CRITICALITY_AUTONOMY_MAX", "int", 1, "infra", live=True, lo=0, hi=5)
+register("policy.approval_from_level", "Risk level from which a human must approve (0-3)", 1, "int", "policy", lo=0, hi=3,
+         help="L0 runs automatically. With 1, every L1, L2 and L3 action waits for approval. 0 would make everything wait.")
+register("cmdb.addr_ttl", "CMDB address cache (seconds)", 60, "int", "infra", lo=0, hi=3600)
+register("infra.verify_window_seconds", "Post-fix check window (seconds)", 900, "int", "infra", lo=60, hi=7200,
+         help="A check made within this time after a fix counts as the post-fix verification.")
+register("infra.restart_limit_l1", "Service restarts an L1 run may do per hour", 1, "int", "infra", lo=0, hi=20)
+
+_add("security.cookie_secure", "Secure session cookie (HTTPS only)", "COOKIE_SECURE", "bool", False, "security", live=True,
+     help="Turn on once the app is served over HTTPS.")
+_add("security.tls_verify", "Verify the AD server certificate", "IDENTITY_TLS_VERIFY", "bool", False, "security", live=True)
+_add("security.ca_file", "CA certificate file for AD (path on the server)", "IDENTITY_CA_FILE", "text", "", "security", live=True)
+_add("security.login_max_ip_fails", "Failed logins per IP before lockout", "LOGIN_MAX_IP_FAILS", "int", 30, "security", live=False, lo=3, hi=1000)
+register("security.min_password", "Minimum password length", 12, "int", "security", lo=8, hi=128)
+register("security.session_cache_seconds", "Session lookup cache (seconds)", 45, "int", "security", lo=0, hi=600,
+         help="Also the longest a disabled user keeps access.")
+_add("credentials.manage_in_app", "Manage host credentials inside the app", "PAM_MANAGE_IN_APP", "bool", False, "credentials", live=True)
+_add("credentials.secret_prefix", "Secrets Manager prefix for host credentials", "PAM_SECRET_PREFIX", "text", "triage/pam/hosts", "credentials", live=True)
+
+_add("limits.ticket_rate_window", "Ticket rate window (seconds)", "TICKET_RATE_WINDOW", "int", 600, "limits", live=False, lo=10, hi=86400)
+_add("limits.queue_max", "Waiting jobs before new chat tickets are refused", "QUEUE_MAX", "int", 10, "limits", live=False, lo=1, hi=1000)
+_add("limits.undo_seconds", "Chat ticket undo window (seconds)", "UNDO_SECONDS", "int", 30, "limits", live=False, lo=0, hi=600)
+_add("limits.chat_wait_seconds", "How long a chat message waits for the model (seconds)", "LLM_CHAT_WAIT_SECONDS", "int", 90, "limits", live=False, lo=5, hi=900)
+_add("limits.p1_update_min", "P1 update interval (minutes)", "P1_UPDATE_MIN", "int", 30, "limits", live=False, lo=1, hi=480)
+_add("limits.tokenizer_name", "Tokenizer used to count tokens", "TOKENIZER_NAME", "text", "Qwen/Qwen2.5-7B-Instruct", "limits", live=False)
+register("limits.dedup_seconds", "Duplicate chat ticket window (seconds)", 600, "int", "limits", lo=0, hi=86400)
+register("limits.max_runs", "Runs kept in memory", 20, "int", "limits", live=False, lo=5, hi=500)
+register("limits.job_max_age_seconds", "Queued job expires after (seconds)", 21600, "int", "limits", lo=60, hi=604800)
+register("limits.max_nudges", "Reminders sent to an agent that stops early", 2, "int", "limits", lo=0, hi=10)
+register("limits.flap_limit", "Auto restores of one service per hour before a human is needed", 3, "int", "limits", lo=1, hi=50)
+register("limits.max_file_chars", "Log characters kept when a file is truncated", 6000, "int", "limits", lo=500, hi=200000)
+register("limits.max_input_chars", "Longest chat message or attachment (characters)", 200000, "int", "limits", live=False, lo=1000, hi=5000000)
+register("limits.max_history_messages", "Chat history messages sent", 30, "int", "limits", live=False, lo=2, hi=200)
+register("limits.max_field_chars", "Longest graph entity or relation name (API)", 200, "int", "limits", live=False, lo=10, hi=1000)
+register("limits.max_field_len", "Longest extracted entity or relation name", 80, "int", "limits", lo=10, hi=500)
+register("limits.extract_window_chars", "Document characters per extraction call", 2500, "int", "limits", lo=500, hi=20000)
+register("limits.extract_max_windows", "Extraction calls per document", 4, "int", "limits", lo=1, hi=50)
+register("limits.max_triples_per_doc", "Graph edges one document can create", 60, "int", "limits", lo=1, hi=2000)
+register("limits.max_csv_rows", "Rows accepted in a graph CSV import", 5000, "int", "limits", lo=10, hi=200000)
+register("limits.retry_backoff", "Model retry waits (seconds, comma separated)", "0,3,10,25", "text", "limits",
+         help="One wait per retry, for example 0,3,10,25.")
+register("limits.sla_fallback", "SLA fallback minutes (priority:response:resolution, comma separated)", "1:15:240,2:30:480,3:120:1440,4:240:4320",
+         "text", "limits", help="Used when ServiceNow has no SLA record. Priorities 1 to 4.")
+
+
 def _cast(s: Setting, v):
     if s.kind in ("int", "float"):
         what = "a whole number" if s.kind == "int" else "a number"
@@ -172,7 +243,14 @@ def _cast(s: Setting, v):
         if not t:
             raise ValueError(f"{s.label} cannot be empty")
         return t
-    return str(v).strip()
+    t = str(v) if s.multiline else str(v).strip()
+    if s.multiline and not t.strip():
+        raise ValueError(f"{s.label} cannot be empty")
+    if s.max_len and len(t) > s.max_len:
+        raise ValueError(f"{s.label} must be at most {s.max_len} characters")
+    if s.check:
+        s.check(t)
+    return t
 
 
 _cache = {"at": 0.0, "rows": {}}
@@ -226,6 +304,37 @@ def validate(key: str, value):
     return _cast(SETTINGS[key], value)
 
 
+_listeners: list = []
+_orig_env: dict = {}
+
+
+def on_change(fn) -> None:
+    """fn(key) runs after a setting is saved or reset (used to rebuild things that cached the old value)."""
+    _listeners.append(fn)
+
+
+def _env_text(s: Setting, value) -> str:
+    return ("1" if value else "0") if s.kind == "bool" else str(value)
+
+
+def _after_change(s: Setting) -> None:
+    """Makes a saved change visible to code that still reads os.getenv, and tells the listeners."""
+    if s.bridge and s.env and not s.secret:
+        _orig_env.setdefault(s.env, os.environ.get(s.env))      # what the environment held before any saved value
+        value, source = _resolve(s)
+        if source == "saved":
+            os.environ[s.env] = _env_text(s, value)
+        elif _orig_env[s.env] is None:
+            os.environ.pop(s.env, None)
+        else:
+            os.environ[s.env] = _orig_env[s.env]
+    for fn in list(_listeners):
+        try:
+            fn(s.key)
+        except Exception as e:
+            log.warning("config: listener failed for %s: %s", s.key, str(e)[:150])
+
+
 def save(key: str, value, by: str = "system"):
     s = SETTINGS[key]
     if s.secret:
@@ -236,11 +345,18 @@ def save(key: str, value, by: str = "system"):
     store.supabase.table("settings").upsert({"key": PREFIX + key, "value_json": new, "updated_by": by,
                                              "updated_at": time.time()}).execute()
     _cache["at"] = 0.0
+    _after_change(s)
     try:
-        store.audit(None, None, by, "config_changed", f"{key}: {old!r} -> {new!r}")
+        store.audit(None, None, by, "config_changed", f"{key}: {_audit_text(s, old)} -> {_audit_text(s, new)}")
     except Exception as e:
         log.warning("config: audit failed: %s", str(e)[:150])
     return new
+
+
+def _audit_text(s: Setting, v) -> str:
+    """Long text (prompts) is logged as a length and a short head, not in full."""
+    t = repr(v)
+    return t if len(t) <= 160 else f"{t[:120]}... ({len(str(v))} chars)"
 
 
 def reset(key: str, by: str = "system") -> None:
@@ -251,6 +367,7 @@ def reset(key: str, by: str = "system") -> None:
         if k:
             store.supabase.table("settings").delete().eq("key", k).execute()
     _cache["at"] = 0.0
+    _after_change(s)
     try:
         store.audit(None, None, by, "config_reset", key)
     except Exception as e:
@@ -263,7 +380,7 @@ def describe(group: str | None = None) -> list[dict]:
     for s in SETTINGS.values():
         if group and s.group != group:
             continue
-        item = {"key": s.key, "label": s.label, "kind": s.kind, "group": s.group, "live": s.live,
+        item = {"key": s.key, "label": s.label, "kind": s.kind, "group": s.group, "live": s.live, "multiline": s.multiline,
                 "options": list(s.options), "min": s.lo, "max": s.hi, "help": s.help, "default": s.default}
         if s.secret:                                    # never returned: only whether it is set
             meta = _rows().get(SEC + s.key) or {}
@@ -336,7 +453,7 @@ def hydrate_environ() -> int:
         except Exception as e:
             log.warning("config: could not load %s into the environment (%s)", s.key, type(e).__name__)
             continue
-        os.environ[s.env] = str(value)
+        os.environ[s.env] = _env_text(s, value)
         n += 1
     if n:
         log.info("config: %d saved setting(s) loaded into the environment", n)

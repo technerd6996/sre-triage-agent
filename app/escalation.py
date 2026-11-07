@@ -1,5 +1,6 @@
 """P1 declaration: proposal, approver sign-off, ServiceNow update, bridge link and one disruption notice."""
 import logging
+from app import config
 import os
 import re
 import time
@@ -13,7 +14,7 @@ from app.tools.snow import add_work_note
 
 log = logging.getLogger("triage.escalation")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-UPDATE_MIN = int(os.getenv("P1_UPDATE_MIN", "30"))
+UPDATE_MIN = config.get("limits.p1_update_min")
 
 
 def _broadcast() -> bool:

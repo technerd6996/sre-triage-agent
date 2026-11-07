@@ -23,6 +23,11 @@ SECTIONS = (
     {"id": "credentials", "title": "Credentials (PAM)", "port": "credentials", "testable": False, "panel": "connections"},
     {"id": "model", "title": "Model runtime", "port": None, "testable": True, "panel": "behaviour"},
     {"id": "agent", "title": "Agent behaviour", "port": None, "testable": False, "panel": "behaviour"},
+    {"id": "infra", "title": "Servers and thresholds", "port": None, "testable": False, "panel": "behaviour"},
+    {"id": "limits", "title": "Limits and timings", "port": None, "testable": False, "panel": "behaviour"},
+    {"id": "security", "title": "Security and access", "port": None, "testable": False, "panel": "behaviour"},
+    {"id": "policy", "title": "Safety policy (approvals)", "port": None, "testable": False, "panel": "behaviour"},
+    {"id": "prompts", "title": "Prompts and messages", "port": None, "testable": False, "panel": "behaviour"},
 )
 _DEFAULT_PROVIDER = {"ticketing": "servicenow"}
 _LABEL = {s.env: s.label for s in config.SETTINGS.values() if s.env}

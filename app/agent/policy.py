@@ -1,7 +1,11 @@
 """Risk policy. Enforced in code by the approval middleware, never by the prompt.
 L0 low: automatic. L1 medium: human approval. L2 high: human approval. L3 critical: no autonomous action."""
+import os
+import time
 
-RISK = {
+from app import config, store
+
+DEFAULT_RISK = {
     # L0: read-only and ticket bookkeeping run automatically
     "get_incident": 0, "claim_incident": 0, "add_work_note": 0, "create_incident": 0,
     "resolve_incident": 0, "escalate_incident": 0,
@@ -14,22 +18,71 @@ RISK = {
     "clear_temp_files": 1, "start_service": 1, "unlock_ad_account": 1,
     "restart_service": 1, "clean_old_logs": 1, "kill_process": 2,
 }
-APPROVAL_FROM_LEVEL = 1
+
+
+def _to_text(table: dict) -> str:
+    return chr(10).join(f"{k} = {v}" for k, v in table.items())
+
+
+def _parse_table(text: str) -> dict:
+    """'tool = level' per line (blank lines and # comments allowed). Raises ValueError with a message for the admin."""
+    out = {}
+    for n, raw in enumerate(str(text).splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if "=" not in line:
+            raise ValueError(f"line {n}: expected 'tool = level'")
+        k, v = (x.strip() for x in line.split("=", 1))
+        if not k.replace("_", "").isalnum():
+            raise ValueError(f"line {n}: '{k}' is not a tool name")
+        if v not in ("0", "1", "2", "3"):
+            raise ValueError(f"line {n}: level for {k} must be 0, 1, 2 or 3")
+        out[k] = int(v)
+    if not out:
+        raise ValueError("the table cannot be empty")
+    return out
+
+
+def _check_table(text: str) -> None:
+    _parse_table(text)
+
+
+config.register("policy.risk", "Tool risk levels (tool = level, one per line; unlisted tools are L2)", _to_text(DEFAULT_RISK),
+                "text", "policy", multiline=True, max_len=20000, check=_check_table,
+                help="L0 automatic, L1 medium, L2 high, L3 critical. Levels at or above the approval setting wait for a human.")
+
+_table_cache: tuple = ("", {})
+
+
+def risk_table() -> dict:
+    """The tool -> level table from the admin setting (the built-in defaults if the setting is unreadable)."""
+    global _table_cache
+    try:
+        text = config.get("policy.risk")
+    except Exception:
+        return dict(DEFAULT_RISK)
+    if _table_cache[0] != text:
+        try:
+            _table_cache = (text, _parse_table(text))
+        except ValueError:
+            return dict(DEFAULT_RISK)
+    return _table_cache[1]
+
+
+def risk_level(tool_name: str) -> int:
+    # A tool missing from the table is treated as high risk (L2)
+    return risk_table().get(tool_name, 2)
 
 
 def needs_approval(tool_name: str) -> bool:
-    # A tool missing from the table is treated as high risk (L2)
-    return RISK.get(tool_name, 2) >= APPROVAL_FROM_LEVEL
+    return risk_level(tool_name) >= config.get("policy.approval_from_level")
 
 
 def interrupt_config(tools) -> dict:
     return {t.name: True for t in tools if needs_approval(t.name)}
 
-import os
-import time
-from app import config, store
 
-FLAP_LIMIT = 3
 _RESTORES: dict[str, list[float]] = {}
 
 
@@ -56,7 +109,7 @@ def autonomous_restore(actions, host: str = "") -> tuple[bool, str]:
     crit_why = crit_why or "stopped service, preflight and flap checks passed"
     now = time.time()
     recent = [t for t in _RESTORES.get(svc, []) if now - t < 3600]
-    if len(recent) >= FLAP_LIMIT:
+    if len(recent) >= config.get("limits.flap_limit"):
         return False, f"flap protection: {svc} auto-restored {len(recent)} times in the last hour, needs a human"
     from app.tools.infra import check_service_status          # lazy import avoids a circular import
     res = check_service_status.invoke({"target": target, "service_name": svc})

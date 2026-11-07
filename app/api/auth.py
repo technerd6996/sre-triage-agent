@@ -1,4 +1,5 @@
 import hashlib
+from app import config
 import logging
 import os
 import secrets
@@ -22,7 +23,7 @@ class LoginRequest(BaseModel):
     password: str
 
 MAX_FAILS, FAIL_WINDOW = 5, 300          # 5 bad logins per ACCOUNT in 5 minutes
-MAX_IP_FAILS = int(os.getenv("LOGIN_MAX_IP_FAILS", "30"))   # per IP, high so one shared address cannot lock everyone
+MAX_IP_FAILS = config.get("security.login_max_ip_fails")   # per IP, high so one shared address cannot lock everyone
 _FAILS: dict[str, deque] = defaultdict(deque)
 
 

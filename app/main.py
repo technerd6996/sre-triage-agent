@@ -11,6 +11,7 @@ from app import bootstrap_store
 
 bootstrap_store.load()             # database connection and encryption key (no .env file; see bootstrap_store.py)
 from app import config             # noqa: E402
+from app.agent import prompts as _prompts  # noqa: F401  (registers the prompt settings)
 config.hydrate_environ()           # saved settings and secrets fill the environment before anything reads it
 
 from fastapi import FastAPI, UploadFile, File
@@ -33,7 +34,6 @@ from app.api.admin import router as admin_router
 
 # Centralized SRE persona rules
 from pathlib import Path
-from app.agent.prompts import SYSTEM_PROMPT
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -127,19 +127,14 @@ class _LazyNeo4j:
 neo4j_driver = _LazyNeo4j()
 
 # --- Log Truncation Globals ---
-MAX_FILE_CHARS = 6000
 SIGNAL_PATTERN = re.compile(r'(ERROR|CRITICAL|FATAL|WARN|Exception|Traceback)', re.IGNORECASE)
 
 # --- Request Validation Limits ---
-MAX_INPUT_CHARS = 200_000        # one chat message / attached file (truncated later by smart_truncate_log)
-MAX_HISTORY_MESSAGES = 30        # 15 turns x 2 messages = the frontend slider's maximum
-MAX_FIELD_CHARS = 200            # graph entity / relation names (matches the CSV import limit)
+MAX_INPUT_CHARS = config.get("limits.max_input_chars")        # one chat message / attached file (truncated later by smart_truncate_log)
+MAX_HISTORY_MESSAGES = config.get("limits.max_history_messages")
+MAX_FIELD_CHARS = config.get("limits.max_field_chars")
 
 # --- Graph Extraction Globals ---
-EXTRACT_WINDOW_CHARS = 2500      # characters of document sent to the LLM per call
-EXTRACT_MAX_WINDOWS = 4          # max LLM calls per document
-MAX_TRIPLES_PER_DOC = 60         # hard cap on edges one document can create
-MAX_FIELD_LEN = 80               # entity / relation names longer than this are dropped
 
 EXTRACT_PROMPT = """You extract knowledge-graph triples from SRE documents (runbooks, SOPs, incident reports).
 Return ONLY a JSON array of [subject, relation, object] triples. No prose, no markdown, no code fences.
@@ -148,6 +143,7 @@ Rules:
 - relation is a short lowercase verb phrase such as "is caused by", "is resolved by", "depends on", "is diagnosed with", "is a symptom of", "runs on", "triggers", "mitigates".
 - Only state facts that are explicitly in the text. Maximum 15 triples.
 Example output: [["CrashLoopBackOff","is caused by","OOMKilled"],["OOMKilled","is resolved by","Raising Memory Limit"]]"""
+config.register("prompt.extract", "Knowledge-graph extraction prompt", EXTRACT_PROMPT, "text", "prompts", multiline=True, max_len=40000)
 
 
 # ======================================================================
@@ -182,7 +178,8 @@ class GraphEdge(BaseModel):
     dst: GraphName
 
 
-def smart_truncate_log(text: str, max_chars: int = MAX_FILE_CHARS) -> str:
+def smart_truncate_log(text: str, max_chars: int | None = None) -> str:
+    max_chars = max_chars or config.get("limits.max_file_chars")
     """Extracts signal lines from massive logs using regex to prevent LLM context overflow."""
     if len(text) <= max_chars:
         return text
@@ -243,7 +240,7 @@ def call_llm(messages: list, timeout: int = 180) -> str:
 
 def _clean(s: str) -> str:
     s = re.sub(r"\s+", " ", s.strip().strip("\"'`")).strip()
-    return s if 0 < len(s) <= MAX_FIELD_LEN else ""
+    return s if 0 < len(s) <= config.get("limits.max_field_len") else ""
 
 
 def parse_triples(raw: str) -> list[tuple]:
@@ -329,13 +326,14 @@ def extract_all_triples(filename: str, text: str):
     triples = structured_triples(meta)
     llm_error = None
     try:
-        limit = EXTRACT_WINDOW_CHARS * EXTRACT_MAX_WINDOWS
-        for i in range(0, min(len(body), limit), EXTRACT_WINDOW_CHARS):
-            window = body[i:i + EXTRACT_WINDOW_CHARS]
+        win, nwin = config.get("limits.extract_window_chars"), config.get("limits.extract_max_windows")
+        limit = win * nwin
+        for i in range(0, min(len(body), limit), win):
+            window = body[i:i + win]
             if len(window.strip()) < 80:
                 continue
             raw = call_llm([
-                {"role": "system", "content": EXTRACT_PROMPT},
+                {"role": "system", "content": config.get("prompt.extract")},
                 {"role": "user", "content": window},
             ])
             triples += parse_triples(raw)
@@ -349,7 +347,7 @@ def extract_all_triples(filename: str, text: str):
         if key not in seen:
             seen.add(key)
             unique.append((s, r, d))
-    return unique[:MAX_TRIPLES_PER_DOC], llm_error
+    return unique[:config.get("limits.max_triples_per_doc")], llm_error
 
 
 def ingest_graph(filename: str, text: str) -> dict:
@@ -556,7 +554,6 @@ def delete_graph_edge(src: str, rel: str, dst: str):
 
 
 # --- GRAPH CSV IMPORT ---
-MAX_CSV_ROWS = 5000
 CSV_COLUMN_ALIASES = {
     "src": ["src", "source", "from", "subject", "entity1"],
     "rel": ["rel", "relation", "relationship", "type", "predicate"],
@@ -583,7 +580,7 @@ def parse_graph_csv(raw: str):
 
     rows, skipped = [], 0
     for line in reader:
-        if len(rows) >= MAX_CSV_ROWS:
+        if len(rows) >= config.get("limits.max_csv_rows"):
             skipped += 1
             continue
         try:
@@ -787,6 +784,7 @@ OFFTOPIC_RE = re.compile(r"^\s*I['\u2019]?m a triage assistant", re.IGNORECASE)
 OFFTOPIC_REPLY = ("I'm a triage assistant, so I can only help with error logs, stack traces, and specific "
                   "SRE or infrastructure questions. Try pasting a log, or ask something like why nginx "
                   "returns a 502 or what is impacted if redis is down.")
+config.register("prompt.offtopic", "Reply to off-topic chat messages", OFFTOPIC_REPLY, "text", "prompts", multiline=True, max_len=40000)
 # --- CHAT INFERENCE ---
 # Plain 'def' (not 'async def'): everything inside is blocking I/O (Neo4j, Postgres, embeddings),
 # so FastAPI runs it in a worker thread instead of freezing the event loop.
@@ -875,7 +873,7 @@ def chat_endpoint(req: ChatRequest, request: Request):
         prompt = safe_query
 
     # 5. Construct Payload (Inject System Prompt Backend-Side)
-    colab_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + safe_history + [{"role": "user", "content": prompt}]
+    colab_messages = [{"role": "system", "content": config.get("prompt.system")}] + safe_history + [{"role": "user", "content": prompt}]
 
 
     # Detect a live issue so the UI can offer the Create incident button (chat never creates tickets)
@@ -903,14 +901,14 @@ def chat_endpoint(req: ChatRequest, request: Request):
                                     continue          # wait until we can tell what kind of reply this is
                                 decided = True
                                 if OFFTOPIC_RE.match(head):
-                                    sent.append(OFFTOPIC_REPLY)
-                                    yield f"data: {json.dumps({'text': OFFTOPIC_REPLY})}\n\n"
+                                    sent.append(config.get("prompt.offtopic"))
+                                    yield f"data: {json.dumps({'text': config.get('prompt.offtopic')})}\n\n"
                                     break             # drop whatever advice the model added
                                 chunk = head
                             sent.append(chunk)
                             yield f"data: {json.dumps({'text': chunk})}\n\n"
                         if not decided and head:      # very short reply
-                            text = OFFTOPIC_REPLY if OFFTOPIC_RE.match(head) else head
+                            text = config.get("prompt.offtopic") if OFFTOPIC_RE.match(head) else head
                             sent.append(text)
                             yield f"data: {json.dumps({'text': text})}\n\n"
             log_stream("chat", r, time.time() - t0, waited, _uh)

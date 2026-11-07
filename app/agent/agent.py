@@ -5,6 +5,8 @@ start() and resume() are generators that yield simple event dicts for a UI or a 
   start | tool_call | tool_result | final | approval_required | nudge | warning | done | error
 """
 import os
+from app import config
+from app.agent import prompts as _prompts  # noqa: F401  (registers the prompt settings)
 import uuid
 from functools import cache
 from pathlib import Path
@@ -60,11 +62,13 @@ RULES:
 - Every ticket must end with resolve_incident or escalate_incident. Do not stop before one of them is called.
 - When the ticket is resolved or escalated, reply with a two-sentence plain-text summary and no JSON."""
 
+config.register("prompt.base", "Triage agent base prompt", BASE_PROMPT, "text", "prompts", multiline=True, max_len=40000)
+
 CLOSED_STATES = {"Resolved", "Closed", "Canceled"}
-MAX_NUDGES = 2
 NUDGE = ("The ticket is still open. Follow the playbook now: call resolve_incident only if your "
          "verification check showed the problem is fixed; otherwise call escalate_incident with the "
          "reason. Call exactly one of them.")
+config.register("prompt.nudge", "Reminder sent to an agent that stopped early", NUDGE, "text", "prompts", multiline=True, max_len=40000)
 
 
 @cache
@@ -72,10 +76,9 @@ def get_agent(tool_names: tuple[str, ...] = (), profile: str = "triage"):
     active_tools = [TOOL_MAP[n] for n in tool_names if n in TOOL_MAP] or TOOLS
     
     if profile == "checker":
-        from app.agent.prompts import CHECKER_PROMPT
-        sys_prompt = CHECKER_PROMPT
+        sys_prompt = config.get("prompt.checker")
     else:
-        sys_prompt = BASE_PROMPT
+        sys_prompt = config.get("prompt.base")
         
     return create_agent(
         model=ColabChat(url=os.getenv("COLAB_API_URL")),
@@ -156,15 +159,16 @@ def _run(agent, payload, config):
 
 def _run_guarded(agent, payload, config, ticket_number: str):
     """Run the agent, and if it stops with the ticket still open, nudge it to resolve or escalate."""
-    for attempt in range(MAX_NUDGES + 1):
+    max_nudges = config.get("limits.max_nudges")
+    for attempt in range(max_nudges + 1):
         status = yield from _run(agent, payload, config)
         if status != "done":
             return  # waiting for a human, or failed
         if _is_closed(ticket_number):
             break
-        if attempt < MAX_NUDGES:
+        if attempt < max_nudges:
             yield {"type": "nudge", "text": "Ticket still open: asking the agent to resolve or escalate."}
-            payload = {"messages": [{"role": "user", "content": NUDGE}]}
+            payload = {"messages": [{"role": "user", "content": config.get("prompt.nudge")}]}
         else:
             yield {"type": "warning", "message": "Agent stopped without resolving or escalating the ticket."}
     yield {"type": "done"}
@@ -215,3 +219,12 @@ def resume(thread_id: str, approve: bool, feedback: str = ""):
                 else {"type": "reject", "message": feedback or "Rejected by the engineer."})
     yield from _run_guarded(get_agent(tool_tuple), Command(resume={"decisions": [decision]}),
                             _config(thread_id), ticket_number)
+
+
+def _rebuild_agents(key: str) -> None:
+    """Prompts and the approval policy are baked into the cached agent graph; rebuild it when they change."""
+    if key.startswith(("prompt.", "policy.")):
+        get_agent.cache_clear()
+
+
+config.on_change(_rebuild_agents)

@@ -62,9 +62,9 @@ def _html_to_text(s: str) -> str:
 
 
 def _validate(meta: dict, body: str) -> str:
-    """Return '' if the article is usable, else the reason. policy.RISK is the hard limit:
+    """Return '' if the article is usable, else the reason. the policy table is the hard limit:
     an article may only list tools the policy knows."""
-    from app.agent.policy import RISK
+    from app.agent.policy import risk_table
     if not meta.get("name"):
         return "missing name"
     if not body:
@@ -72,7 +72,8 @@ def _validate(meta: dict, body: str) -> str:
     tools = meta.get("allowed_tools")
     if not isinstance(tools, list) or not tools:
         return "missing allowed_tools"
-    bad = [t for t in tools if t not in RISK]
+    known = risk_table()
+    bad = [t for t in tools if t not in known]
     if bad:
         return f"unknown tools {bad}"
     if meta.get("systems") is not None and not isinstance(meta["systems"], list):

@@ -4,6 +4,7 @@ no confirm/undo window, no rate limit/dedup meant for end users, and gated to co
 (approvers), not chat.create (users) -- this capability must not be inherited by regular users.
 """
 from fastapi import APIRouter, HTTPException, Request
+from app import config
 from pydantic import BaseModel, Field
 
 from app import jobs
@@ -17,7 +18,6 @@ from app.tools.snow import create_incident
 
 router = APIRouter(prefix="/api/approver-chat")
 
-QUEUE_MAX = 10
 # Read-only checks an approver can ask for directly, no ticket, no run, no approval gate --
 # these never change anything. A mutating action (restart, kill) is NOT listed here: it must
 # go through /run so it gets a ticket, a real pipeline run, and the normal approval gate for
@@ -46,7 +46,7 @@ class InquireRequest(BaseModel):
 
 @router.post("/run")
 def run_adhoc(req: AdhocRequest, request: Request):
-    if len(jobs.queued()) >= QUEUE_MAX:
+    if len(jobs.queued()) >= config.get("limits.queue_max"):
         raise HTTPException(503, "TRIAGE-1 has a long queue right now. Please try again in a few minutes.")
     inst, reason = resolve_server(req.instruction)
     if not inst:

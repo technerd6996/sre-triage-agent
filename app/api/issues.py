@@ -1,5 +1,6 @@
 """Chat intake: type-ahead for servers and callers, then Create Incident -> ServiceNow ticket -> agent run."""
 import hashlib
+from app import config
 import os
 import re
 import time
@@ -22,13 +23,12 @@ _REDACT = [
 ]
 
 _RECENT: dict[str, tuple[float, str]] = {}  # fingerprint -> (time, ticket number)
-DEDUP_SECONDS = 600
 
 # Per-user limit on new tickets from chat (in memory; a restart resets it).
 RATE_MAX = int(os.getenv("TICKET_RATE_MAX", "5"))
-RATE_WINDOW = int(os.getenv("TICKET_RATE_WINDOW", "600"))   # seconds
+RATE_WINDOW = config.get("limits.ticket_rate_window")   # seconds
 _RATE: dict[str, list[float]] = {}
-QUEUE_MAX = int(os.getenv("QUEUE_MAX", "10"))     # waiting jobs above which new chat tickets are refused
+QUEUE_MAX = config.get("limits.queue_max")     # waiting jobs above which new chat tickets are refused
 
 
 def _rate_ok(user: str) -> bool:
@@ -118,7 +118,7 @@ def report_issue(req: IssueRequest, request: Request):
 
     desc = redact(req.description.strip())
     now = time.time()
-    for k in [k for k, (t, _) in _RECENT.items() if now - t > DEDUP_SECONDS]:
+    for k in [k for k, (t, _) in _RECENT.items() if now - t > config.get("limits.dedup_seconds")]:
         _RECENT.pop(k, None)
     fp = _fingerprint(inst["name"], desc)
     if fp in _RECENT:
@@ -211,7 +211,7 @@ def add_to_issue(number: str, req: NoteRequest, request: Request):
     add_work_note.invoke({"number": number, "note": "Added by the user via chat:\n" + redact(req.text.strip())})
     return {"number": number}
 # ---- auto mode: the ticket is raised now, the agent starts after an Undo window ----
-UNDO_SECONDS = int(os.getenv("UNDO_SECONDS", "30"))
+UNDO_SECONDS = config.get("limits.undo_seconds")
 _PENDING: dict[str, dict] = {}
 _LOCK = threading.Lock()
 

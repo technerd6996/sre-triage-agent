@@ -1,6 +1,7 @@
 """Agent-facing ticket tools. Same names, docstrings and return shapes as before;
 every call now goes through the active Ticketing adapter."""
 from langchain_core.tools import tool
+from app import config
 
 from app.ports import registry
 from app.ports.errors import NotFound
@@ -8,6 +9,8 @@ from app.ports.errors import NotFound
 CLAIM_NOTE = ("TRIAGE-1 picked up this ticket and has started automated triage.\n\n"
               "What happens next: it chooses a playbook, runs read-only diagnostics, and asks a human to "
               "approve any change that carries risk. A full report is added to this ticket when it finishes.")
+
+config.register("prompt.claim_note", "Ticket note when the agent picks up a ticket", CLAIM_NOTE, "text", "prompts", multiline=True, max_len=40000)
 
 _KEYS = {"number": "id", "short_description": "title", "description": "description",
          "priority": "priority", "caller_id": "caller", "assignment_group": "group",
@@ -47,10 +50,10 @@ def create_incident(short_description: str, description: str, urgency: int = 3, 
 
 
 @tool
-def claim_incident(number: str, work_note: str = CLAIM_NOTE) -> dict:
+def claim_incident(number: str, work_note: str | None = None) -> dict:
     """Take ownership of an existing incident: assign it to the triage agent and move it to In Progress.
     Use this first when a ticket arrives in the L1 queue."""
-    return _legacy(_tk().claim(number, work_note))
+    return _legacy(_tk().claim(number, work_note or config.get("prompt.claim_note")))
 
 
 @tool

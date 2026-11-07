@@ -7,6 +7,7 @@ priority number goes first, so an agent step never waits behind a chat message t
 Do not nest llm_slot() calls in one thread: the inner call would wait for the outer one forever.
 """
 import contextlib
+from app import config
 import heapq
 import itertools
 import os
@@ -14,7 +15,7 @@ import threading
 import time
 
 PRIORITY = {"resume": 0, "verify": 1, "triage": 2, "chat": 3, "ingest": 4}
-CHAT_WAIT_SECONDS = int(os.getenv("LLM_CHAT_WAIT_SECONDS", "90"))
+CHAT_WAIT_SECONDS = config.get("limits.chat_wait_seconds")
 _DEFAULT = object()
 
 

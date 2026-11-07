@@ -1,10 +1,10 @@
 """Durable job queue for ticket runs. Lowest priority number first, then oldest. Survives restarts."""
 import time
+from app import config
 import uuid
 
 from app import store
 
-MAX_AGE = 6 * 3600          # queued jobs older than this expire
 
 
 def pick_next(rows):
@@ -18,7 +18,7 @@ def _t():
 def queued() -> list:
     now, out = time.time(), []
     for r in _t().select("*").eq("status", "queued").execute().data:
-        if now - r["created"] > MAX_AGE:
+        if now - r["created"] > config.get("limits.job_max_age_seconds"):
             _t().update({"status": "expired"}).eq("id", r["id"]).execute()
         else:
             out.append(r)

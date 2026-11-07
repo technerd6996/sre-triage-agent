@@ -1,5 +1,6 @@
 """Authentication + role enforcement using Supabase sessions."""
 import hashlib
+from app import config
 import logging
 import time
 from fastapi import Request
@@ -12,7 +13,6 @@ from app import ad_roles, bootstrap, rbac, store
 log = logging.getLogger("uvicorn.error")
 
 
-CACHE_TTL = 45   # seconds a session lookup is reused; also the longest a disabled user keeps access
 _CACHE: dict[str, tuple[float, float, dict]] = {}   # token_hash -> (cached_at, session_expires, user_info)
 
 
@@ -22,7 +22,7 @@ def _lookup_session(token: str | None) -> dict | None:
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     now = time.time()
     hit = _CACHE.get(token_hash)
-    if hit and now - hit[0] < CACHE_TTL and now < hit[1]:
+    if hit and now - hit[0] < config.get("security.session_cache_seconds") and now < hit[1]:
         return hit[2]
     res = store.supabase.table("sessions").select("user_id, expires_at").eq("token_hash", token_hash).execute()
     if not res.data or res.data[0]["expires_at"] <= now:

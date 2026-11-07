@@ -15,6 +15,7 @@ Changes things:     restart_service (1), clean_old_logs (1), kill_process (2)
 Add all of them to policy.RISK. The agent builds its tool list from PERF_TOOLS.
 """
 import contextvars
+from app import config
 import json
 import os
 import posixpath
@@ -66,11 +67,9 @@ def _csv(name: str, default: str) -> list:
     return [s.strip() for s in os.getenv(name, default).split(",") if s.strip()]
 
 
-VERIFY_WINDOW = 900        # seconds in which a check counts as the post-fix check
 _FIXED: dict = {}          # target -> when a restart or kill last ran
 _BEFORE: dict = {}         # (kind, target) -> value before the fix
 _RESTARTS: dict = {}       # (target, service) -> [times]
-RESTART_LIMIT_L1 = 1       # an L1 run may restart one service once per hour; an engineer is not limited
 
 # Never killed, and never suggested for restart (svchost hosts many services, so one PID is not one service).
 _PROTECTED = {
@@ -153,7 +152,7 @@ def parse_cgroups(out: str) -> dict:
 # ---------------------------------------------------------------- shared bits
 def _post_fix(kind: str, target: str) -> bool:
     """True once, when this check is the one that follows a restart or kill."""
-    if time.time() - _FIXED.get(target, 0) < VERIFY_WINDOW:
+    if time.time() - _FIXED.get(target, 0) < config.get("infra.verify_window_seconds"):
         _FIXED.pop(target, None)
         return True
     return False
@@ -451,7 +450,7 @@ def restart_service(target: str, service_name: str) -> dict:
         low, allow = svc.lower(), infra._service_allowlist()
         if low in infra._service_denylist() or (allow and low not in allow):
             raise ValueError(f"Service '{svc}' is blocked by SERVICE_DENYLIST / SERVICE_ALLOWLIST.")
-        if _AUDIENCE.get() == "l1" and _recent_restarts(target, svc) >= RESTART_LIMIT_L1:
+        if _AUDIENCE.get() == "l1" and _recent_restarts(target, svc) >= config.get("infra.restart_limit_l1"):
             return {"target": target, "service": svc, "error": f"{svc} was already restarted in the last hour.",
                     "next_step": "Do not restart it again. Call add_work_note with this, then call escalate_incident."}
         before = infra._service_state(target, svc)

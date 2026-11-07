@@ -16,7 +16,7 @@ from app import config, store
 from app import jobs
 from app.llm import usage
 from app.agent.agent import THREAD_TOOLS, resume, start
-from app.agent.policy import RISK
+from app.agent.policy import risk_level
 from app.agent.report import build_report, describe, outcome_code, _fmt_call
 from app.tools.snow import add_work_note, get_incident, list_queue
 from app import escalation, checker
@@ -28,8 +28,7 @@ from app.tools.ticketing_tools import escalate_incident
 log = logging.getLogger("uvicorn.error")
 router = APIRouter(prefix="/api/agent")
 
-MAX_RUNS = 20
-RUNS = {r["id"]: r for r in store.load_runs(MAX_RUNS)}  # run_id -> run dict, oldest first
+RUNS = {r["id"]: r for r in store.load_runs(config.get("limits.max_runs"))}  # run_id -> run dict, oldest first
 for _r in RUNS.values():            # rebuild what resume() needs after a restart
     for _e in _r["events"]:
         if _e.get("type") == "start" and _e.get("tools"):
@@ -198,7 +197,7 @@ def _consume(run: dict, events, kind: str = "triage"):
                         log.warning("Could not post autonomy note to %s: %s", run["ticket"], str(e)[:200])
                 else:
                     run["status"] = "awaiting_approval"
-                    pending_actions = [{**a, "risk": f"L{RISK.get(a.get('name'), 2)}"} for a in ev["actions"]]
+                    pending_actions = [{**a, "risk": f"L{risk_level(a.get('name'))}"} for a in ev["actions"]]
                     run["pending"] = pending_actions
                     for act in pending_actions:
                         try:
@@ -272,7 +271,7 @@ def start_run(ticket: str, source: str = "manual", actor: str = "system"):
                "created": time.time(), "last_event": time.time(),
                "requester": actor, "started": time.time()}
         RUNS[run["id"]] = run
-        while len(RUNS) > MAX_RUNS:
+        while len(RUNS) > config.get("limits.max_runs"):
             RUNS.pop(next(iter(RUNS)))
     store.save_run(run)
     store.audit(run["id"], ticket, actor, "run_started", f"source={source}")

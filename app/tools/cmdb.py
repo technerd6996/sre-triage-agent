@@ -14,6 +14,7 @@ Env (all optional):
   HOST_ADDRESS_ALLOWED_CIDRS  optional, comma-separated ranges; an address outside them is refused
 """
 import ipaddress
+from app import config
 import os
 import re
 import time
@@ -160,7 +161,6 @@ def critical_by_cmdb(host: str, service: str) -> tuple:
 
 # ---- connect address, read from the server's CMDB record ----
 _ADDR_CACHE: dict = {}
-ADDR_TTL = 60   # seconds; short, so a corrected CMDB record is picked up quickly
 
 
 def _usable_ip(text: str, allowed: list) -> str:
@@ -188,7 +188,7 @@ def host_address(name: str) -> str:
     """Connect address of a server from its CMDB record. '' when there is none that is usable."""
     key = name.lower()
     hit = _ADDR_CACHE.get(key)
-    if hit and time.time() - hit[0] < ADDR_TTL:
+    if hit and time.time() - hit[0] < config.get("cmdb.addr_ttl"):
         return hit[1]
     table = os.getenv("CMDB_HOST_TABLE", "cmdb_ci_server")
     field = os.getenv("CMDB_IP_FIELD", "ip_address")

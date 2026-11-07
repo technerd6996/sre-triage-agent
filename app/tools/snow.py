@@ -1,6 +1,6 @@
 """Compatibility shim. Old imports keep working while callers move to the port."""
 from app.adapters.servicenow.client import (  # noqa: F401
-    FIELDS, STATE_IN_PROGRESS, STATE_RESOLVED, SLA_FALLBACK,
+    FIELDS, STATE_IN_PROGRESS, STATE_RESOLVED, sla_fallback,
     _request, _lookup_sys_id, _user_id, _group_id, _incident_id, _flatten, _fetch,
     _caller, _group, _assignee, _human, find_ci_id,
 )

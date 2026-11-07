@@ -6,6 +6,7 @@ Tool calling is done through the prompt: the model is told to answer with one JS
 object {"tool": "...", "args": {...}} when it wants a tool, and plain text when done.
 """
 import json
+from app import config
 import logging
 import time
 import uuid
@@ -33,19 +34,41 @@ RULES:
 - Once resolve_incident or escalate_incident succeeds, DO NOT call any more tools.
 - When you have finished, reply in plain text with no JSON."""
 
+def _check_tool_instructions(t: str) -> None:
+    try:
+        t.format(tool_list="x")
+    except (KeyError, IndexError, ValueError) as e:
+        raise ValueError(f"The tool instructions must contain {{tool_list}} and use doubled braces {{{{ }}}} for literal ones ({e})")
+    if "{tool_list}" not in t:
+        raise ValueError("The tool instructions must contain {tool_list}")
+
+
+config.register("prompt.tool_instructions", "Tool-call format instructions (must contain {tool_list})", TOOL_INSTRUCTIONS,
+                "text", "prompts", multiline=True, max_len=20000, check=_check_tool_instructions)
+
+
+def _tool_instructions() -> str:
+    return config.get("prompt.tool_instructions")
+
+
 TERMINAL_TOOLS = {"resolve_incident", "escalate_incident"}
 
 _SESSION = requests.Session()      # one keep-alive connection, reused by every call
 
 RETRY_STATUS = {429, 502, 503, 504}
-BACKOFF = (0, 3, 10, 25)
+def _backoff() -> tuple:
+    """Waits between model retries, from the admin setting (for example 0,3,10,25)."""
+    try:
+        return tuple(float(x) for x in str(config.get("limits.retry_backoff")).split(",") if x.strip()) or (0,)
+    except ValueError:
+        return (0, 3, 10, 25)
 
 def post_with_retry(url, payload, timeout):
     """POST to the model server. Retries dropped connections and busy responses
     (429/502/503/504) with backoff. Only the response status is retried, never a reply
     that has already started streaming."""
     last = None
-    for wait in BACKOFF:
+    for wait in _backoff():
         if wait:
             time.sleep(wait)
         try:
@@ -82,7 +105,7 @@ class ColabChat(BaseChatModel):
             props = s.get("parameters", {}).get("properties", {})
             args = ", ".join(f"{k}: {v.get('type', 'any')}" for k, v in props.items())
             lines.append(f"- {s['name']}({args}): {s.get('description', '')}")
-        return TOOL_INSTRUCTIONS.format(tool_list="\n".join(lines))
+        return _tool_instructions().format(tool_list="\n".join(lines))
 
     def _to_colab(self, messages: List[BaseMessage]) -> list:
         out, system_parts = [], []

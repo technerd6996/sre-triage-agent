@@ -6,6 +6,7 @@ Decisions (threshold checks, resolve vs escalate) are made in code and returned 
 so a small model only has to follow the instruction.
 """
 import json
+from app import config
 import logging
 import os
 import re
@@ -26,7 +27,6 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")  # blocks shell/PowerShell in
 # Disk verification state (one ticket is worked at a time, so module-level state is safe)
 _CLEARED: dict[str, float] = {}   # target -> when temp files were last cleared
 _BEFORE: dict[str, dict] = {}     # target -> {disk: used_pct} before the cleanup
-VERIFY_WINDOW = 900               # seconds in which a disk check counts as the post-cleanup check
 
 _ERR_STEP = ("THE CHECK COULD NOT RUN. This is not a finding about the server, so do not say the server "
              "or service is down. Retry the same check once. If it fails again, call add_work_note saying "
@@ -212,7 +212,7 @@ def check_disk_usage(target: str) -> dict:
         over = [d["disk"] for d in disks if d["over_threshold"]]
         res = {"target": target, "threshold_pct": thr, "disks": disks, "over_threshold": over}
 
-        if time.time() - _CLEARED.get(target, 0) < VERIFY_WINDOW:   # this is the post-cleanup check
+        if time.time() - _CLEARED.get(target, 0) < config.get("infra.verify_window_seconds"):   # this is the post-cleanup check
             _CLEARED.pop(target, None)
             res["before_used_pct"] = _BEFORE.get(target, {})
             if over:
