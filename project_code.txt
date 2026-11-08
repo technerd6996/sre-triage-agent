@@ -1,5 +1,5 @@
 ﻿
-=== FILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\adapters\ad\identity.py ===
+=== ILE: C:\Users\VedaVidyadaran\sre-triage-agent\app\adapters\ad\identity.py ===
 
 """Active Directory (LDAP) adapter."""
 import os
