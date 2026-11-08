@@ -67,6 +67,18 @@ def _active_runs() -> list:
     """Runs using the agent right now. A run waiting for approval does not count, so it frees its place."""
     return [r for r in RUNS.values() if r["status"] == "running"]
 
+def _can_start(source: str) -> bool:
+    """True when a run from this source may start now. Automatic runs leave runs.reserved_slots free for people."""
+    cap = int(config.get("runs.max_concurrent") or 1)
+    active = _active_runs()
+    if len(active) >= cap:
+        return False
+    if source == "auto":
+        reserved = min(max(int(config.get("runs.reserved_slots") or 0), 0), cap - 1)   # automatic work keeps at least one slot
+        return sum(1 for r in active if r.get("source") == "auto") < cap - reserved
+    return True
+
+
 def _active():
     """First run that is running or waiting for approval. Used only by the single-run status views."""
     return next((r for r in RUNS.values() if r["status"] in ("running", "awaiting_approval")), None)
@@ -81,7 +93,7 @@ def _add_event(run: dict, ev: dict):
 
 def _post_report(run: dict):
     """Writes the structured end-of-run report to the ServiceNow work notes, once per run."""
-    if run.get("reported") or run["status"] not in ("done", "error"):
+    if run.get("reported") or run["status"] not in ("done", "error", "escalated"):
         return
     run["reported"] = True
     try:
@@ -97,7 +109,7 @@ def _finalize_metrics(run: dict):
     run.update(store.llm_totals(run["id"]))
     run["steps"] = sum(1 for e in run["events"] if e.get("type") == "tool_call")
     run["nudges"] = sum(1 for e in run["events"] if e.get("type") == "nudge")
-    if run["status"] in ("done", "error"):
+    if run["status"] in ("done", "error", "escalated"):
         run["ended"] = time.time()
         try:
             run["outcome"] = outcome_code(run)
@@ -140,6 +152,18 @@ def _guard(run: dict, ev: dict, sigs: list) -> str | None:
             return f"Loop detected: {ev['name']} called 3 times with the same arguments."
     return None
 
+def _settle_escalated(run: dict) -> None:
+    """A run that hit an error AFTER handing the ticket to a human is shown as 'escalated', not 'error':
+    the ticket is with an engineer, so it must not count as a failed run."""
+    if run.get("status") != "error":
+        return
+    try:
+        if run.get("escalated") or outcome_code(run) == "escalated":
+            run["status"] = "escalated"
+    except Exception:
+        pass
+
+
 def _consume(run: dict, events, kind: str = "triage"):
     """Runs in a background thread: copies agent events into the run and tracks its status."""
     run["status"] = "running"
@@ -153,13 +177,21 @@ def _consume(run: dict, events, kind: str = "triage"):
         for ev in events:
             stop = _guard(run, ev, sigs)
             if stop:
-                _add_event(run, {"type": "error", "message": stop})
-                run["status"] = "error"
                 store.audit(run["id"], run["ticket"], "policy", "run_stopped", stop)
+                handed_over = False
                 try:
-                    escalate_incident.invoke({"number": run["ticket"], "reason": f"TRIAGE-1 stopped: {stop}"})
+                    res = escalate_incident.invoke({"number": run["ticket"], "reason": f"TRIAGE-1 stopped: {stop}"})
+                    handed_over = not (isinstance(res, dict) and res.get("error"))
                 except Exception as e:
                     log.warning("Could not escalate %s after a stop: %s", run["ticket"], str(e)[:200])
+                if handed_over:
+                    # The ticket is with a human now: that is a hand-over, not a failure.
+                    run["escalated"] = True
+                    run["status"] = "escalated"
+                    _add_event(run, {"type": "warning", "message": f"{stop} The ticket was escalated to a human engineer."})
+                else:
+                    _add_event(run, {"type": "error", "message": stop})
+                    run["status"] = "error"
                 store.save_run(run)
                 break
             if ev["type"] == "start":
@@ -254,6 +286,7 @@ def _consume(run: dict, events, kind: str = "triage"):
         if p1 and p1["status"] == "proposed" and outcome_code(run) == "resolved" and not unverified:
             p1["status"] = "withdrawn"      # fixed and verified: nothing left to escalate
             store.audit(run["id"], run["ticket"], "system", "p1_withdrawn", p1["reason"])
+    _settle_escalated(run)
     usage.unbind_run(run["id"])
     _finalize_metrics(run)
     store.save_run(run)
@@ -261,12 +294,11 @@ def _consume(run: dict, events, kind: str = "triage"):
 
 def start_run(ticket: str, source: str = "manual", actor: str = "system"):
     """Starts a run unless another is active. Returns the run, or None if busy.
-    source: manual | chat | auto (only recorded in the audit trail)."""
-    cap = cap = int(config.get("runs.max_concurrent") or 1)
+    source: manual | chat | approver_adhoc | auto. Only 'auto' is held back by runs.reserved_slots."""
     with _lock:
-        if len(_active_runs()) >= cap:
+        if not _can_start(source):
             return None
-        run = {"id": uuid.uuid4().hex[:8], "ticket": ticket, "status": "running", "events": [],
+        run = {"id": uuid.uuid4().hex[:8], "ticket": ticket, "status": "running", "events": [], "source": source,
                "thread_id": None, "skill": None, "server": None, "pending": None,
                "created": time.time(), "last_event": time.time(),
                "requester": actor, "started": time.time()}
@@ -275,7 +307,8 @@ def start_run(ticket: str, source: str = "manual", actor: str = "system"):
             RUNS.pop(next(iter(RUNS)))
     store.save_run(run)
     store.audit(run["id"], ticket, actor, "run_started", f"source={source}")
-    threading.Thread(target=_consume, args=(run, start(ticket)), daemon=True).start()
+    threading.Thread(target=_consume, args=(run, start(ticket)),
+                     kwargs={"kind": "approver" if source == "approver_adhoc" else "triage"}, daemon=True).start()
     return run
 
 
@@ -443,6 +476,25 @@ _auto = {"enabled": False, "thread": None, "tried": set()}
 _AUTO_RUNS: list = []          # run ids started from auto-intake, judged by the circuit breaker
 
 
+def _failed_runs(ticket: str) -> int:
+    """How many runs of this ticket ended in error (stored, so the count survives a restart)."""
+    try:
+        return len(store.supabase.table("runs").select("id").eq("ticket", ticket).eq("status", "error").execute().data)
+    except Exception:
+        return 999                       # cannot tell: do not retry blindly
+
+
+def _already_worked() -> set:
+    """Tickets auto mode must not queue now: running, waiting, or failed more often than the retry limit."""
+    active = {r["ticket"] for r in RUNS.values() if r["status"] in ("running", "awaiting_approval")}
+    queued = {j["ticket"] for j in jobs.queued()}
+    worked = {r["ticket"] for r in RUNS.values()} | queued
+    retries = config.get("limits.auto_retry_failed")
+    failed_only = {r["ticket"] for r in RUNS.values() if r["status"] == "error"} - active - queued
+    retry_ok = {t for t in failed_only if _failed_runs(t) <= retries}
+    return worked - retry_ok
+
+
 def _auto_loop():
     fails = 0
     while _auto["enabled"]:
@@ -459,14 +511,16 @@ def _auto_loop():
                 if fails >= config.get("agent.auto_max_fails"):
                     _auto["enabled"] = False
                     store.set_setting("auto_enabled", False, "circuit-breaker")
+                    store.set_setting("auto_tripped", f"Auto mode stopped itself after {fails} failed runs in a row. "
+                                                      "Check the failed runs, then switch it on again.", "circuit-breaker")
                     store.audit(None, None, "auto-mode", "auto_mode_tripped", f"{fails} failed runs in a row")
                     log.error("Auto mode switched off: %d failed runs in a row", fails)
                     break
             if not _auto["enabled"]:
                 break
             if len(jobs.queued()) < 5:                  # keep the backlog short; the queue is already ordered
-                worked = {r["ticket"] for r in RUNS.values()} | {j["ticket"] for j in jobs.queued()}
-                for n in list_queue():
+                worked = _already_worked()
+                for n in list_queue(exclude=worked):      # ask ServiceNow only for tickets not worked yet
                     if n not in worked:
                         jobs.enqueue(n, "auto", "auto-mode", 3)
         except Exception as e:
@@ -475,13 +529,15 @@ def _auto_loop():
 
 @router.get("/auto")
 def get_auto():
-    return {"enabled": _auto["enabled"]}
+    return {"enabled": _auto["enabled"], "tripped": None if _auto["enabled"] else store.get_setting("auto_tripped", None)}
 
 
 @router.post("/auto")
 def set_auto(req: AutoRequest, request: Request):
     _auto["enabled"] = req.enabled
     store.set_setting("auto_enabled", req.enabled, _actor(request))
+    if req.enabled:
+        store.set_setting("auto_tripped", None, _actor(request))        # a person switched it on: clear the warning
     store.audit(None, None, _actor(request), "auto_mode_on" if req.enabled else "auto_mode_off")
     if req.enabled and not (_auto["thread"] and _auto["thread"].is_alive()):
         _auto["thread"] = threading.Thread(target=_auto_loop, daemon=True)
@@ -528,6 +584,7 @@ def _fail_stalled(r: dict):
                    "message": f"No progress for {mins} min (LLM or a tool may be hung). "
                               "The slot was released; check the ticket and re-run if needed."})
     r["status"] = "error"
+    _settle_escalated(r)
     usage.unbind_run(r["id"])
     _finalize_metrics(r)
     store.save_run(r)
@@ -587,10 +644,10 @@ def _dispatcher():
     while True:
         time.sleep(2)
         try:
-            cap = cap = int(config.get("runs.max_concurrent") or 1)
-            if len(_active_runs()) >= cap or not _model_online():
+            if not _can_start("manual") or not _model_online():
                 continue                  # keep jobs queued while full or the model is offline
-            job = jobs.pick_next(jobs.queued())
+            # only jobs allowed to start now: a waiting automatic job must not hide an ad-hoc one behind it
+            job = jobs.pick_next([j for j in jobs.queued() if _can_start(j["source"])])
             if not job:
                 continue
             run = start_run(job["ticket"], source=job["source"], actor=job["actor"])

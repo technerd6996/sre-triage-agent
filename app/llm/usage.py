@@ -12,10 +12,20 @@ import threading
 
 log = logging.getLogger("uvicorn.error")
 
-_TOKENIZER_NAME = config.get("limits.tokenizer_name")
 _tok = None
 _tok_state = "pending"          # pending | ok | failed
 _load_lock = threading.Lock()
+
+
+def _reload_tokenizer(key: str) -> None:
+    """A new tokenizer name takes effect on the next count."""
+    global _tok, _tok_state
+    if key == "limits.tokenizer_name":
+        with _load_lock:
+            _tok, _tok_state = None, "pending"
+
+
+config.on_change(_reload_tokenizer)
 
 
 def warm() -> str:
@@ -26,12 +36,12 @@ def warm() -> str:
             return _tok_state
         try:
             from transformers import AutoTokenizer
-            _tok = AutoTokenizer.from_pretrained(_TOKENIZER_NAME)
+            _tok = AutoTokenizer.from_pretrained(config.get("limits.tokenizer_name"))
             _tok_state = "ok"
         except Exception as e:
             _tok_state = "failed"
             log.warning("Tokenizer %s unavailable (%s). Estimating tokens as chars / 3.5.",
-                        _TOKENIZER_NAME, str(e)[:120])
+                        config.get("limits.tokenizer_name"), str(e)[:120])
     return _tok_state
 
 

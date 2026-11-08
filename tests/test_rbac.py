@@ -7,7 +7,7 @@ def caps(role):
 
 def test_matrix():
     assert "chat.create" in caps("users") and "console.view" not in caps("users")
-    assert {"console.act", "kb.view"} <= caps("approvers") and "kb.manage" not in caps("approvers")
+    assert "console.act" in caps("approvers") and not any(c.startswith("kb.") for c in rbac.ALL_CAPS)
     assert caps("auditors") == {"admin.open", "monitor.view", "audit.view"}
     assert "config.manage" in caps("admin") and "users.manage" not in caps("admin")
     assert "chat.create" not in caps("admin")
@@ -34,7 +34,6 @@ def test_route_rules():
         ("POST", "/api/admin/config", "admin", True), ("POST", "/api/admin/config", "approvers", False),
         ("GET", "/api/admin/users", "admin", False), ("GET", "/api/admin/users", "super_admin", True),
         ("GET", "/api/admin/audit", "approvers", False), ("GET", "/api/admin/audit", "auditors", True),
-        ("POST", "/api/rag/upload", "approvers", False), ("GET", "/api/rag/documents", "approvers", True),
         ("POST", "/api/chat", "users", True), ("POST", "/api/chat", "auditors", False),
         ("POST", "/api/agent/runs/abc/decision", "approvers", True),
         ("POST", "/api/agent/runs/abc/decision", "users", False),

@@ -42,7 +42,7 @@ def _stub_snow(store):
         return {"number": number, "note_added": True}
 
     m._fetch = fetch
-    m.list_queue = lambda: [n for n, r in store.items() if r["state"] == "New"]
+    m.list_queue = lambda exclude=(): [n for n, r in store.items() if r["state"] == "New"]
     m.claim_incident, m.resolve_incident = _Tool(claim), _Tool(resolve)
     m.add_work_note = _Tool(note)
     m.escalate_incident = _Tool(lambda number, reason: rec(number))

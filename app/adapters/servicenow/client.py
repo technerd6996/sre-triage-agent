@@ -171,6 +171,43 @@ def create_incident(short_description: str, description: str, urgency: int = 3, 
     )
     return _fetch(created["number"])
 
+def _user_by_email(email: str):
+    """sys_id of the active ServiceNow user with exactly this email, or None."""
+    email = (email or "").replace("^", "").strip()
+    if not email:
+        return None
+    rows = _request("GET", "sys_user", params={
+        "sysparm_query": f"active=true^email={email}", "sysparm_limit": 1, "sysparm_fields": "sys_id"})
+    return rows[0]["sys_id"] if rows else None
+
+
+def create_incident_for(short_description: str, description: str, user_email: str, urgency: int = 3,
+                        impact: int = 3, ci: str = "", note: str = "") -> dict:
+    """Incident opened by a person from the approver chat: they are the caller and the assignee, and it is NOT put
+    in the L1 assignment group, so the agent queue never sees it. If no ServiceNow user has this email the ticket is
+    still created (caller = integration user, unassigned) and the work note names the person."""
+    uid = _user_by_email(user_email)
+    body = {
+        "short_description": short_description,
+        "description": description,
+        "urgency": str(urgency),
+        "impact": str(impact),
+        "contact_type": os.getenv("SNOW_CHANNEL", "virtual_agent"),
+        "caller_id": uid or _user_id(_caller()),
+    }
+    if uid:
+        body["assigned_to"] = uid
+    if ci:
+        ci_id = find_ci_id(ci)
+        if ci_id:
+            body["cmdb_ci"] = ci_id
+    created = _request("POST", "incident", json=body)
+    who = user_email if uid else f"{user_email} (no ServiceNow user has this email, so the ticket is unassigned)"
+    _request("PATCH", f"incident/{created['sys_id']}", json={
+        "state": str(STATE_IN_PROGRESS), "work_notes": note or f"Opened from TRIAGE-1 chat by {who}."})
+    return _fetch(created["number"])
+
+
 CLAIM_NOTE = ("TRIAGE-1 picked up this ticket and has started automated triage.\n\n"
               "What happens next: it chooses a playbook, runs read-only diagnostics, and asks a human to "
               "approve any change that carries risk. A full report is added to this ticket when it finishes.")
@@ -266,14 +303,17 @@ def escalate_incident(number: str, reason: str) -> dict:
     )
     return _fetch(number)
 
-def list_queue() -> list:
-    """Ticket numbers waiting in the L1 queue: New, unassigned, oldest first."""
+def list_queue(exclude=()) -> list:
+    """Ticket numbers waiting in the L1 queue: New, unassigned, oldest first.
+    `exclude`: numbers to leave out in ServiceNow itself, so tickets already worked cannot fill the page."""
     rows = _request(
         "GET",
         "incident",
         params={
             "sysparm_query": f"active=true^state=1^assigned_toISEMPTY"
-                             f"^assignment_group.name={_group()}^ORDERBYpriority^ORDERBYsys_created_on",
+                             f"^assignment_group.name={_group()}"
+                             + (f"^numberNOT IN{','.join(_q(n) for n in list(exclude)[:200] if _q(n))}" if exclude else "")
+                             + "^ORDERBYpriority^ORDERBYsys_created_on",
             "sysparm_fields": "number",
             "sysparm_limit": 10,
         },

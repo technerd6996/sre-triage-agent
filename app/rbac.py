@@ -13,8 +13,6 @@ ALL_CAPS = frozenset({
     "admin.open",      # open the admin page
     "monitor.view",    # metrics and monitoring dashboards
     "audit.view",      # audit log
-    "kb.view",         # see the knowledge base
-    "kb.manage",       # change the knowledge base
     "config.manage",   # Controls and the Configuration pane
     "users.manage",    # users, roles (later AD mapping)
 })
@@ -22,8 +20,8 @@ ALL_CAPS = frozenset({
 ROLES = {
     "auditors":    frozenset({"admin.open", "monitor.view", "audit.view"}),
     "users":       frozenset({"chat.create"}),
-    "approvers":   frozenset({"chat.create", "console.view", "console.act", "admin.open", "monitor.view", "kb.view"}),
-    "admin":       frozenset({"admin.open", "monitor.view", "audit.view", "kb.view", "kb.manage", "config.manage"}),
+    "approvers":   frozenset({"chat.create", "console.view", "console.act", "admin.open", "monitor.view"}),
+    "admin":       frozenset({"admin.open", "monitor.view", "audit.view", "config.manage"}),
     "super_admin": ALL_CAPS,
 }
 ROLE_LABELS = {"auditors": "Auditor", "users": "User", "approvers": "Approver", "admin": "Admin",
@@ -76,15 +74,11 @@ _r(_G, r"/api/(ready|chat/status)", ANY)
 _r(_G, r"/", "chat.create")
 _r(_G, r"/admin", "admin.open")
 _r(_G, r"/agent", "console.view")
-_r(_G, r"/knowledge", "kb.view")
 # chat and tickets
 _r("POST", r"/api/(chat|title)", "chat.create")
 _r(_G, r"/api/servers", "chat.create")
 _r("*", r"/api/issues(/.*)?", "chat.create")
 _r("*", r"/api/approver-chat(/.*)?", "console.act")       # ad-hoc runs: approvers only, never inherited by users
-# knowledge base
-_r(_G, r"/api/rag(/.*)?", "kb.view")
-_r("*", r"/api/rag(/.*)?", "kb.manage")
 # agent
 _r(_G, r"/api/agent/(live|runs/[^/]+)", ("chat.create", "console.view"))
 _r(_G, r"/api/agent/(status|llm-stats|skills-status)", "monitor.view")
@@ -121,7 +115,7 @@ def allows(role_value, need) -> bool:
 
 
 def is_page(path: str) -> bool:
-    return path in ("/", "/admin", "/agent", "/knowledge")
+    return path in ("/", "/admin", "/agent")
 
 
 # ---- Startup check ----

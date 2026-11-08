@@ -305,7 +305,6 @@ def rag_stats(days: int = 30):
             "gaps": sorted(gaps.items(), key=lambda x: -x[1])[:15],
             "top_docs": sorted(docs.items(), key=lambda x: -x[1])[:10],
             "avg_total": round(sum(tot) / len(tot), 1) if tot else None, "p90_total": _p90(tot),
-            "avg_graph": round(sum(r["t_graph"] or 0 for r in rows) / len(rows), 2) if rows else None,
             "avg_vec": round(sum(r["t_vec"] or 0 for r in rows) / len(rows), 2) if rows else None,
             "recent_scores": [{"q": r["query"], "scores": r.get("scores")} for r in rows[-5:]]}
 
@@ -397,6 +396,21 @@ def admin_cancel_run(run_id: str, request: Request):
     if res == "finished":
         raise HTTPException(409, "This run has already finished")
     return {"ok": True}
+
+
+@router.post("/api/admin/runs/rerun-failed")
+def admin_rerun_failed(request: Request):
+    """Queues every ticket whose most recent run ended in error (escalated runs are not failures)."""
+    from app import jobs
+    who = getattr(request.state, "user", "?")
+    latest = {}
+    for r in _db.table("runs").select("ticket,status,created").order("created").execute().data:
+        latest[r["ticket"]] = r["status"]                  # oldest first, so the last write is the newest run
+    tickets = [t for t, st in latest.items() if st == "error"]
+    for t in tickets:
+        jobs.enqueue(t, "rerun", who, 2)
+    store.audit(None, None, who, "rerun_failed", f"{len(tickets)} ticket(s)")
+    return {"queued": len(tickets), "tickets": tickets}
 
 
 @router.post("/api/admin/runs/{run_id}/rerun")

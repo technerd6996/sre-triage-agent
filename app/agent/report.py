@@ -98,6 +98,8 @@ def describe(ev: dict) -> str | None:
 
 
 def _outcome(run: dict) -> str:
+    if run.get("escalated"):
+        return "ESCALATED to a human engineer"
     last = None
     for e in run["events"]:
         if e.get("type") == "tool_call" and e.get("name") in ("resolve_incident", "escalate_incident"):

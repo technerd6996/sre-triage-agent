@@ -1,7 +1,6 @@
 fastapi
 uvicorn
 requests
-neo4j
 python-dotenv
 python-multipart
 langchain 

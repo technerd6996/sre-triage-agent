@@ -109,6 +109,66 @@ def _allow_inquiry(user_id: str):
     return None
 
 
+_action_per_user: OrderedDict = OrderedDict()    # user_id -> [(first time, ticket, fetches)] in the last hour
+
+
+def _allow_action(user_id: str, ticket: str):
+    """One confirmed chat action = one ticket, even though a service restart fetches the credential three times
+    (state before, restart, state after). So the hourly limit counts distinct tickets, and a single ticket may fetch
+    at most 30 times so it cannot be used as a loophole."""
+    now = time.time()
+    with _lock:
+        seen = [(t, tk, n) for (t, tk, n) in _action_per_user.get(user_id, []) if now - t < 3600]
+        mine = [e for e in seen if e[1] == ticket]
+        if not mine and len({e[1] for e in seen}) >= config.get("credentials.action_max_per_user_per_hour"):
+            _action_per_user[user_id] = seen
+            return "per-user action limit reached"
+        if mine and mine[0][2] >= 30:
+            _action_per_user[user_id] = seen
+            return "too many credential fetches for this ticket"
+        if mine:
+            seen = [(t, tk, n + 1) if tk == ticket else (t, tk, n) for (t, tk, n) in seen]
+        else:
+            seen.append((now, ticket, 1))
+        _action_per_user[user_id] = seen
+        _action_per_user.move_to_end(user_id)
+        while len(_action_per_user) > 200:
+            _action_per_user.popitem(last=False)
+    return None
+
+
+def checkout_for_action(user_id: str, ticket: str, *keys: str) -> dict:
+    """Credential fetch for a change a person confirmed in the approver chat (no agent run). Own hourly limit per
+    person, and every checkout is audited under THEIR name with the ticket. Raises RuntimeError (safe to show)."""
+    keys = tuple(k for k in keys if k)
+    target = keys[0] if keys else "unknown"
+
+    def audit(action, detail):
+        try:
+            from app import store
+            store.audit(None, ticket, user_id, action, detail)
+        except Exception as e:                    # noqa: BLE001
+            log.error("PAM audit row not written (%s): %s %s", type(e).__name__, action, detail)
+
+    why = _allow_action(user_id, ticket)
+    if why:
+        audit("pam_action_rate_limited", f"host={target} {why}")
+        raise RuntimeError(f"Credential checkout refused: {why}")
+    provider = "?"
+    try:
+        creds = registry.get_credentials()
+        provider = creds.provider
+        matched, data = creds.fetch(*keys)
+    except NotFound:
+        audit("pam_action_checkout", f"host={target} result=not_found provider={provider}")
+        raise RuntimeError(f"No credential available for {keys[-1] if keys else 'unknown host'}") from None
+    except PortError as e:
+        audit("pam_action_checkout", f"host={target} result=unavailable provider={provider}")
+        raise RuntimeError(f"PAM is unavailable ({e})") from None
+    audit("pam_action_checkout", f"host={target} key={matched} result=ok provider={provider}")
+    return data
+
+
 def checkout_for_inquiry(user_id: str, *keys: str) -> dict:
     """Read-only credential fetch with no agent run: used only by /api/approver-chat/inquire.
     Rate-limited separately from checkout() so inquiry traffic never shares or depletes a

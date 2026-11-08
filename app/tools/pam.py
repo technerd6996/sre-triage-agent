@@ -25,6 +25,12 @@ def checkout_for_inquiry(user_id: str, *keys: str) -> dict:
     return pam_service.checkout_for_inquiry(user_id, *keys)
 
 
+def checkout_for_action(user_id: str, ticket: str, *keys: str) -> dict:
+    """Credential fetch for a change a person confirmed in the approver chat (no agent run), audited under their name."""
+    from app import pam_service
+    return pam_service.checkout_for_action(user_id, ticket, *keys)
+
+
 def _normalize_pem(text: str) -> str:
     """Rebuild a PEM key whose line breaks were lost or escaped when it was stored
     (everything on one line, literal \\n, or spaces). Encrypted legacy PEMs are left as is."""

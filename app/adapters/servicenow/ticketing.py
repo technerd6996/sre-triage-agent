@@ -108,8 +108,8 @@ class ServiceNowTicketing:
         except Exception as e:                      # noqa: BLE001
             raise map_error(e) from e
 
-    def list_queue(self) -> list[str]:
-        return self._run(lambda s: s.list_queue())
+    def list_queue(self, exclude=()) -> list[str]:
+        return self._run(lambda s: s.list_queue(exclude))
 
     def get(self, ticket_id: str) -> Ticket:
         rec = self._run(lambda s: s._fetch(ticket_id, identity="checker")
@@ -145,6 +145,12 @@ class ServiceNowTicketing:
         args = {"short_description": title, "description": description, "urgency": urgency,
                 "impact": impact, "caller": caller, "ci": host}
         return to_ticket(self._run(lambda s: s.create_incident.invoke(args)))
+
+    def create_for_user(self, title: str, description: str, user_email: str, urgency: int = 3, impact: int = 3,
+                        host: str = "", note: str = "") -> Ticket:
+        """A ticket owned by a person (caller and assignee), outside the L1 group, so the agent never picks it up."""
+        return to_ticket(self._run(lambda s: s.create_incident_for(
+            title, description, user_email, urgency, impact, host, note)))
 
     def search_callers(self, text: str, limit: int = 8) -> list[dict]:
         return self._run(lambda s: s.search_users(text, limit))

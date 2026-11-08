@@ -1,4 +1,6 @@
 """Decides which server a ticket is about. The code decides, never the model."""
+import re
+
 from app.ports import registry
 from app.tools import active
 
@@ -9,17 +11,45 @@ def _legacy(h) -> dict:
             "public_ip": h.address, "private_ip": h.private_address, "provider": h.provider}
 
 
+def _key(s: str) -> frozenset:
+    return frozenset(t for t in re.split(r"[-_.\s]+", (s or "").lower()) if t)
+
+
+def _not_found(text: str) -> str:
+    """'No known instance...' plus, when possible, the closest real name. Never auto-picks a server."""
+    msg = "No known instance is named in the ticket."
+    try:
+        names = [h.name for h in registry.get_hosts().list_hosts() if h.name]
+    except Exception:
+        return msg
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]{2,}", text or "")
+    close = []
+    for n in names:
+        for w in words:
+            same_parts = _key(w) == _key(n) and len(_key(n)) > 1          # e.g. win-term-srv vs term-win-srv
+            if same_parts or (len(w) >= 4 and (w.lower() in n.lower() or n.lower() in w.lower())):
+                close.append(n)
+                break
+    if close:
+        msg += " Did you mean " + " or ".join(close[:3]) + "?"
+    if names:
+        msg += " Known servers: " + ", ".join(names[:15]) + "."
+    return msg
+
+
 def resolve_server(ticket_text: str, ci_name: str = ""):
     """Returns (instance, reason). Also sets the active server so the infra tools use its address."""
     active.bind({})  # never carry a previous ticket's server over
     try:
         hosts = registry.get_hosts()
         host = hosts.find_by_name(ci_name) if ci_name and hasattr(hosts, "find_by_name") else None
+        if not host and ci_name:                 # providers without find_by_name: match the name as text
+            host = hosts.find_in_text(ci_name)
         host = host or hosts.find_in_text(ticket_text)
     except Exception as e:
         return None, f"Host lookup failed: {str(e)[:150]}."
     if not host:
-        return None, "No known instance is named in the ticket."
+        return None, _not_found(ticket_text)
     active.bind({host.os: host.id})
     return _legacy(host), ""
 

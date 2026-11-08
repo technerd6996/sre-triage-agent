@@ -70,10 +70,8 @@ async function initUserSession() {
         };        
         // Hide Admin/Agent buttons based on role
         const agentBtn = document.querySelector('a[href="/agent"]');
-        const kbBtn = document.querySelector('a[href="/knowledge"]');
         const caps = currentUser.caps || [];
         if (agentBtn && !caps.includes('console.view')) agentBtn.style.display = 'none';
-        if (kbBtn && !caps.includes('kb.view')) kbBtn.style.display = 'none';
         
         // Load state now that we have the namespaced key
         const saved = loadState();
@@ -324,24 +322,30 @@ function normalizeRelated(content) {
     return value ? `${stripped}\n\nRelated: ${value}` : stripped;
 }
 
-function sourceBadgeHTML(sources, answer) {
+// ServiceNow article numbers (KB0010012) become links to the article when the server sent its address
+function idLink(id, urls) {
+    const u = urls && urls[String(id).toUpperCase()];
+    return u && /^https?:\/\//i.test(u)
+        ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" style="text-decoration:underline">${esc(id)}</a>` : esc(id);
+}
+function urlsOf(meta) {
+    return Object.fromEntries(((meta && meta.articles) || []).map((a) => [String(a.id).toUpperCase(), a.url]));
+}
+
+function sourceBadgeHTML(sources, answer, urls) {
     if (/^\s*I['\u2019]?m a triage assistant/i.test(answer)) return '';
     const retrieved = Array.isArray(sources) ? sources : ((sources && sources.sources) || []);
     const body = answer.replace(/^\s*Related:.*$/gim, '');
-    const mentioned = [...new Set(body.match(/\b(?:RB|SOP)-\d{3}\b|\bINC-\d{4}-\d{3}\b/g) || [])];
+    const mentioned = [...new Set(body.match(/\b(?:RB|SOP)-\d{3}\b|\bINC-\d{4}-\d{3}\b|\bKB\d{7}\b/g) || [])];
     const phantom = mentioned.filter(id => !retrieved.includes(id));
     const phantomHTML = phantom.length
         ? ` <span class="src-badge src-gen">⚠ Mentions ${phantom.map(esc).join(', ')}, which was not retrieved. May be inaccurate.</span>`
         : '';
-    const fromGraph = /Source:\s*graph\b/i.test(answer);
 
     const cited = retrieved.filter(id =>
         new RegExp(`(?<![\\w-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(answer));
     if (cited.length) {
-        return `<span class="src-badge src-kb">📚 From your knowledge base: ${cited.map(esc).join(', ')}</span>${phantomHTML}`;
-    }
-    if (fromGraph) {
-        return `<span class="src-badge src-kb">🕸 From your knowledge graph</span>${phantomHTML}`;
+        return `<span class="src-badge src-kb">📚 From your knowledge base: ${cited.map((id) => idLink(id, urls)).join(', ')}</span>${phantomHTML}`;
     }
     if (retrieved.length) {
         return `<span class="src-badge src-gen">⚠ Retrieved ${retrieved.map(esc).join(', ')} but the answer doesn't cite them. Verify before acting.</span>`;
@@ -407,7 +411,7 @@ function appendDOM(role, content, info) {
     if (!isUser && info) {
         const isArr = Array.isArray(info);                       // old saves stored a bare array of sources
         const srcs = isArr ? info : (info.sources || []);
-        div.querySelector('.source-line').innerHTML = (!isArr && info.kind === 'canned') ? '' : sourceBadgeHTML(srcs, content);
+        div.querySelector('.source-line').innerHTML = (!isArr && info.kind === 'canned') ? '' : sourceBadgeHTML(srcs, content, isArr ? null : info.urls);
         const inc = isArr ? null : info.incident;
         if (inc && ['can_report', 'needs_server'].includes(inc.status) && !chats[activeChatId]?.closed) {
             renderCreateIncidentAction(div.querySelector('.content'), inc.description || '', inc.suggested_server, inc.mode);
@@ -419,7 +423,7 @@ function appendDOM(role, content, info) {
     return div.querySelector('.content');
 }
 
-const THINKING_STEPS = ['Thinking…', 'Searching runbooks…', 'Checking the knowledge graph…', 'Putting the answer together…'];
+const THINKING_STEPS = ['Thinking…', 'Searching runbooks…', 'Putting the answer together…'];
 
 function startThinking(node) {
     node.innerHTML = `<div class="thinking"><span class="thinking-dots"><i></i><i></i><i></i></span><span class="thinking-label shimmer">${THINKING_STEPS[0]}</span></div>`;
@@ -587,6 +591,87 @@ function ticketTranscript(chatId) {
 
 let busy = false;
 
+// Not waiting on the model any more: show "Listening" and let the user type the next command
+function backToListening() {
+    busy = false;
+    applyComposerState();
+    checkAgentStatus();
+}
+
+// A change asked for in the chat. Step 1 asks the server for ONE exact action (a service restart, or resolving a
+// ticket) and shows it as a card. Nothing changes until Confirm, which sends the card's single-use token.
+async function proposeAction(card, instruction, chat, history, stopThinking) {
+    const remember = (note) => history.push({ role: 'user', content: instruction, skip: true },
+                                            { role: 'assistant', content: note, skip: true });
+    try {
+        const res = await fetch('/api/approver-chat/act/propose', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ instruction, server: chat.lastInquiryServer || '' })
+        });
+        const data = await res.json();
+        if (stopThinking) stopThinking();
+        if (!res.ok) {
+            card.innerHTML = formatSeverity(data.detail || 'I could not work out what to run.');
+            remember(`[could not propose an action for: ${instruction}]`);
+            return;
+        }
+        const isClose = data.kind === 'close';
+        if (!isClose && data.host_mode === 'named') chat.lastInquiryServer = data.host;
+        card.innerHTML = formatSeverity(isClose
+            ? `**Resolve ${data.ticket}?**\n\nClose notes that will be saved on the ticket:\n\n> ${data.notes.replace(/\n/g, '\n> ')}`
+            : `**${data.title}**\n\n` +
+              `Risk level L${data.level}. A ServiceNow ticket owned by you is opened (outside the agent queue), ` +
+              `the action runs now from this chat, and the result is written to the ticket.`);
+        const row = mkEl('div', 'mt-3 flex gap-3');
+        const confirmBtn = mkEl('button', 'px-5 py-2 rounded-lg bg-[#FFB000] text-black font-semibold text-[15px] hover:bg-[#E6A000]', isClose ? 'Resolve ticket' : 'Confirm');
+        const cancelBtn = mkEl('button', 'px-5 py-2 rounded-lg border border-[#2E3744] text-gray-200 text-[15px] hover:border-gray-500', 'Cancel');
+        confirmBtn.type = cancelBtn.type = 'button';
+        row.append(confirmBtn, cancelBtn);
+        card.appendChild(row);
+        cancelBtn.onclick = () => {
+            row.remove();
+            card.innerHTML += formatSeverity('_Cancelled. Nothing was changed._');
+        };
+        confirmBtn.onclick = async () => {
+            confirmBtn.disabled = cancelBtn.disabled = true;
+            confirmBtn.textContent = 'Working\u2026';
+            try {
+                const r2 = await fetch('/api/approver-chat/act/confirm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: data.token })
+                });
+                const d2 = await r2.json();
+                row.remove();
+                card.innerHTML += formatSeverity(r2.ok
+                    ? `${d2.ok ? '\u2705' : '\u26A0\uFE0F'} ${d2.message}` + (isClose ? '' : `\n\nTicket **${d2.ticket}** (assigned to you, still In Progress).`)
+                    : (d2.detail || 'Could not run it.'));
+                if (r2.ok && d2.ok && !isClose) {
+                    // the ticket stays open until the engineer says so: offer the next step right here
+                    const next = mkEl('div', 'mt-3');
+                    const closeBtn = mkEl('button', 'px-5 py-2 rounded-lg border border-[#FFB000] text-[#FFB000] text-[15px] hover:bg-[#FFB000] hover:text-black', `Close ${d2.ticket}`);
+                    closeBtn.type = 'button';
+                    closeBtn.onclick = async () => {
+                        next.remove();
+                        const bubble = appendDOM('assistant', '');
+                        await proposeAction(bubble, `close ${d2.ticket}`, chat, history, null);
+                    };
+                    next.appendChild(closeBtn);
+                    card.appendChild(next);
+                }
+            } catch (e) {
+                row.remove();
+                card.innerHTML += formatSeverity(`Failed: ${e.message}`);
+            }
+        };
+        remember(isClose ? `[proposed resolving ${data.ticket}]` : `[action proposed: ${data.title}]`);
+    } catch (e) {
+        if (stopThinking) stopThinking();
+        card.innerHTML = formatSeverity(`Could not check that: ${e.message}`);
+    }
+}
+
 async function streamResponse(query) {
     const chatId = activeChatId;
     const chat = chats[chatId];
@@ -634,61 +719,19 @@ async function streamResponse(query) {
     // not the chat persona. The server name itself is resolved server-side (resolve_server /
     // find_in_text scans the question for a known CI name) -- no client-side text parsing.
     const isApprover = (currentUser?.caps || []).includes('console.act');
+    const closeMatch = isApprover && /\b(close|resolve)\b/i.test(query) && /\bINC\d{5,}\b/i.test(query);
     const actionMatch = isApprover
-        && /\b(restart|kill|stop|start)\b/i.test(query)
-        && !/\?\s*$/.test(query);   // a question mark means they're asking, not instructing
+        && (closeMatch || /\b(restart|kill|stop|start|unlock)\b|\bfree up\b/i.test(query)
+            || (/\b(clean|clear)\b/i.test(query) && /\b(temp|temporary|logs?)\b/i.test(query)))
+        // a question mark means they're asking, not instructing, unless it is a polite request:
+        // "can we restart ...?", "could you stop ...?"
+        && (closeMatch || !/\?\s*$/.test(query) || /^\s*(please\s+)?(can|could|would|should|shall|may)\s+(we|you|i)\b/i.test(query));
     const inquireMatch = !actionMatch && isApprover
-        && /\b(cpu|memory|mem|process(es)?|cmdb|criticality|support group|health check)\b/i.test(query);
-    
-    if (actionMatch) {
-        const card = appendDOM('assistant', '');
-        stopThinking();
-        card.innerHTML = formatSeverity(`Run this as an ad-hoc action?\n\n> ${esc(query)}`);
-        const row = mkEl('div', 'mt-3 flex gap-3');
-        const confirmBtn = mkEl('button', 'px-5 py-2 rounded-lg bg-[#FFB000] text-black font-semibold text-[15px] hover:bg-[#E6A000]', 'Yes, run it');
-        const cancelBtn = mkEl('button', 'px-5 py-2 rounded-lg border border-[#2E3744] text-gray-200 text-[15px] hover:border-gray-500', 'Cancel');
-        confirmBtn.type = cancelBtn.type = 'button';
-        row.append(confirmBtn, cancelBtn);
-        card.appendChild(row);
+        && /\b(cpu|memory|mem|disks?|drives?|storage|process(es)?|cmdb|criticality|support group|health check)\b/i.test(query);
 
-        cancelBtn.onclick = () => {
-            row.remove();
-            card.innerHTML += formatSeverity('_Cancelled._');
-        };
-        confirmBtn.onclick = async () => {
-            confirmBtn.disabled = true;
-            cancelBtn.disabled = true;
-            confirmBtn.textContent = 'Starting\u2026';
-            try {
-                const res = await fetch('/api/approver-chat/run', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ instruction: query })
-                });
-                const data = await res.json();
-                row.remove();
-                if (!res.ok) {
-                    card.innerHTML += formatSeverity(data.detail || 'Could not start the run.');
-                } else {
-                    card.innerHTML += formatSeverity(
-                        `Ticket **${data.number}** created${data.queued ? ' and queued' : ' and running'}.`
-                    );
-                    if (data.run_id) {
-                        const chat = chats[activeChatId];
-                        chat.run = { runId: data.run_id, number: data.number, server: '' };
-                        saveState();
-                        watchRun(card, data.run_id, data.number, '', activeChatId);
-                    } else if (data.queued) {
-                        followQueued(card, data.number, '', activeChatId);
-                    }
-                }
-            } catch (e) {
-                row.remove();
-                card.innerHTML += formatSeverity(`Failed: ${e.message}`);
-            }
-        };
-        activeHistory.push({ role: 'user', content: query, skip: true },
-                           { role: 'assistant', content: `[ad-hoc action proposed for: ${query}]`, skip: true });
+    if (actionMatch) {
+        await proposeAction(contentNode, query, chat, activeHistory, stopThinking);
+        backToListening();          // the chat is free for the next command while a card waits for a click
         return;
     }
     if (inquireMatch) {
@@ -704,8 +747,8 @@ async function streamResponse(query) {
                 contentNode.innerHTML = formatSeverity(data.detail || 'Check failed.');
             } else {
                 chat.lastInquiryServer = data.server;
-                const r = data.result;
-                let line = `**${data.server}** (${data.platform}): `;
+                const describe = (r) => {
+                let line = '';
                 if (r.cpu_pct !== undefined) {
                     line += `${r.cpu_pct}% CPU used` + (r.over_threshold ? ` — over the ${r.threshold_pct}% threshold.` : '.');
                 } else if (r.used_pct !== undefined) {
@@ -717,27 +760,46 @@ async function streamResponse(query) {
                     line += `top ${r.sort_by === 'cpu' ? 'CPU' : 'memory'} user is **${top.name}** (pid ${top.pid}, ${share}%)`;
                     line += top.service ? `, service \`${top.service}\`` : '';
                     line += r.culprit_service ? '.' : ' — not a service this agent can restart by name.';
+                    if (r.processes.length > 1) {
+                        const n = (p) => `${p.name} (pid ${p.pid}): ${p.mem_pct ?? '?'}% memory, ${p.cpu_pct ?? '?'}% CPU`
+                            + (p.service ? `, service \`${p.service}\`` : '');
+                        line += `\n\nTop ${r.processes.length} by ${r.sort_by === 'cpu' ? 'CPU' : 'memory'}:\n\n`
+                            + r.processes.map((p, i) => `${i + 1}. ${n(p)}`).join('\n');
+                    }
+                } else if (Array.isArray(r.disks) && r.disks.length) {
+                    // "C drive" / "C:" in the question shows that disk; otherwise every disk
+                    const wanted = (query.match(/\b([A-Za-z])\s*(?::|drive)/i) || [])[1];
+                    const hit = wanted ? r.disks.filter((d) => String(d.disk).toUpperCase().startsWith(wanted.toUpperCase())) : [];
+                    line += (hit.length ? hit : r.disks).map((d) => `${d.disk} ${d.used_pct}% used (${d.free_gb} GB free of ${d.size_gb} GB)`
+                        + (d.over_threshold ? ` — over the ${r.threshold_pct}% threshold` : '')).join('; ') + '.';
+                } else if (r.error) {
+                    line += `the check failed: ${r.error}`;
                 } else if (r.summary) {
                     line += r.summary;
                 } else {
                     line += JSON.stringify(r);
                 }
+                return line;
+                };
+                const parts = (data.results && data.results.length ? data.results : [data.result]).map(describe);
+                const line = `**${data.server}** (${data.platform}): ` + parts.join(' ');
                 contentNode.innerHTML = formatSeverity(line);
             }
-            activeHistory.push({ role: 'user', content: query, skip: true },
-                               { role: 'assistant', content: contentNode.innerText, skip: true });
+            // kept in the chat memory (not skipped), so the next message ("list it", "which one is highest?")
+            // reaches the model together with this question and its real result
+            activeHistory.push({ role: 'user', content: query },
+                               { role: 'assistant', content: contentNode.innerText });
             return;
         } catch (e) {
             stopThinking();
             contentNode.innerHTML = formatSeverity(`Check failed: ${e.message}`);
             return;
         } finally {
-            busy = false;
             if (sendBtn) {
                 sendBtn.disabled = false;
                 sendBtn.classList.remove('opacity-50');
             }
-            applyComposerState();
+            backToListening();
         }
     }
 
@@ -815,12 +877,12 @@ async function streamResponse(query) {
         if (turnCount) turnCount.innerText = (activeHistory.length / 2).toString();
 
         const store = (chat.meta ??= {});
-        store[activeHistory.length - 1] = { sources: meta.sources, incident: meta.incident || null, kind: meta.kind || null };
+        store[activeHistory.length - 1] = { sources: meta.sources, incident: meta.incident || null, kind: meta.kind || null, urls: urlsOf(meta) };
         saveState();
 
         const sourceLine = contentNode?.parentElement?.querySelector('.source-line');
         if (sourceLine) {
-            let badgeHTML = meta.kind === 'canned' ? '' : sourceBadgeHTML(meta.sources, fullText);
+            let badgeHTML = meta.kind === 'canned' ? '' : sourceBadgeHTML(meta.sources, fullText, urlsOf(meta));
             if (meta.incident?.status === 'created') {
                 badgeHTML += ` <a href="/agent" class="src-badge src-kb" style="text-decoration:none; margin-left:6px;">🎫 Ticket ${esc(meta.incident.number)} created for ${esc(meta.incident.server)} · View Agent Run →</a>`;
             } else if (meta.incident?.status === 'busy') {
@@ -847,8 +909,7 @@ async function streamResponse(query) {
         }
     } finally {
         stopThinking();
-        busy = false;
-        applyComposerState();
+        backToListening();
     }
 }
 

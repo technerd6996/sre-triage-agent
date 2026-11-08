@@ -3,7 +3,7 @@ from app.api import config_pane
 
 
 def test_every_setting_group_has_a_section():
-    assert {s.group for s in config.SETTINGS.values()} <= {s["id"] for s in config_pane.SECTIONS}
+    assert {s.group for s in config.SETTINGS.values()} <= {s["id"] for s in config_pane.SECTIONS} | config_pane.HIDDEN_GROUPS
 
 
 def test_secret_fields_never_carry_a_value():

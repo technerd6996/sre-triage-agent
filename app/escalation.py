@@ -14,7 +14,6 @@ from app.tools.snow import add_work_note
 
 log = logging.getLogger("triage.escalation")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-UPDATE_MIN = config.get("limits.p1_update_min")
 
 
 def _broadcast() -> bool:
@@ -88,7 +87,7 @@ def draft(run: dict) -> str:
         "JOIN THE BRIDGE\n"
         f"  {bridge}\n\n"
         "NEXT UPDATE\n"
-        f"  Within {UPDATE_MIN} minutes of this notice.\n\n"
+        f"  Within {config.get("limits.p1_update_min")} minutes of this notice.\n\n"
         f"{'-' * 58}\n"
         "This notice states confirmed facts only. The cause and\n"
         "the estimated time to fix will follow once known.\n"

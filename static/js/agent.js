@@ -43,6 +43,7 @@ const STATUS = {
     running: ['Working…', 'text-[#FFB000] border-[#FFB000]'],
     awaiting_approval: ['Waiting for approval', 'text-[#FF8A00] border-[#FF8A00]'],
     done: ['Finished', 'text-[#3DDC84] border-[#3DDC84]'],
+    escalated: ['Escalated to a human', 'text-[#6CB6FF] border-[#6CB6FF]'],
     error: ['Error', 'text-red-400 border-red-400'],
 };
 
@@ -85,7 +86,7 @@ async function loadRuns() {
         });
         // follow a run that auto mode started, only if the person hasn't picked a run to look at themselves
         const active = runs.find((r) => r.status === 'running' || r.status === 'awaiting_approval');
-        const idle = !runId || curStatus === 'done' || curStatus === 'error';
+        const idle = !runId || curStatus === 'done' || curStatus === 'error' || curStatus === 'escalated';
         if (active && idle && !userSelected && active.id !== runId) attach(active.id, { auto: true });
     } catch (e) { /* the next refresh retries */ }
 }
@@ -255,7 +256,7 @@ $('auto').onchange = async (e) => {
 $('refresh').onclick = loadQueue;
 
 api('/api/auth/me').then((m) => {
-    if ((m.caps || []).includes('config.manage')) api('/api/agent/auto').then((a) => { $('auto').checked = a.enabled; }).catch(() => {});
+    if ((m.caps || []).includes('config.manage')) api('/api/agent/auto').then((a) => { $('auto').checked = a.enabled; const w = $('auto-warn'); w.textContent = a.tripped || ''; w.classList.toggle('hidden', !a.tripped); }).catch(() => {});
     else $('auto-wrap').style.display = 'none';
 }).catch(() => {});
 loadQueue();

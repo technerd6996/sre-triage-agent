@@ -8,14 +8,13 @@ Do not nest llm_slot() calls in one thread: the inner call would wait for the ou
 """
 import contextlib
 from app import config
-import heapq
 import itertools
 import os
 import threading
 import time
 
-PRIORITY = {"resume": 0, "verify": 1, "triage": 2, "chat": 3, "ingest": 4}
-CHAT_WAIT_SECONDS = config.get("limits.chat_wait_seconds")
+PRIORITY = {"resume": 0, "verify": 1, "approver": 1, "title": 1, "rerank": 1, "triage": 2, "chat": 3, "ingest": 4}
+BACKGROUND = {"triage", "ingest"}      # may not use the slots held back by model.reserved_slots
 _DEFAULT = object()
 
 
@@ -28,29 +27,46 @@ class _Gate:
         self._cv = threading.Condition()
         self._slots = slots
         self._free = slots
-        self._waiting: list = []          # heap of (priority, arrival number)
+        self._reserved = 0
+        self._bg_held = 0
+        self._waiting: list = []          # (priority, arrival number, background)
         self._seq = itertools.count()
 
-    def acquire(self, priority: int, timeout) -> None:
-        entry = (priority, next(self._seq))
+    def _bg_cap(self) -> int:
+        return max(1, self._slots - self._reserved)
+
+    def _next(self):
+        """The first waiter that may run now: highest priority whose kind is allowed to take a slot."""
+        if self._free <= 0:
+            return None
+        for e in sorted(self._waiting):
+            if not e[2] or self._bg_held < self._bg_cap():
+                return e
+        return None
+
+    def acquire(self, priority: int, timeout, background: bool = False) -> None:
+        entry = (priority, next(self._seq), bool(background))
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._cv:
-            heapq.heappush(self._waiting, entry)
+            self._waiting.append(entry)
             try:
-                while not (self._free > 0 and self._waiting[0] == entry):
+                while self._next() != entry:
                     remaining = None if deadline is None else deadline - time.monotonic()
                     if remaining is not None and remaining <= 0:
                         raise LLMBusy("The AI model is busy")
                     self._cv.wait(remaining)
                 self._free -= 1
+                if background:
+                    self._bg_held += 1
             finally:
                 self._waiting.remove(entry)
-                heapq.heapify(self._waiting)
                 self._cv.notify_all()
 
-    def release(self) -> None:
+    def release(self, background: bool = False) -> None:
         with self._cv:
             self._free += 1
+            if background:
+                self._bg_held = max(0, self._bg_held - 1)
             self._cv.notify_all()
 
     def depth(self) -> int:
@@ -66,6 +82,14 @@ class _Gate:
                 self._slots = n
                 self._cv.notify_all()
 
+    def set_reserved(self, n: int) -> None:
+        """Slots kept free for interactive kinds (title, approver, resume, verify, chat). 0 = no lane."""
+        n = max(0, int(n))
+        with self._cv:
+            if n != self._reserved:
+                self._reserved = n
+                self._cv.notify_all()
+
 
 GATE = _Gate(1)
 
@@ -73,18 +97,19 @@ GATE = _Gate(1)
 @contextlib.contextmanager
 def llm_slot(kind: str = "chat", wait_timeout=_DEFAULT):
     """with llm_slot("triage") as waited: ...   (waited = seconds spent in the queue).
-    Chat gives up after LLM_CHAT_WAIT_SECONDS and raises LLMBusy; every other kind waits."""
+    Chat and title give up after limits.chat_wait_seconds and raise LLMBusy; every other kind waits."""
     if wait_timeout is _DEFAULT:
-        wait_timeout = CHAT_WAIT_SECONDS if kind == "chat" else None
+        wait_timeout = config.get("limits.chat_wait_seconds") if kind in ("chat", "title") else None
     try:
-        from app import config
         GATE.set_slots(config.get("model.slots"))   # cached for 5 s, so this is cheap
+        GATE.set_reserved(config.get("model.reserved_slots"))
     except Exception:
         pass
+    bg = kind in BACKGROUND
     t0 = time.monotonic()
-    GATE.acquire(PRIORITY.get(kind, 3), wait_timeout)
+    GATE.acquire(PRIORITY.get(kind, 3), wait_timeout, bg)
     waited = time.monotonic() - t0
     try:
         yield waited
     finally:
-        GATE.release()
+        GATE.release(bg)

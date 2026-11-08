@@ -23,7 +23,6 @@ class LoginRequest(BaseModel):
     password: str
 
 MAX_FAILS, FAIL_WINDOW = 5, 300          # 5 bad logins per ACCOUNT in 5 minutes
-MAX_IP_FAILS = config.get("security.login_max_ip_fails")   # per IP, high so one shared address cannot lock everyone
 _FAILS: dict[str, deque] = defaultdict(deque)
 
 
@@ -46,7 +45,7 @@ def _fail(ip: str, uname: str, detail: str = ""):
 def login(req: LoginRequest, response: Response, request: Request):
     ip = request.client.host if request.client else "unknown"
     uname = req.username.strip().lower()
-    if _locked(f"ip:{ip}", MAX_IP_FAILS) or _locked(f"user:{uname}"):
+    if _locked(f"ip:{ip}", config.get("security.login_max_ip_fails")) or _locked(f"user:{uname}"):
         raise HTTPException(429, "Too many failed logins. Try again in a few minutes.")
 
     res = supabase.table("users").select("*").eq("user_id", uname).execute()

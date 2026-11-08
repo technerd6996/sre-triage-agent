@@ -23,12 +23,13 @@ SECTIONS = (
     {"id": "credentials", "title": "Credentials (PAM)", "port": "credentials", "testable": False, "panel": "connections"},
     {"id": "model", "title": "Model runtime", "port": None, "testable": True, "panel": "behaviour"},
     {"id": "agent", "title": "Agent behaviour", "port": None, "testable": False, "panel": "behaviour"},
-    {"id": "infra", "title": "Servers and thresholds", "port": None, "testable": False, "panel": "behaviour"},
     {"id": "limits", "title": "Limits and timings", "port": None, "testable": False, "panel": "behaviour"},
     {"id": "security", "title": "Security and access", "port": None, "testable": False, "panel": "behaviour"},
     {"id": "policy", "title": "Safety policy (approvals)", "port": None, "testable": False, "panel": "behaviour"},
     {"id": "prompts", "title": "Prompts and messages", "port": None, "testable": False, "panel": "behaviour"},
 )
+# Groups with settings but no pane section: their values come from the environment or the built-in defaults.
+HIDDEN_GROUPS = {"infra"}
 _DEFAULT_PROVIDER = {"ticketing": "servicenow"}
 _LABEL = {s.env: s.label for s in config.SETTINGS.values() if s.env}
 
@@ -134,17 +135,8 @@ def _t_model() -> str:
 
 
 def _t_knowledge() -> str:
-    uri = os.getenv("NEO4J_URI", "").strip()
-    if not uri:
-        raise RuntimeError("Neo4j URI is not set")
-    from neo4j import GraphDatabase
-    drv = GraphDatabase.driver(uri, auth=(os.getenv("NEO4J_USER", ""), os.getenv("NEO4J_PASS", "")),
-                               connection_timeout=5)
-    try:
-        drv.verify_connectivity()
-    finally:
-        drv.close()
-    return "Neo4j reachable"
+    from app import knowledge
+    return knowledge.test()
 
 
 def _t_notifications() -> str:

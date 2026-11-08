@@ -6,6 +6,7 @@ start() and resume() are generators that yield simple event dicts for a UI or a 
 """
 import os
 from app import config
+from app import config as app_config   # `config` is also a parameter name in the run helpers below
 from app.agent import prompts as _prompts  # noqa: F401  (registers the prompt settings)
 import uuid
 from functools import cache
@@ -159,7 +160,7 @@ def _run(agent, payload, config):
 
 def _run_guarded(agent, payload, config, ticket_number: str):
     """Run the agent, and if it stops with the ticket still open, nudge it to resolve or escalate."""
-    max_nudges = config.get("limits.max_nudges")
+    max_nudges = app_config.get("limits.max_nudges")
     for attempt in range(max_nudges + 1):
         status = yield from _run(agent, payload, config)
         if status != "done":
@@ -168,7 +169,7 @@ def _run_guarded(agent, payload, config, ticket_number: str):
             break
         if attempt < max_nudges:
             yield {"type": "nudge", "text": "Ticket still open: asking the agent to resolve or escalate."}
-            payload = {"messages": [{"role": "user", "content": config.get("prompt.nudge")}]}
+            payload = {"messages": [{"role": "user", "content": app_config.get("prompt.nudge")}]}
         else:
             yield {"type": "warning", "message": "Agent stopped without resolving or escalating the ticket."}
     yield {"type": "done"}
@@ -223,7 +224,7 @@ def resume(thread_id: str, approve: bool, feedback: str = ""):
 
 def _rebuild_agents(key: str) -> None:
     """Prompts and the approval policy are baked into the cached agent graph; rebuild it when they change."""
-    if key.startswith(("prompt.", "policy.")):
+    if key.startswith(("prompt.", "policy.")) or key == "model.colab_api_url":
         get_agent.cache_clear()
 
 

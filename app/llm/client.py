@@ -11,15 +11,18 @@ from app.llm.colab_chat import _SESSION, post_with_retry
 class _Stream:
     """Acts like the old requests response for main.py: .status_code, .iter_content(), 'with' block."""
 
-    def __init__(self, messages: list, timeout):
+    def __init__(self, messages: list, timeout, max_tokens=None, thinking=None):
         self.messages, self.timeout = messages, timeout
+        self.max_tokens, self.thinking = max_tokens, thinking
         self.stats = {"tokens_in": usage.count_messages(messages), "tokens_out": 0, "ttft_s": None}
         self.status_code, self._resp, self._text = None, None, []
 
     def __enter__(self):
         payload = {"model": config.get("model.name"), "messages": self.messages, "stream": True,
-                   "temperature": config.get("model.temperature"), "max_tokens": config.get("model.max_tokens"),
+                   "temperature": config.get("model.temperature"), "max_tokens": self.max_tokens or config.get("model.max_tokens"),
                    "stream_options": {"include_usage": True}}
+        if self.thinking is False:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         self._t0 = time.time()
         self._resp = post_with_retry(os.getenv("COLAB_API_URL"), payload, self.timeout)
         self._resp.encoding = "utf-8"
@@ -56,8 +59,9 @@ class _Stream:
                 yield piece
 
 
-def llm_post(messages: list, timeout=(10, 180)) -> _Stream:
-    return _Stream(messages, timeout)
+def llm_post(messages: list, timeout=(10, 180), max_tokens=None, thinking=None) -> _Stream:
+    """max_tokens caps this call only (default: model.max_tokens); thinking=False turns reasoning off for it."""
+    return _Stream(messages, timeout, max_tokens, thinking)
 
 
 def log_stream(kind: str, s: _Stream, seconds: float, waited: float, user_id: str = None) -> None:

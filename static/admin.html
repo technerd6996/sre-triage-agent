@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin · TRIAGE-1</title>
+    <link rel="icon" type="image/svg+xml" sizes="any" href="/static/icons/admin.svg">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/admin-32.png">
+    <link rel="apple-touch-icon" href="/static/icons/admin-180.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -58,7 +61,6 @@
   <span class="mono font-bold text-[16px]">TRIAGE-1 <span class="text-gray-600">/</span> Admin</span>
   <div class="flex items-center gap-6 text-[14px] text-gray-400">
     <a href="/agent" class="hover:text-[#FFB000]">Agent Console</a>
-    <a href="/knowledge" class="hover:text-[#FFB000]">KB Management</a>
     <span id="theme-slot"></span>
     <button id="logout-btn" class="hover:text-red-400">Log out</button>
   </div>
@@ -339,6 +341,7 @@
     <div id="section-runs" class="section max-w-6xl">
       <h1 class="text-[19px] font-semibold mb-6">Runs</h1>
       <div id="jobs-panel" class="card p-4 mb-4 text-[13px] text-gray-500">No queued jobs.</div>
+      <div class="flex items-center gap-4 mb-4"><button id="rerun-failed" class="text-[#FFB000] text-[13px] border border-[#232B33] rounded px-3 py-1.5">Re-run all failed</button><span class="text-[12px] text-gray-500">Queues every ticket whose latest run ended in error.</span></div>
       <div class="field mb-4 w-48"><select id="rf-outcome" aria-label="Filter runs by outcome"><option value="">All outcomes</option><option>resolved</option><option>escalated</option><option>incomplete</option><option>error</option><option>interrupted</option></select></div>
       <div class="card tbl-wrap"><table class="dtbl">
         <thead><tr><th>Ticket</th><th>Skill</th><th>Outcome</th><th>Status</th><th>Steps</th><th>Tokens</th><th>Started</th><th><span class="sr-only">Actions</span></th></tr></thead>
@@ -823,6 +826,10 @@ rbody.onclick = async e => {
     .catch(x => { toast(x.message, false); b.disabled = false; });
 };
 document.getElementById('rf-outcome').onchange = loadRuns;
+document.getElementById('rerun-failed').onclick = async () => {
+  if (!await askDialog({title: 'Re-run all failed?', body: 'Every ticket whose latest run ended in error is queued again.', okLabel: 'Re-run'})) return;
+  api('POST', '/api/admin/runs/rerun-failed').then(d => { toast(d.queued ? d.queued + ' ticket(s) queued' : 'Nothing to re-run'); loadRuns(); }).catch(e => toast(e.message, false));
+};
 
 // Health
 function loadApiHealth() {
@@ -1082,7 +1089,7 @@ function loadRag() {
     document.getElementById('rag-panel').innerHTML = `
       <div class="grid grid-cols-4 gap-4 mb-5">${kv('Queries', d.queries)}${kv('KB hit rate', d.hit_rate != null ? d.hit_rate + '%' : null)}
         ${kv('Phantom doc cites', d.phantom)}${kv('Latency avg/p90 (s)', (d.avg_total ?? '—') + ' / ' + (d.p90_total ?? '—'))}
-        ${kv('Graph avg (s)', d.avg_graph)}${kv('Vector avg (s)', d.avg_vec)}</div>
+        ${kv('Vector avg (s)', d.avg_vec)}</div>
       <p class="text-[13px] text-gray-400 mb-4">Kinds: ${Object.entries(d.kinds).map(([k, v]) => `<span class="pill mr-1">${esc(k)}: ${v}</span>`).join('') || '—'}</p>
       <div class="grid grid-cols-2 gap-6"><div><p class="text-[13px] text-gray-500 mb-2">KB gaps (answered not from KB)</p>${tbl(d.gaps, ['Query', 'Count'])}</div>
       <div><p class="text-[13px] text-gray-500 mb-2">Top retrieved documents</p>${tbl(d.top_docs, ['Document', 'Hits'])}</div></div>`;

@@ -26,15 +26,13 @@ _RECENT: dict[str, tuple[float, str]] = {}  # fingerprint -> (time, ticket numbe
 
 # Per-user limit on new tickets from chat (in memory; a restart resets it).
 RATE_MAX = int(os.getenv("TICKET_RATE_MAX", "5"))
-RATE_WINDOW = config.get("limits.ticket_rate_window")   # seconds
 _RATE: dict[str, list[float]] = {}
-QUEUE_MAX = config.get("limits.queue_max")     # waiting jobs above which new chat tickets are refused
 
 
 def _rate_ok(user: str) -> bool:
     """True and records the attempt if the user is under the limit. A failed create still counts."""
     now = time.time()
-    hits = [t for t in _RATE.get(user, []) if now - t < RATE_WINDOW]
+    hits = [t for t in _RATE.get(user, []) if now - t < config.get("limits.ticket_rate_window")]
     if len(hits) >= RATE_MAX:
         _RATE[user] = hits
         return False
@@ -110,7 +108,7 @@ def issue_sla(number: str):
 
 @router.post("/issues")
 def report_issue(req: IssueRequest, request: Request):
-    if len(jobs.queued()) >= QUEUE_MAX:
+    if len(jobs.queued()) >= config.get("limits.queue_max"):
         raise HTTPException(503, "TRIAGE-1 has a long queue right now. Please try again in a few minutes.")
     inst = next((h for h in registry.get_hosts().list_hosts(force=True) if h.name == req.server), None)
     if not inst:
@@ -134,7 +132,7 @@ def report_issue(req: IssueRequest, request: Request):
     who = _actor(request)
     if not _rate_ok(who):
         raise HTTPException(429, f"Too many tickets from you in a short time (limit {RATE_MAX} per "
-                                 f"{RATE_WINDOW // 60} minutes). Please wait, or add to an open ticket.")
+                                 f"{config.get("limits.ticket_rate_window") // 60} minutes). Please wait, or add to an open ticket.")
     try:
         ticket = create_incident.invoke({
             "short_description": f"{inst['name']}: {desc[:80]}",
@@ -167,7 +165,7 @@ def report_issue(req: IssueRequest, request: Request):
         who = _actor(request)
         _schedule(number, who)
         store.audit(None, number, who, "ticket_auto_created", inst["name"])
-        return {"number": number, "run_id": None, "transcript_saved": saved, "undo_seconds": UNDO_SECONDS}
+        return {"number": number, "run_id": None, "transcript_saved": saved, "undo_seconds": config.get("limits.undo_seconds")}
     out = _start_or_queue(number, _actor(request))
     return {"number": number, "run_id": out["run_id"], "queued": out["queued"],
             "position": out["position"], "transcript_saved": saved}
@@ -211,7 +209,6 @@ def add_to_issue(number: str, req: NoteRequest, request: Request):
     add_work_note.invoke({"number": number, "note": "Added by the user via chat:\n" + redact(req.text.strip())})
     return {"number": number}
 # ---- auto mode: the ticket is raised now, the agent starts after an Undo window ----
-UNDO_SECONDS = config.get("limits.undo_seconds")
 _PENDING: dict[str, dict] = {}
 _LOCK = threading.Lock()
 
@@ -228,7 +225,7 @@ def _start_or_queue(number: str, who: str) -> dict:
 
 def _schedule(number: str, who: str) -> None:
     _PENDING[number] = {"user": who, "state": "waiting", "run_id": None, "at": time.time()}
-    t = threading.Timer(UNDO_SECONDS, _start_pending, args=(number, who))
+    t = threading.Timer(config.get("limits.undo_seconds"), _start_pending, args=(number, who))
     t.daemon = True
     t.start()
 
@@ -267,7 +264,7 @@ def pending_run(number: str, request: Request):
         else:
             return {"state": "queued", "run_id": None, "seconds_left": 0,
                     "position": jobs.position(p["job"]) if p.get("job") else 0}
-    left = max(0, UNDO_SECONDS - int(time.time() - p.get("at", 0))) if p["state"] == "waiting" else 0
+    left = max(0, config.get("limits.undo_seconds") - int(time.time() - p.get("at", 0))) if p["state"] == "waiting" else 0
     return {"state": p["state"], "run_id": p["run_id"], "seconds_left": left}
 
 

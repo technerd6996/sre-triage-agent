@@ -1,6 +1,4 @@
 import os
-import io
-import csv
 import json
 import re
 import logging
@@ -14,14 +12,14 @@ from app import config             # noqa: E402
 from app.agent import prompts as _prompts  # noqa: F401  (registers the prompt settings)
 config.hydrate_environ()           # saved settings and secrets fill the environment before anything reads it
 
+from pydantic import AfterValidator
 from fastapi import FastAPI, UploadFile, File
 from fastapi.concurrency import run_in_threadpool
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
-from sentence_transformers import SentenceTransformer
-from neo4j import GraphDatabase
+from app import knowledge
 from app.ports import registry
 from app import store
 from app.tools.snow import create_incident, add_work_note
@@ -97,72 +95,52 @@ app.include_router(setup_router)
 
 
 # --- Infrastructure Clients ---
-COLAB_API_URL = os.getenv("COLAB_API_URL")
-embedder = SentenceTransformer('all-MiniLM-L6-v2')
+_EMB = None
+
+
+def _embedder():
+    """Only the old 'local' knowledge source needs this model (about 1 GB), so it loads on first use."""
+    global _EMB
+    if _EMB is None:
+        from sentence_transformers import SentenceTransformer
+        _EMB = SentenceTransformer('all-MiniLM-L6-v2')
+    return _EMB
+
+
 from app import store as _store
 
 supabase = _store.supabase
-class _LazyNeo4j:
-    """Builds the Neo4j driver on first use, so the app and /setup can start before Neo4j is configured."""
-
-    def __init__(self):
-        self._drv = None
-
-    def _get(self):
-        if self._drv is None:
-            uri = (os.getenv("NEO4J_URI") or "").strip()
-            if not uri:
-                raise RuntimeError("Neo4j is not configured. Set it in Settings > Knowledge and skills, then restart the app.")
-            self._drv = GraphDatabase.driver(
-                uri,
-                auth=(os.getenv("NEO4J_USER"), os.getenv("NEO4J_PASS")),
-                max_connection_lifetime=180  # AuraDB drops idle connections; recycle before that
-            )
-        return self._drv
-
-    def __getattr__(self, name):          # session(), close(), verify_connectivity() and so on
-        return getattr(self._get(), name)
-
-
-neo4j_driver = _LazyNeo4j()
 
 # --- Log Truncation Globals ---
 SIGNAL_PATTERN = re.compile(r'(ERROR|CRITICAL|FATAL|WARN|Exception|Traceback)', re.IGNORECASE)
 
 # --- Request Validation Limits ---
-MAX_INPUT_CHARS = config.get("limits.max_input_chars")        # one chat message / attached file (truncated later by smart_truncate_log)
-MAX_HISTORY_MESSAGES = config.get("limits.max_history_messages")
-MAX_FIELD_CHARS = config.get("limits.max_field_chars")
-
-# --- Graph Extraction Globals ---
-
-EXTRACT_PROMPT = """You extract knowledge-graph triples from SRE documents (runbooks, SOPs, incident reports).
-Return ONLY a JSON array of [subject, relation, object] triples. No prose, no markdown, no code fences.
-Rules:
-- subject and object are short canonical names (1-4 words) of services, components, error messages, alerts, tools, commands, causes or fixes. Keep the exact casing of technical terms (e.g. OOMKilled, kafka-broker, HikariPool).
-- relation is a short lowercase verb phrase such as "is caused by", "is resolved by", "depends on", "is diagnosed with", "is a symptom of", "runs on", "triggers", "mitigates".
-- Only state facts that are explicitly in the text. Maximum 15 triples.
-Example output: [["CrashLoopBackOff","is caused by","OOMKilled"],["OOMKilled","is resolved by","Raising Memory Limit"]]"""
-config.register("prompt.extract", "Knowledge-graph extraction prompt", EXTRACT_PROMPT, "text", "prompts", multiline=True, max_len=40000)
+def _check_input(v: str) -> str:
+    if len(v) > config.get("limits.max_input_chars"):       # one chat message / attached file
+        raise ValueError(f"must be at most {config.get('limits.max_input_chars')} characters")
+    return v
 
 
-# ======================================================================
-# REQUEST MODELS (validated by FastAPI; bad input returns HTTP 422)
-# ======================================================================
-GraphName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_FIELD_CHARS)]
-
+InputText = Annotated[str, AfterValidator(_check_input)]
 
 class ChatMessage(BaseModel):
     """One past turn. The client may only send user/assistant roles, never 'system'."""
     model_config = ConfigDict(extra="forbid")
 
     role: Literal["user", "assistant"]
-    content: str = Field(max_length=MAX_INPUT_CHARS)
+    content: InputText
 
 
 class ChatRequest(BaseModel):
-    query: str = Field(min_length=1, max_length=MAX_INPUT_CHARS)
-    history: list[ChatMessage] = Field(default_factory=list, max_length=MAX_HISTORY_MESSAGES)
+    query: InputText = Field(min_length=1)
+    history: list[ChatMessage] = Field(default_factory=list)
+
+    @field_validator("history")
+    @classmethod
+    def history_not_too_long(cls, v: list) -> list:
+        if len(v) > config.get("limits.max_history_messages"):
+            raise ValueError(f"at most {config.get('limits.max_history_messages')} messages")
+        return v
 
     @field_validator("query")
     @classmethod
@@ -170,12 +148,6 @@ class ChatRequest(BaseModel):
         if not v.strip():
             raise ValueError("query must not be blank")
         return v
-
-
-class GraphEdge(BaseModel):
-    src: GraphName
-    rel: GraphName
-    dst: GraphName
 
 
 def smart_truncate_log(text: str, max_chars: int | None = None) -> str:
@@ -199,209 +171,7 @@ def smart_truncate_log(text: str, max_chars: int | None = None) -> str:
     return text[:half] + f"\n\n... [truncated] ...\n\n" + text[-half:]
 
 
-def chunk_text(text: str, chunk_size: int = 600, overlap: int = 100) -> list[str]:
-    chunks, start = [], 0
-    while start < len(text):
-        chunks.append(text[start:start + chunk_size].strip())
-        start += chunk_size - overlap
-    return [c for c in chunks if len(c) > 40]
-
-
 # ======================================================================
-# DOCUMENT <-> VECTOR HELPERS
-# ======================================================================
-def like_escape(s: str) -> str:
-    """Escape LIKE wildcards so filenames like 'RB-001_x.md' match only themselves."""
-    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-def doc_like_pattern(filename: str) -> str:
-    return f"[{like_escape(filename)}]%"
-
-
-def delete_vectors(filename: str):
-    supabase.table("sre_runbooks").delete().like("content", doc_like_pattern(filename)).execute()
-
-
-# ======================================================================
-# LLM HELPERS
-# ======================================================================
-def call_llm(messages: list, timeout: int = 180) -> str:
-    out = ""
-    with llm_slot("ingest", wait_timeout=None) as waited:
-        t0 = time.time()
-        with llm_post(messages, timeout=(10, timeout)) as r:
-            for chunk in r.iter_content():
-                out += chunk
-        seconds = time.time() - t0
-    log_stream("ingest", r, seconds, waited)
-    return out
-
-
-def _clean(s: str) -> str:
-    s = re.sub(r"\s+", " ", s.strip().strip("\"'`")).strip()
-    return s if 0 < len(s) <= config.get("limits.max_field_len") else ""
-
-
-def parse_triples(raw: str) -> list[tuple]:
-    """Parses the LLM output defensively. Anything malformed is dropped."""
-    m = re.search(r"\[.*\]", raw, re.DOTALL)
-    if not m:
-        return []
-    try:
-        data = json.loads(m.group(0))
-    except Exception:
-        return []
-    out = []
-    for t in data if isinstance(data, list) else []:
-        if isinstance(t, (list, tuple)) and len(t) == 3 and all(isinstance(x, str) for x in t):
-            s, r, d = _clean(t[0]), _clean(t[1]).lower(), _clean(t[2])
-            if s and r and d and s.lower() != d.lower():
-                out.append((s, r, d))
-    return out
-
-
-# ======================================================================
-# STRUCTURED (DETERMINISTIC) EXTRACTION FROM FRONT MATTER
-# ======================================================================
-def split_front_matter(text: str):
-    m = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
-    if not m:
-        return {}, text
-    meta = {}
-    for line in m.group(1).splitlines():
-        k, _, v = line.partition(":")
-        v = v.strip()
-        if v.startswith("[") and v.endswith("]"):
-            meta[k.strip()] = [x.strip() for x in v[1:-1].split(",") if x.strip()]
-        else:
-            meta[k.strip()] = v
-    return meta, text[m.end():]
-
-
-def structured_triples(meta: dict) -> list[tuple]:
-    doc_id = meta.get("id")
-    if not doc_id:
-        return []
-    dtype = meta.get("type", "")
-    out = []
-    title = meta.get("title")
-    if title:
-        rel = {"runbook": "is a runbook for", "sop": "defines",
-               "incident_triage": "is an incident report about"}.get(dtype, "covers")
-        out.append((doc_id, rel, title))
-    for svc in meta.get("services", []):
-        out.append((doc_id, "involves", svc))
-    for alert in meta.get("alerts", []):
-        out.append((alert, "is handled by" if dtype == "runbook" else "fired during", doc_id))
-    for ref in meta.get("related", []):
-        out.append((doc_id, "is related to", ref))
-    return out
-
-
-# ======================================================================
-# GRAPH INGEST / SAFE REMOVAL (with per-document provenance)
-# ======================================================================
-# Every edge created from a document stores the filename in r.docs (a list).
-#   - Edges with NO r.docs (seed CSV, manual additions) are PROTECTED: a document
-#     upload/delete never modifies or removes them.
-#   - An edge shared by several documents keeps living until its LAST document is deleted.
-#   - Entity nodes are only removed if they were touched by the deleted document AND have
-#     no relationships left. Nothing outside that set is ever touched.
-UPSERT_EDGES = """
-UNWIND $rows AS row
-MERGE (a:Entity {name: row.src})
-MERGE (b:Entity {name: row.dst})
-MERGE (a)-[r:RELATED_TO {type: row.rel}]->(b)
-ON CREATE SET r.docs = [$doc]
-ON MATCH SET r.docs = CASE
-    WHEN r.docs IS NULL THEN NULL
-    WHEN $doc IN r.docs THEN r.docs
-    ELSE r.docs + $doc END
-"""
-
-
-def extract_all_triples(filename: str, text: str):
-    meta, body = split_front_matter(text)
-    triples = structured_triples(meta)
-    llm_error = None
-    try:
-        win, nwin = config.get("limits.extract_window_chars"), config.get("limits.extract_max_windows")
-        limit = win * nwin
-        for i in range(0, min(len(body), limit), win):
-            window = body[i:i + win]
-            if len(window.strip()) < 80:
-                continue
-            raw = call_llm([
-                {"role": "system", "content": config.get("prompt.extract")},
-                {"role": "user", "content": window},
-            ])
-            triples += parse_triples(raw)
-    except Exception as e:
-        llm_error = str(e)
-
-    # De-duplicate (case-insensitive) and cap
-    seen, unique = set(), []
-    for s, r, d in triples:
-        key = (s.lower(), r.lower(), d.lower())
-        if key not in seen:
-            seen.add(key)
-            unique.append((s, r, d))
-    return unique[:config.get("limits.max_triples_per_doc")], llm_error
-
-
-def ingest_graph(filename: str, text: str) -> dict:
-    triples, llm_error = extract_all_triples(filename, text)
-    if not triples:
-        return {"edges": 0, "llm_error": llm_error}
-
-    with neo4j_driver.session() as session:
-        # Reuse existing entity names (case-insensitive) so we don't create duplicates
-        index = {rec["name"].lower(): rec["name"]
-                 for rec in session.run("MATCH (e:Entity) RETURN e.name AS name")}
-        rows = []
-        for s, r, d in triples:
-            s = index.setdefault(s.lower(), s)
-            d = index.setdefault(d.lower(), d)
-            rows.append({"src": s, "rel": r, "dst": d})
-        session.run(UPSERT_EDGES, rows=rows, doc=filename)
-    return {"edges": len(rows), "llm_error": llm_error}
-
-
-def remove_doc_graph(filename: str) -> dict:
-    """Removes only what belongs exclusively to this document."""
-    def _tx(tx):
-        touched = tx.run(
-            "MATCH (a:Entity)-[r:RELATED_TO]->(b:Entity) WHERE $doc IN r.docs "
-            "RETURN a.name AS a, b.name AS b, size(r.docs) AS owners",
-            doc=filename).data()
-        if not touched:
-            return {"edges_removed": 0, "edges_kept_shared": 0, "nodes_removed": 0}
-
-        names = list({x for row in touched for x in (row["a"], row["b"])})
-        removed = sum(1 for row in touched if row["owners"] == 1)
-        shared = len(touched) - removed
-
-        # Detach this document from every edge it owns; delete edges nobody else owns
-        tx.run(
-            "MATCH ()-[r:RELATED_TO]->() WHERE $doc IN r.docs "
-            "WITH r, [d IN r.docs WHERE d <> $doc] AS remaining "
-            "SET r.docs = remaining "
-            "WITH r, remaining WHERE size(remaining) = 0 "
-            "DELETE r",
-            doc=filename)
-
-        # Delete only touched entities that now have no relationships at all
-        res = tx.run(
-            "MATCH (e:Entity) WHERE e.name IN $names AND NOT (e)--() "
-            "WITH e, e.name AS nm DELETE e RETURN count(nm) AS c",
-            names=names).single()
-        return {"edges_removed": removed, "edges_kept_shared": shared,
-                "nodes_removed": res["c"] if res else 0}
-
-    with neo4j_driver.session() as session:
-        return session.execute_write(_tx)
-
 @app.get("/setup", response_class=HTMLResponse)
 async def serve_setup_ui():
     with open(BASE_DIR / "static" / "setup.html", "r", encoding="utf-8") as f:
@@ -435,42 +205,11 @@ async def serve_ui():
         return f.read()
 
 
-@app.get("/knowledge", response_class=HTMLResponse)
-async def serve_knowledge_ui():
-    with open(BASE_DIR / "static" / "knowledge.html", "r", encoding="utf-8") as f:
-        return f.read()
-
-
 @app.get("/agent", response_class=HTMLResponse)
 async def serve_agent_ui():
     with open(BASE_DIR / "static" / "agent.html", "r", encoding="utf-8") as f:
         return f.read()
 
-
-# --- HYBRID RAG (LOCAL POSTGRES) MANAGEMENT ---
-@app.get("/api/rag/documents")
-def list_documents():
-    """Extracts unique filenames from the database, plus how many graph edges each owns."""
-    res = supabase.table("sre_runbooks").select("content").execute()
-    docs = {}
-    for row in res.data:
-        match = re.match(r'^\[(.*?)\]', row['content'])
-        if match:
-            fname = match.group(1)
-            docs[fname] = docs.get(fname, 0) + 1
-
-    edge_counts = {}
-    try:
-        with neo4j_driver.session() as session:
-            for rec in session.run(
-                "MATCH ()-[r:RELATED_TO]->() WHERE r.docs IS NOT NULL "
-                "UNWIND r.docs AS d RETURN d AS doc, count(r) AS n"):
-                edge_counts[rec["doc"]] = rec["n"]
-    except Exception:
-        pass
-
-    return [{"filename": k, "chunks": v, "edges": edge_counts.get(k, 0)}
-            for k, v in sorted(docs.items())]
 
 def retrieval_query(query: str, history: list) -> str:
     q = query.strip()
@@ -480,157 +219,10 @@ def retrieval_query(query: str, history: list) -> str:
             q = prev[-1][:300] + " " + q        # add the previous user question
     return q
 
-def _index_document(filename: str, text: str) -> dict:
-    """Replace-then-ingest: removes the old version completely, then indexes the new one."""
-    # 1. Remove previous version (vectors + graph ownership)
-    graph_removed = remove_doc_graph(filename)
-    delete_vectors(filename)
-
-    # 2. Vectors
-    chunks = chunk_text(text)
-    records = []
-    for chunk in chunks:
-        tagged = f"[{filename}] {chunk}"
-        records.append({"content": tagged, "embedding": embedder.encode(tagged).tolist()})
-    for i in range(0, len(records), 50):
-        supabase.table("sre_runbooks").insert(records[i:i + 50]).execute()
-
-    # 3. Graph (LLM + front matter). A failure here never blocks the vector index.
-    try:
-        graph = ingest_graph(filename, text)
-    except Exception as e:
-        graph = {"edges": 0, "llm_error": str(e)}
-
-    msg = f"Indexed {len(chunks)} chunks, {graph['edges']} graph edges."
-    if graph.get("llm_error"):
-        msg += f" (LLM extraction warning: {graph['llm_error']})"
-    return {"message": msg, "chunks": len(chunks), "edges": graph["edges"],
-            "replaced": graph_removed}
-
-
-@app.post("/api/rag/upload")
-async def upload_document(file: UploadFile = File(...)):
-    """Uploads or modifies a document, then auto-builds its graph edges."""
-    text = (await file.read()).decode("utf-8", errors="ignore")
-    return await run_in_threadpool(_index_document, file.filename, text)
-
-
-@app.delete("/api/rag/documents/{filename}")
-def delete_document(filename: str):
-    """Deletes the document's vectors and every graph edge/node that belongs only to it."""
-    graph = remove_doc_graph(filename)
-    delete_vectors(filename)
-    return {"message": "Document deleted.", "graph": graph}
-
-
-# --- GRAPH RAG (NEO4J) MANAGEMENT ---
-@app.get("/api/rag/graph")
-def list_graph_edges():
-    query = ("MATCH (src:Entity)-[r:RELATED_TO]->(dst:Entity) "
-             "RETURN src.name AS src, r.type AS rel, dst.name AS dst, r.docs AS docs "
-             "ORDER BY src, rel, dst")
-    with neo4j_driver.session() as session:
-        return [{"src": rec["src"], "rel": rec["rel"], "dst": rec["dst"],
-                 "source": ", ".join(rec["docs"]) if rec["docs"] else "seed / manual"}
-                for rec in session.run(query)]
-
-
-@app.post("/api/rag/graph")
-def add_graph_edge(edge: GraphEdge):
-    # REMOVE r.docs: a manually added edge becomes protected (owned by no document)
-    query = ("MERGE (src:Entity {name: $src}) MERGE (dst:Entity {name: $dst}) "
-             "MERGE (src)-[r:RELATED_TO {type: $rel}]->(dst) REMOVE r.docs")
-    with neo4j_driver.session() as session:
-        session.run(query, src=edge.src, dst=edge.dst, rel=edge.rel)
-    return {"message": "Topology added."}
-
-
-@app.delete("/api/rag/graph")
-def delete_graph_edge(src: str, rel: str, dst: str):
-    query = "MATCH (src:Entity {name: $src})-[r:RELATED_TO {type: $rel}]->(dst:Entity {name: $dst}) DELETE r"
-    with neo4j_driver.session() as session:
-        session.run(query, src=src, dst=dst, rel=rel)
-    return {"message": "Topology deleted."}
-
-
-# --- GRAPH CSV IMPORT ---
-CSV_COLUMN_ALIASES = {
-    "src": ["src", "source", "from", "subject", "entity1"],
-    "rel": ["rel", "relation", "relationship", "type", "predicate"],
-    "dst": ["dst", "destination", "target", "to", "object", "entity2"],
-}
-
-
-def parse_graph_csv(raw: str):
-    """Returns (rows, skipped, error). Accepts headers src/rel/dst or common aliases."""
-    reader = csv.reader(io.StringIO(raw))
-    try:
-        header = [h.strip().lower() for h in next(reader)]
-    except StopIteration:
-        return [], 0, "The file is empty."
-
-    cols = {}
-    for key, aliases in CSV_COLUMN_ALIASES.items():
-        for a in aliases:
-            if a in header:
-                cols[key] = header.index(a)
-                break
-    if len(cols) < 3:
-        return [], 0, "CSV needs a header row with columns: src, rel, dst."
-
-    rows, skipped = [], 0
-    for line in reader:
-        if len(rows) >= config.get("limits.max_csv_rows"):
-            skipped += 1
-            continue
-        try:
-            s, r, d = (re.sub(r"\s+", " ", line[cols[k]]).strip() for k in ("src", "rel", "dst"))
-        except IndexError:
-            skipped += 1
-            continue
-        if s and r and d and max(len(s), len(r), len(d)) <= MAX_FIELD_CHARS:
-            rows.append({"src": s, "rel": r, "dst": d})
-        else:
-            skipped += 1
-    return rows, skipped, None
-
-
-def _import_graph_rows(rows: list) -> int:
-    with neo4j_driver.session() as session:
-        # Reuse existing entity names (case-insensitive) to avoid duplicate nodes
-        index = {rec["name"].lower(): rec["name"]
-                 for rec in session.run("MATCH (e:Entity) RETURN e.name AS name")}
-        for row in rows:
-            row["src"] = index.setdefault(row["src"].lower(), row["src"])
-            row["dst"] = index.setdefault(row["dst"].lower(), row["dst"])
-        # REMOVE r.docs: CSV edges are protected (owned by no document), like manual edges
-        query = """
-        UNWIND $rows AS row
-        MERGE (a:Entity {name: row.src})
-        MERGE (b:Entity {name: row.dst})
-        MERGE (a)-[r:RELATED_TO {type: row.rel}]->(b)
-        REMOVE r.docs
-        """
-        for i in range(0, len(rows), 200):
-            session.run(query, rows=rows[i:i + 200])
-    return len(rows)
-
-
-@app.post("/api/rag/graph/upload")
-async def upload_graph_csv(file: UploadFile = File(...)):
-    raw = (await file.read()).decode("utf-8-sig", errors="ignore")
-    rows, skipped, error = parse_graph_csv(raw)
-    if error:
-        return JSONResponse(status_code=400, content={"message": error})
-    loaded = await run_in_threadpool(_import_graph_rows, rows)
-    return {"message": f"Imported {loaded} edges from {file.filename}"
-                       + (f" ({skipped} rows skipped)." if skipped else "."),
-            "loaded": loaded, "skipped": skipped}
-
 # ---- TITLE INFERENCE ----
 
 class TitleRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=MAX_INPUT_CHARS)
+    text: InputText = Field(min_length=1)
 
 
 @app.post("/api/title")
@@ -653,32 +245,42 @@ def generate_title(req: TitleRequest):
         {"role": "user", "content": trunc_text}
     ]
 
+    fallback = _fallback_title(clean_text)
     try:
         full_title = ""
-        with llm_slot("chat", wait_timeout=15) as waited:
+        with llm_slot("title", wait_timeout=15) as waited:
             t0 = time.time()
-            with llm_post(colab_messages, timeout=(10, 60)) as r:
+            with llm_post(colab_messages, timeout=(10, 60), max_tokens=48, thinking=False) as r:
                 if r.status_code != 200:
-                    return {"title": "Incident Triage"}
+                    return {"title": fallback}
                 for chunk in r.iter_content(chunk_size=512, decode_unicode=True):
                     if chunk:
                         full_title += chunk
-        log_stream("chat", r, time.time() - t0, waited)
+        log_stream("title", r, time.time() - t0, waited)
 
-        title = re.sub(r'[\"\'\[\]]', '', full_title).strip()
+        title = re.sub(r"[\"'\[\]]", "", full_title).strip()
         # Reject HTML/error pages and anything that isn't a short plain title
         if not title or "<" in title or ">" in title or len(title) > 60:
-            return {"title": "Incident Triage"}
+            return {"title": fallback}
         return {"title": title}
     except Exception:
-        return {"title": "Incident Triage"}
+        return {"title": fallback}
+
+
+def _fallback_title(text: str) -> str:
+    """Used when the model is busy or fails: the ticket number, else the first six words."""
+    m = re.search(r"\bINC\d{5,}\b", text or "", re.I)
+    if m:
+        return f"{m.group(0).upper()} follow-up"
+    words = re.sub(r"[^\w\s-]", " ", text or "").split()[:6]
+    return " ".join(words)[:60] or "Incident Triage"
 
 
 # --- CHAT HELPERS ---
 TIMESTAMP_LINE_RE = re.compile(r'^\s*\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}', re.MULTILINE)
 STACK_FRAME_RE = re.compile(r'^\s+at\s+[\w.$<>]+\(', re.MULTILINE)
 # (?<!...)/(?!...) instead of \b, because \b does not match before "_" in names like RB-003_pod.md
-DOC_ID_RE = re.compile(r'(?<![A-Za-z0-9])(?:RB-\d{3}|SOP-\d{3}|INC-\d{4}-\d{3})(?!\d)', re.IGNORECASE)
+DOC_ID_RE = re.compile(r'(?<![A-Za-z0-9])(?:RB-\d{3}|SOP-\d{3}|INC-\d{4}-\d{3}|KB\d{7})(?!\d)', re.IGNORECASE)
 
 
 def looks_like_log(text: str) -> bool:
@@ -693,14 +295,12 @@ def looks_like_log(text: str) -> bool:
             or "Traceback (most recent call last)" in text)
 
 
-def retrieved_doc_ids(graph_ctx: list, raw_chunks: list) -> list:
-    """IDs of the documents that retrieval actually returned (chunk filenames + graph lines)."""
+def retrieved_doc_ids(raw_chunks: list) -> list:
+    """IDs of the documents that retrieval actually returned (chunk filenames)."""
     ids = []
     for content in raw_chunks:
         m = re.match(r"^\[(.*?)\]", content)
         ids += DOC_ID_RE.findall(m.group(1) if m else "")
-    for line in graph_ctx:
-        ids += DOC_ID_RE.findall(line)
     return list(dict.fromkeys(i.upper() for i in ids))  # unique, original order
 
 
@@ -786,7 +386,7 @@ OFFTOPIC_REPLY = ("I'm a triage assistant, so I can only help with error logs, s
                   "returns a 502 or what is impacted if redis is down.")
 config.register("prompt.offtopic", "Reply to off-topic chat messages", OFFTOPIC_REPLY, "text", "prompts", multiline=True, max_len=40000)
 # --- CHAT INFERENCE ---
-# Plain 'def' (not 'async def'): everything inside is blocking I/O (Neo4j, Postgres, embeddings),
+# Plain 'def' (not 'async def'): everything inside is blocking I/O (Postgres, embeddings),
 # so FastAPI runs it in a worker thread instead of freezing the event loop.
 @app.post("/api/chat")
 def chat_endpoint(req: ChatRequest, request: Request):
@@ -816,47 +416,37 @@ def chat_endpoint(req: ChatRequest, request: Request):
         store.add_rag_event({"user_hash": _uh, "query": redact(safe_query)[:300], "kind": "canned"})
         return canned_stream(text, incident_info)
 
-    # 2. Retrieve Subgraph (Graph RAG). A failure here must not kill the chat.
-    cypher = """
-    MATCH (n:Entity)-[r:RELATED_TO]->(m:Entity)
-    WHERE toLower($query_text) CONTAINS toLower(n.name)
-       OR toLower($query_text) CONTAINS toLower(m.name)
-    RETURN n.name AS src, r.type AS rel, m.name AS dst
-    ORDER BY size(n.name) + size(m.name) DESC
-    LIMIT 10
-    """
-    graph_ctx = []
+    # 2. Runbook knowledge from ServiceNow (or the old local store). A failure here must not kill the chat.
     _t = time.time()
-    try:
-        with neo4j_driver.session() as session:
-            for rec in session.run(cypher, query_text=safe_query):
-                graph_ctx.append(f"Topology: {rec['src']} {rec['rel']} {rec['dst']}")
-    except Exception as e:
-        log.warning("Graph retrieval failed, continuing without it: %s", e)
-
-    # 3. Retrieve Runbooks (Hybrid RAG). Same rule: degrade gracefully.
-    t_graph = time.time() - _t
-    _t = time.time()
-    supa_ctx, raw_chunks, rag_scores = [], [], []
-    try:
-        res = supabase.rpc("hybrid_search", {
-            "query_text": safe_query,
-            "query_embedding": embedder.encode(safe_query).tolist(),
-            "match_count": 3
-        }).execute()
-        raw_chunks = [d['content'] for d in res.data] if res.data else []
-        rag_scores = [{k: v for k, v in d.items() if k != 'content' and isinstance(v, (int, float))}
-                      for d in (res.data or [])]
-        supa_ctx = [format_chunk(c) for c in raw_chunks]
-    except Exception as e:
-        log.warning("Hybrid retrieval failed, continuing without it: %s", e)
-
-    # Document IDs that retrieval really returned (the UI uses these for the source label)
+    supa_ctx, raw_chunks, rag_scores, articles, sources = [], [], [], [], []
+    source_mode = config.get("knowledge.source")
+    if source_mode == "servicenow":
+        know = knowledge.retrieve(retrieval_query(safe_query, safe_history))
+        supa_ctx, sources, articles = know["chunks"], know["ids"], know["articles"]
+        rag_scores = [{"rank": i + 1} for i in range(len(sources))]
+        if know["error"]:
+            log.warning("Knowledge search: %s", know["error"])
+    elif source_mode == "local":
+        try:
+            res = supabase.rpc("hybrid_search", {
+                "query_text": safe_query,
+                "query_embedding": _embedder().encode(safe_query).tolist(),
+                "match_count": 3
+            }).execute()
+            raw_chunks = [d['content'] for d in res.data] if res.data else []
+            rag_scores = [{k: v for k, v in d.items() if k != 'content' and isinstance(v, (int, float))}
+                          for d in (res.data or [])]
+            supa_ctx = [format_chunk(c) for c in raw_chunks]
+        except Exception as e:
+            log.warning("Hybrid retrieval failed, continuing without it: %s", e)
+        sources = retrieved_doc_ids(raw_chunks)
+    topology = knowledge.relationships(safe_query)       # live CMDB relationships when a server is named
+    if topology:
+        supa_ctx = supa_ctx + [topology]
     t_vec = time.time() - _t
-    sources = retrieved_doc_ids(graph_ctx, raw_chunks)
 
     # 4. Combine Context and Augment Prompt
-    combined = "\n".join(graph_ctx) + "\n\n" + "\n\n".join(supa_ctx)
+    combined = "\n\n".join(supa_ctx)
     rag_block = (f"--- RETRIEVED KNOWLEDGE (RAG) ---\n{combined.strip()}\n---------------------------------"
                  if combined.strip() else "")
 
@@ -881,13 +471,13 @@ def chat_endpoint(req: ChatRequest, request: Request):
 
         # 6. Stream Generator connecting to Colab; failures are sent to the browser as readable errors
     def stream_generator():
-        yield f"data: {json.dumps({'meta': {'sources': sources, 'incident': incident_info}})}\n\n"
+        yield f"data: {json.dumps({'meta': {'sources': sources, 'incident': incident_info, 'articles': [{k: a[k] for k in ('id', 'title', 'url')} for a in articles]}})}\n\n"
         tokens_in = usage.count_messages(colab_messages)
         sent = []                              # text actually streamed to the browser, for token counting
         try:
             with llm_slot("chat") as waited:
                 t0 = time.time()
-                with llm_post(colab_messages, timeout=(10, 300)) as r:
+                with llm_post(colab_messages, timeout=(10, 300), thinking=False) as r:
                     if r.status_code != 200:
                         yield f"data: {json.dumps({'error': f'LLM server returned HTTP {r.status_code}. Is the Colab session alive?'})}\n\n"
                     else:
@@ -917,9 +507,9 @@ def chat_endpoint(req: ChatRequest, request: Request):
             _kind = ("offtopic" if OFFTOPIC_RE.match(_ans) else
                      "kb" if set(_cited) & set(sources) else "general")
             store.add_rag_event({"user_hash": _uh, "query": redact(safe_query)[:300], "kind": _kind,
-                "retrieved": sources, "scores": rag_scores, "graph_hits": len(graph_ctx),
+                "retrieved": sources, "scores": rag_scores, "graph_hits": 0,
                 "cited": _cited, "phantom": [c for c in _cited if c not in sources],
-                "t_graph": round(t_graph, 2), "t_vec": round(t_vec, 2), "t_total": round(time.time() - _t_start, 2)})
+                "t_graph": 0, "t_vec": round(t_vec, 2), "t_total": round(time.time() - _t_start, 2)})
         except LLMBusy:
             yield f"data: {json.dumps({'error': 'The AI model is busy with another task. Please try again in a moment.'})}\n\n"
         except Exception as e:

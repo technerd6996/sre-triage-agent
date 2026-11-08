@@ -48,12 +48,21 @@ SETTINGS = {s.key: s for s in (
     Setting("runs.max_concurrent", "Tickets running at once", "RUNS_MAX_CONCURRENT", "int", 2,
             group="model", lo=2, hi=8,
             help="How many tickets the agent works at the same time. Each needs a different server."),
+    Setting("runs.reserved_slots", "Run slots kept for chat and ad-hoc work", "RUNS_RESERVED_SLOTS", "int", 0,
+            group="model", lo=0, hi=7,
+            help="Automatic (poller) runs may use at most 'Tickets running at once' minus this many slots, so a person "
+                 "asking in chat or raising an ad-hoc run never waits behind the automatic backlog. "
+                 "Example: 5 at once and 1 kept gives 4 for automatic work. 0 = no reserved slot."),
     Setting("model.temperature", "Temperature", "LLM_TEMPERATURE", "float", 0.4, group="model", lo=0, hi=2),
     Setting("model.max_tokens", "Max tokens per reply", "LLM_MAX_TOKENS", "int", 1024, group="model", lo=64, hi=8192,
             help="Caps a runaway reply. A reply cut off here fails JSON parsing and is counted as wasted tokens."),
     Setting("model.timeout_seconds", "Request timeout (seconds)", "LLM_TIMEOUT_SECONDS", "int", 180, group="model", lo=10, hi=1800),
     Setting("model.slots", "Concurrent model requests", "LLM_SLOTS", "int", 1, group="model", lo=1, hi=8,
             help="1 for a one-at-a-time endpoint. With vLLM, 2 to 4 lets the server batch requests."),
+    Setting("model.reserved_slots", "Slots kept free for chat titles and approvers", "LLM_RESERVED_SLOTS", "int", 0,
+            group="model", lo=0, hi=7,
+            help="Automatic runs and document ingestion may use at most (Concurrent model requests minus this) slots. "
+                 "Needs 2 or more concurrent requests and a server that handles them in parallel. 0 = off."),
     Setting("budget.daily_tokens", "Daily token budget (0 = off)", "BUDGET_DAILY_TOKENS", "int", 0,
             group="model", lo=0, hi=1000000000,
             help="Warning threshold for all model tokens in one day. Warns only; does not stop runs yet."),
@@ -86,6 +95,8 @@ SETTINGS = {s.key: s for s in (
             group="credentials", lo=1, hi=5000, help="Across all runs. A burst above this is refused and audited."),
     Setting("credentials.inquiry_max_per_hour", "Inquiry credential checkouts allowed per hour", "PAM_INQUIRY_MAX_PER_HOUR", "int", 60,
             group="credentials", lo=1, hi=2000, help="Across all approver inquiries. A burst above this is refused and audited."),
+    Setting("credentials.action_max_per_user_per_hour", "Chat actions allowed per approver per hour", "PAM_ACTION_MAX_PER_USER_PER_HOUR", "int", 10,
+            group="credentials", lo=1, hi=200, help="Confirmed changes made from the approver chat (restart a service). Above this is refused and audited."),
     Setting("credentials.inquiry_max_per_user_per_hour", "Inquiry credential checkouts allowed per user per hour", "PAM_INQUIRY_MAX_PER_USER_PER_HOUR", "int", 20,
             group="credentials", lo=1, hi=500, help="Per approver. More than this in an hour is refused and audited."),
 )}
@@ -93,8 +104,8 @@ SETTINGS = {s.key: s for s in (
 
 def _add(key, label, env, kind="text", default="", group="ticketing", **kw):
     """Settings the rest of the code still reads with os.getenv; they apply after a restart."""
-    # live: ticketing fields apply immediately; others only when the code reads the value per call (live=True)
-    is_live = kw.pop("live", True if group == "ticketing" else False)
+    # live=True (default): the code reads the value on every use, so a saved change applies at once
+    is_live = kw.pop("live", True)
     SETTINGS[key] = Setting(key, label, env, kind, default, group, live=is_live, bridge=True, **kw)
 
 
@@ -124,9 +135,6 @@ _add("identity.bind_password", "Service Account Password", "IDENTITY_BIND_PASSWO
 _add("model.colab_api_url", "Model API URL", "COLAB_API_URL", group="model")
 _add("agent.max_tokens_per_run", "Token budget per run", "AGENT_MAX_TOKENS_PER_RUN", "int", 60000,
      group="model", lo=5000, hi=500000, help="A run above this is stopped and escalated.")
-_add("knowledge.neo4j_uri", "Neo4j URI", "NEO4J_URI", group="knowledge")
-_add("knowledge.neo4j_user", "Neo4j user", "NEO4J_USER", group="knowledge")
-_add("knowledge.neo4j_pass", "Neo4j password", "NEO4J_PASS", "secret", group="knowledge")
 _add("knowledge.skills_source", "Skills source", "SKILLS_SOURCE", "select", "file", "knowledge", options=("file", "kb"))
 _add("knowledge.skills_kb_name", "Skills KB name", "SKILLS_KB_NAME", default="TRIAGE-1 Playbooks", group="knowledge")
 _add("knowledge.skills_ttl", "Skills cache (seconds)", "SKILLS_TTL_SECONDS", "int", 300, "knowledge", lo=10, hi=86400)
@@ -145,8 +153,7 @@ _add("notifications.smtp_password", "SMTP password", "SMTP_PASSWORD", "secret", 
 
 
 # ---- Servers, thresholds and limits that used to be environment-only or hardcoded ----
-# live=True: the code reads the value on every use, so a saved change applies at once.
-# live=False: read once at start-up, so a saved change applies after a restart.
+# Every setting applies at once: the code reads each value when it is used (never at import time).
 _add("infra.disk_threshold_pct", "Disk full threshold (%)", "DISK_THRESHOLD_PCT", "float", 85.0, "infra", live=True, lo=1, hi=100)
 _add("infra.memory_threshold_pct", "Memory high threshold (%)", "MEMORY_THRESHOLD_PCT", "float", 90.0, "infra", live=True, lo=1, hi=100)
 _add("infra.cpu_threshold_pct", "CPU high threshold (%)", "CPU_THRESHOLD_PCT", "float", 90.0, "infra", live=True, lo=1, hi=100)
@@ -173,33 +180,29 @@ _add("security.cookie_secure", "Secure session cookie (HTTPS only)", "COOKIE_SEC
      help="Turn on once the app is served over HTTPS.")
 _add("security.tls_verify", "Verify the AD server certificate", "IDENTITY_TLS_VERIFY", "bool", False, "security", live=True)
 _add("security.ca_file", "CA certificate file for AD (path on the server)", "IDENTITY_CA_FILE", "text", "", "security", live=True)
-_add("security.login_max_ip_fails", "Failed logins per IP before lockout", "LOGIN_MAX_IP_FAILS", "int", 30, "security", live=False, lo=3, hi=1000)
+_add("security.login_max_ip_fails", "Failed logins per IP before lockout", "LOGIN_MAX_IP_FAILS", "int", 30, "security", lo=3, hi=1000)
 register("security.min_password", "Minimum password length", 12, "int", "security", lo=8, hi=128)
 register("security.session_cache_seconds", "Session lookup cache (seconds)", 45, "int", "security", lo=0, hi=600,
          help="Also the longest a disabled user keeps access.")
 _add("credentials.manage_in_app", "Manage host credentials inside the app", "PAM_MANAGE_IN_APP", "bool", False, "credentials", live=True)
 _add("credentials.secret_prefix", "Secrets Manager prefix for host credentials", "PAM_SECRET_PREFIX", "text", "triage/pam/hosts", "credentials", live=True)
 
-_add("limits.ticket_rate_window", "Ticket rate window (seconds)", "TICKET_RATE_WINDOW", "int", 600, "limits", live=False, lo=10, hi=86400)
-_add("limits.queue_max", "Waiting jobs before new chat tickets are refused", "QUEUE_MAX", "int", 10, "limits", live=False, lo=1, hi=1000)
-_add("limits.undo_seconds", "Chat ticket undo window (seconds)", "UNDO_SECONDS", "int", 30, "limits", live=False, lo=0, hi=600)
-_add("limits.chat_wait_seconds", "How long a chat message waits for the model (seconds)", "LLM_CHAT_WAIT_SECONDS", "int", 90, "limits", live=False, lo=5, hi=900)
-_add("limits.p1_update_min", "P1 update interval (minutes)", "P1_UPDATE_MIN", "int", 30, "limits", live=False, lo=1, hi=480)
-_add("limits.tokenizer_name", "Tokenizer used to count tokens", "TOKENIZER_NAME", "text", "Qwen/Qwen2.5-7B-Instruct", "limits", live=False)
+_add("limits.ticket_rate_window", "Ticket rate window (seconds)", "TICKET_RATE_WINDOW", "int", 600, "limits", lo=10, hi=86400)
+_add("limits.queue_max", "Waiting jobs before new chat tickets are refused", "QUEUE_MAX", "int", 10, "limits", lo=1, hi=1000)
+_add("limits.undo_seconds", "Chat ticket undo window (seconds)", "UNDO_SECONDS", "int", 30, "limits", lo=0, hi=600)
+_add("limits.chat_wait_seconds", "How long a chat message waits for the model (seconds)", "LLM_CHAT_WAIT_SECONDS", "int", 90, "limits", lo=5, hi=900)
+_add("limits.p1_update_min", "P1 update interval (minutes)", "P1_UPDATE_MIN", "int", 30, "limits", lo=1, hi=480)
+_add("limits.tokenizer_name", "Tokenizer used to count tokens", "TOKENIZER_NAME", "text", "Qwen/Qwen2.5-7B-Instruct", "limits")
 register("limits.dedup_seconds", "Duplicate chat ticket window (seconds)", 600, "int", "limits", lo=0, hi=86400)
-register("limits.max_runs", "Runs kept in memory", 20, "int", "limits", live=False, lo=5, hi=500)
+register("limits.max_runs", "Runs kept in memory", 20, "int", "limits", lo=5, hi=500)
 register("limits.job_max_age_seconds", "Queued job expires after (seconds)", 21600, "int", "limits", lo=60, hi=604800)
+register("limits.auto_retry_failed", "Times auto mode retries a ticket whose run failed (0 = never)", 1, "int", "limits", lo=0, hi=5,
+         help="A failed run is retried this many times, then the ticket is left for a person. Escalated runs are not failures.")
 register("limits.max_nudges", "Reminders sent to an agent that stops early", 2, "int", "limits", lo=0, hi=10)
 register("limits.flap_limit", "Auto restores of one service per hour before a human is needed", 3, "int", "limits", lo=1, hi=50)
 register("limits.max_file_chars", "Log characters kept when a file is truncated", 6000, "int", "limits", lo=500, hi=200000)
-register("limits.max_input_chars", "Longest chat message or attachment (characters)", 200000, "int", "limits", live=False, lo=1000, hi=5000000)
-register("limits.max_history_messages", "Chat history messages sent", 30, "int", "limits", live=False, lo=2, hi=200)
-register("limits.max_field_chars", "Longest graph entity or relation name (API)", 200, "int", "limits", live=False, lo=10, hi=1000)
-register("limits.max_field_len", "Longest extracted entity or relation name", 80, "int", "limits", lo=10, hi=500)
-register("limits.extract_window_chars", "Document characters per extraction call", 2500, "int", "limits", lo=500, hi=20000)
-register("limits.extract_max_windows", "Extraction calls per document", 4, "int", "limits", lo=1, hi=50)
-register("limits.max_triples_per_doc", "Graph edges one document can create", 60, "int", "limits", lo=1, hi=2000)
-register("limits.max_csv_rows", "Rows accepted in a graph CSV import", 5000, "int", "limits", lo=10, hi=200000)
+register("limits.max_input_chars", "Longest chat message or attachment (characters)", 200000, "int", "limits", lo=1000, hi=5000000)
+register("limits.max_history_messages", "Chat history messages sent", 30, "int", "limits", lo=2, hi=200)
 register("limits.retry_backoff", "Model retry waits (seconds, comma separated)", "0,3,10,25", "text", "limits",
          help="One wait per retry, for example 0,3,10,25.")
 register("limits.sla_fallback", "SLA fallback minutes (priority:response:resolution, comma separated)", "1:15:240,2:30:480,3:120:1440,4:240:4320",
@@ -317,9 +320,22 @@ def _env_text(s: Setting, value) -> str:
     return ("1" if value else "0") if s.kind == "bool" else str(value)
 
 
+def _notify(s: Setting) -> None:
+    for fn in list(_listeners):
+        try:
+            fn(s.key)
+        except Exception as e:
+            log.warning("config: listener failed for %s: %s", s.key, str(e)[:150])
+
+
 def _after_change(s: Setting) -> None:
     """Makes a saved change visible to code that still reads os.getenv, and tells the listeners."""
-    if s.bridge and s.env and not s.secret:
+    if s.bridge and s.env and s.secret:
+        if _orig_env.get(s.env) is None:
+            os.environ.pop(s.env, None)
+        else:
+            os.environ[s.env] = _orig_env[s.env]
+    elif s.bridge and s.env:
         _orig_env.setdefault(s.env, os.environ.get(s.env))      # what the environment held before any saved value
         value, source = _resolve(s)
         if source == "saved":
@@ -328,11 +344,7 @@ def _after_change(s: Setting) -> None:
             os.environ.pop(s.env, None)
         else:
             os.environ[s.env] = _orig_env[s.env]
-    for fn in list(_listeners):
-        try:
-            fn(s.key)
-        except Exception as e:
-            log.warning("config: listener failed for %s: %s", s.key, str(e)[:150])
+    _notify(s)
 
 
 def save(key: str, value, by: str = "system"):
@@ -418,6 +430,10 @@ def save_secret(key: str, value, by: str = "system") -> None:
         "key": SEC + key, "value_json": {"v": token, "ver": int(old.get("ver", 0)) + 1, "at": time.time()},
         "updated_by": by, "updated_at": time.time()}).execute()
     _cache["at"] = 0.0
+    if s.bridge and s.env:
+        _orig_env.setdefault(s.env, os.environ.get(s.env))
+        os.environ[s.env] = _cast(s, value)
+    _notify(s)
     try:
         store.audit(None, None, by, "secret_changed", key)            # the value is never logged
     except Exception as e:

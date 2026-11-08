@@ -11,8 +11,8 @@ from app.tools.ticketing_tools import (  # noqa: F401
 )
 
 
-def list_queue() -> list:
-    return registry.get_ticketing().list_queue()
+def list_queue(exclude=()) -> list:
+    return registry.get_ticketing().list_queue(exclude)
 
 
 def search_users(text: str, limit: int = 8) -> list[dict]:

@@ -17,7 +17,7 @@ import paramiko
 import winrm
 from langchain_core.tools import tool
 
-from app.tools import active
+from app.tools import active, actor
 
 log = logging.getLogger(__name__)
 
@@ -69,11 +69,24 @@ def _port(target: str) -> int:
     return 5985 if target == "windows" else int(os.getenv("LINUX_SSH_PORT", "22"))
 
 
+def _credentials(target: str, host: str, inquiry_user: str | None) -> dict:
+    """Who may fetch the credential: an approver inquiry, a person's confirmed chat action, or an agent run."""
+    hid = active.host_id(target)
+    if inquiry_user:
+        return pam.checkout_for_inquiry(inquiry_user, hid, host)
+    reader = actor.inquirer()
+    if reader:
+        return pam.checkout_for_inquiry(reader, hid, host)
+    who = actor.current()
+    if who:
+        return pam.checkout_for_action(who[0], who[1], hid, host)
+    return pam.checkout(hid, host)
+
+
 def _win(script: str, *, inquiry_user: str | None = None) -> str:
     """Run a PowerShell script on the Windows server over WinRM and return stdout."""
     host = _host("windows")
-    creds = (pam.checkout_for_inquiry(inquiry_user, active.host_id("windows"), host)
-             if inquiry_user else pam.checkout(active.host_id("windows"), host))
+    creds = _credentials("windows", host, inquiry_user)
     session = winrm.Session(
         f"http://{host}:{int(creds.get('port', 5985))}/wsman",
         auth=(creds["username"], creds["password"]),
@@ -105,8 +118,7 @@ def _win(script: str, *, inquiry_user: str | None = None) -> str:
 def _linux(command: str, *, inquiry_user: str | None = None) -> str:
     """Run a shell command on the Linux server over SSH and return stdout."""
     host = _host("linux")
-    creds = (pam.checkout_for_inquiry(inquiry_user, active.host_id("linux"), host)
-             if inquiry_user else pam.checkout(active.host_id("linux"), host))
+    creds = _credentials("linux", host, inquiry_user)
     pkey = None
     if creds.get("private_key"):
         pkey = pam.load_pkey(creds["private_key"], creds.get("passphrase") or None)
