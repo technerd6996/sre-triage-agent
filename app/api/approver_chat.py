@@ -4,18 +4,19 @@ no confirm/undo window, no rate limit/dedup meant for end users, and gated to co
 (approvers), not chat.create (users) -- this capability must not be inherited by regular users.
 """
 import re
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 from app import config
 from pydantic import BaseModel, Field
 
-from app import chat_actions, jobs, store
+from app import chat_actions, chat_reads, jobs, owner_approval, owner_contacts, store
 from app.agent.hosts import resolve_default_windows, resolve_server
 from app.api.agent import _actor, start_run
 from app.api.issues import redact
 from app.ports import registry
 from app.ports.models import TicketState
-from app.tools import actor, cmdb
+from app.tools import actor, chat_tools, cmdb
 from app.tools.host_lock import host_lock
 from app.tools.infra import check_disk_usage
 from app.tools.infra_perf import check_cpu_usage, check_memory_usage, set_audience, top_processes
@@ -92,8 +93,10 @@ def inquire(req: InquireRequest, request: Request):
     identified the same way a real ticket is: resolve_server() / find_in_text() scan the question
     for a known CI name -- no client-side parsing of sentence structure."""
     q = req.question.lower()
+    chat_tool = chat_reads.pick(req.question)           # uptime, network, events, sessions, updates, packages ...
+    hint = chat_reads.source_hint(req.question) if chat_tool is chat_tools.check_network else ""
 
-    instance, reason = resolve_server(req.question, ci_name=req.server)
+    instance, reason = resolve_server(req.question, ci_name=hint or req.server)
     if not instance:
         raise HTTPException(422, reason or "I couldn't find a known server name in that question.")
 
@@ -103,29 +106,40 @@ def inquire(req: InquireRequest, request: Request):
             raise HTTPException(502, f"CMDB lookup failed: {ctx['error']}")
         return {"server": instance["name"], "platform": instance["platform"], "result": ctx}
 
-    tool = next((t for kw, t in _INQUIRE_TOOLS if kw in q), None)
-    if not tool:
-        raise HTTPException(422, "I can check CPU, memory, disk space, top processes, or CMDB context "
-                                 "directly. For anything that changes the server, ask for it as an action "
-                                 "(for example: restart the spooler service).")
-    tools = [tool]
-    if tool in (check_cpu_usage, check_memory_usage, check_disk_usage):    # "CPU, memory and disk" asks for each reading
-        tools = [t for t, kws in ((check_cpu_usage, ("cpu",)), (check_memory_usage, ("memory", "mem")),
-                                  (check_disk_usage, ("disk", "drive", "storage")))
-                 if any(re.search(r"\b" + k + r"\b", q) for k in kws)] or [tool]
+    calls = []                                          # (tool, arguments) pairs, run in order
+    if chat_tool:
+        tool = chat_reads.for_platform(chat_tool, instance["platform"])
+        try:
+            calls.append((tool, chat_reads.args(tool, req.question, instance["platform"], instance["name"])))
+        except chat_reads.NeedsMore as e:
+            raise HTTPException(422, str(e))
+    else:
+        tool = next((t for kw, t in _INQUIRE_TOOLS if kw in q), None)
+        if not tool:
+            raise HTTPException(422, "I can check CPU, memory, disk space, top processes, uptime, pending reboots, network "
+                                     "reachability, recent errors, sessions, failed services, scheduled jobs, updates, packages "
+                                     "or CMDB context directly. For anything that changes the server, ask for it as an action "
+                                     "(for example: restart the spooler service).")
+        tools = [tool]
+        if tool in (check_cpu_usage, check_memory_usage, check_disk_usage):    # "CPU, memory and disk" asks for each reading
+            tools = [t for t, kws in ((check_cpu_usage, ("cpu",)), (check_memory_usage, ("memory", "mem")),
+                                      (check_disk_usage, ("disk", "drive", "storage")))
+                     if any(re.search(r"\b" + k + r"\b", q) for k in kws)] or [tool]
+        for t in tools:
+            a = {"target": instance["platform"]}
+            if t is top_processes:
+                a["sort_by"] = "cpu" if "cpu" in q else "memory"
+            calls.append((t, a))
 
     who = _actor(request)
     token = set_audience("l2")
     results = []
     try:
         with actor.inquiring_as(who):             # read-only credential path for tools without an inquiry_user argument
-            for t in tools:
-                args = {"target": instance["platform"]}
+            for t, a in calls:
                 if "inquiry_user" in t.args:
-                    args["inquiry_user"] = who
-                if t is top_processes:
-                    args["sort_by"] = "cpu" if "cpu" in q else "memory"
-                results.append(t.invoke(args))
+                    a["inquiry_user"] = who
+                results.append(t.invoke(a))
     except Exception as e:
         raise HTTPException(502, f"Check failed: {str(e)[:200]}")
     finally:
@@ -201,11 +215,118 @@ def act_propose(req: ActRequest, request: Request):
         return inst
 
     try:
-        card = chat_actions.propose(req.instruction, who, resolve)
+        with actor.inquiring_as(who):               # reading a session list or a package dry run is read only
+            card = chat_actions.propose(req.instruction, who, resolve)
     except chat_actions.AskBack as e:
         raise HTTPException(422, str(e))
     store.audit(None, None, who, "chat_action_proposed", f"tool={card['tool']} name={card['name']} host={card['host']}")
     return card
+
+
+def _mail_owners_after(action: dict, inst: dict, who: str, number: str, text: str, lines: list) -> str:
+    """Tell the server's owners what was done (after the fact). Never raises; the answer is one sentence for the ticket and chat."""
+    oc = owner_contacts.contacts(inst["name"])
+    if not oc["emails"]:
+        return f"No owner was mailed: {oc['error']}"
+    body = "\n".join([f"TRIAGE-1 made a change on {inst['name']} at the request of {who}.", "",
+                      f"What: {action['label']}", f"Result: {text}", f"Ticket: {number}", ""] + lines[:12] +
+                     ["", "This message is a notice. No reply is needed unless something looks wrong."])
+    ok, detail = owner_contacts.send(oc["emails"], [who] if "@" in who else [], f"[TRIAGE-1] {action['label']} - done ({number})", body)
+    store.audit(None, number, who, "chat_owner_mail_sent" if ok else "chat_owner_mail_failed",
+                f"to={','.join(oc['emails'])} {'' if ok else detail}"[:300])
+    return (f"Owners mailed: {', '.join(oc['emails'])}." if ok else f"The owner mail FAILED ({detail}). Tell the owners yourself.")
+
+
+class OwnerRequestBody(BaseModel):
+    token: str = Field(min_length=8, max_length=200)
+
+
+class OwnerReplyBody(BaseModel):
+    text: str = Field(min_length=20, max_length=20000)
+
+
+@router.post("/act/owner-request")
+def act_owner_request(req: OwnerRequestBody, request: Request):
+    """The 'Email the owners' button: opens the engineer's ticket, stores the request and mails the owners from the CMDB."""
+    who = _actor(request)
+    try:
+        action = chat_actions.redeem(req.token, who, stage="request")
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    inst, reason = resolve_server(action["host"], ci_name=action["host"])
+    if not inst:
+        raise HTTPException(502, reason or "That server is no longer known.")
+    if action["tool"] in ("reboot_server", "shutdown_server"):
+        block = owner_approval.power_block(inst)
+        if block:
+            raise HTTPException(409, block)
+    can, why = owner_contacts.can_address()
+    if not can:
+        raise HTTPException(409, f"The owners cannot be mailed: {why}.")
+    oc = owner_contacts.contacts(inst["name"])
+    if not oc["emails"]:
+        raise HTTPException(409, f"I cannot find who to ask. {oc['error']}")
+    try:
+        ticket = registry.get_ticketing().create_for_user(
+            f"[Chat action] awaiting owner approval: {action['label']}"[:160],
+            f"Affected server: {inst['name']}\n\nRequested in the TRIAGE-1 chat by {who}:\n{redact(action['message'])}", who, 2, 2, inst["name"])
+    except Exception as e:
+        raise HTTPException(502, f"Could not open the ticket, so nothing was sent: {str(e)[:150]}")
+    row = owner_approval.create_request(who, action, oc["emails"], ticket.id)
+    subject, body = owner_approval.request_mail(row, who, action["message"])
+    ok, detail = owner_contacts.send(oc["emails"], [who] if "@" in who else [], subject, body)
+    tk = registry.get_ticketing()
+    if not ok:
+        owner_approval.mark(row["id"], status="cancelled")
+        store.audit(None, ticket.id, who, "chat_owner_request_failed", detail[:250])
+        try:
+            tk.add_note(ticket.id, f"Owner approval request {row['id']} could NOT be sent: {detail}. Nothing was changed.")
+        except Exception:
+            pass
+        raise HTTPException(502, f"The mail to the owners could not be sent ({detail}). Nothing was changed.")
+    try:
+        tk.add_note(ticket.id, f"Owner approval requested ({row['id']}) by {who} for: {action['label']}. Mailed to: {', '.join(oc['emails'])}.")
+    except Exception:
+        pass
+    store.audit(None, ticket.id, who, "chat_owner_request_sent", f"{row['id']} to={','.join(oc['emails'])} {action['tool']} host={inst['name']}"[:300])
+    return {"request_id": row["id"], "ticket": ticket.id, "owners": oc["emails"],
+            "hours": int(config.get("owners.approval_ttl_hours"))}
+
+
+@router.post("/act/owner-reply")
+def act_owner_reply(req: OwnerReplyBody, request: Request):
+    """The engineer pastes an owner's reply. If it is a clear approval from an owner, the normal Confirm card comes back."""
+    who = _actor(request)
+    code = owner_approval.code_in(req.text)
+    if not code:
+        raise HTTPException(422, "I cannot find a request code (like REQ-K7M2QX) in that text. Paste the whole reply, including the subject line.")
+    row = owner_approval.get_request(code)
+    if not row or row["requester"] != who:
+        raise HTTPException(422, f"There is no open request {code} that you made.")
+    if row["expires"] < time.time() and row["status"] in ("waiting", "approved"):
+        owner_approval.mark(code, status="expired")
+        raise HTTPException(409, f"{code} expired. Ask the owners again.")
+    if row["status"] == "approved":                                # lost the card? the approval is still good
+        return {"verdict": "approved", "request_id": code, "card": chat_actions.run_card(
+            row, {"from": row.get("approved_by"), "top": row.get("approval_text")})}
+    if row["status"] != "waiting":
+        raise HTTPException(409, f"{code} is {row['status']}.")
+    owners = row["owners_json"] if isinstance(row["owners_json"], list) else []
+    ev = owner_approval.evaluate(req.text, owners)
+    tk = registry.get_ticketing()
+    try:
+        tk.add_note(row["ticket"], f"Reply pasted by {who} for {code}: verdict {ev['verdict']} ({ev['why']}). From: {ev['from'] or 'unknown'}.\n"
+                                   f"Reply text read:\n{ev['top'][:600]}")
+    except Exception:
+        pass
+    store.audit(None, row["ticket"], who, "chat_owner_reply", f"{code} verdict={ev['verdict']} from={ev['from']}"[:300])
+    if ev["verdict"] != "approved":
+        if ev["verdict"] == "refused":
+            owner_approval.mark(code, status="refused")
+        return {"verdict": ev["verdict"], "request_id": code, "message": ev["why"]}
+    owner_approval.mark(code, status="approved", approved_by=ev["from"], approved_at=time.time(), approval_text=ev["top"])
+    row.update(status="approved")
+    return {"verdict": "approved", "request_id": code, "card": chat_actions.run_card(row, ev)}
 
 
 @router.post("/act/confirm")
@@ -214,7 +335,7 @@ def act_confirm(req: ConfirmRequest, request: Request):
     showed with a direct tool call (no agent run), writes the result to the ticket and the audit log."""
     who = _actor(request)
     try:
-        action = chat_actions.redeem(req.token, who)
+        action = chat_actions.redeem(req.token, who, stage=None)       # the request-for-owners card is refused without being used up
     except ValueError as e:
         raise HTTPException(409, str(e))
     if action.get("kind") == "close":
@@ -227,15 +348,27 @@ def act_confirm(req: ConfirmRequest, request: Request):
         raise HTTPException(502, reason or "That server is no longer known.")
 
     host = inst["name"]
-    try:
-        ticket = registry.get_ticketing().create_for_user(
-            f"[Chat action] {action['label']}"[:160],
-            f"Affected server: {host}\n\nRequested in the TRIAGE-1 chat by {who}:\n{redact(action['message'])}",
-            who, 2, 2, host)
-    except Exception as e:
-        # no change without a record of it
-        raise HTTPException(502, f"Could not open the ticket, so nothing was changed: {str(e)[:150]}")
-    number = ticket.id
+    if action.get("stage") == "request":
+        raise HTTPException(409, "That card is the request for the owners' approval. Use its Email the owners button.")
+    if action.get("request_id"):                                   # owners approved by email: the ticket already exists
+        row = owner_approval.get_request(action["request_id"])
+        if not row or row["status"] != "approved" or row["expires"] < time.time():
+            raise HTTPException(409, "That owner approval is no longer valid (used, refused or expired). Ask the owners again.")
+        if action["tool"] in ("reboot_server", "shutdown_server"):
+            block = owner_approval.power_block(inst)
+            if block:
+                raise HTTPException(409, block)
+        number = action["ticket"]
+    else:
+        try:
+            ticket = registry.get_ticketing().create_for_user(
+                f"[Chat action] {action['label']}"[:160],
+                f"Affected server: {host}\n\nRequested in the TRIAGE-1 chat by {who}:\n{redact(action['message'])}",
+                who, 2, 2, host)
+        except Exception as e:
+            # no change without a record of it
+            raise HTTPException(502, f"Could not open the ticket, so nothing was changed: {str(e)[:150]}")
+        number = ticket.id
     store.audit(None, number, who, "chat_action_confirmed", f"tool={action['tool']} name={action['name']} host={host}")
 
     tool = chat_actions.tool_for(action)
@@ -246,12 +379,24 @@ def act_confirm(req: ConfirmRequest, request: Request):
         result = {"error": str(e)[:200]}
     text = chat_actions.summary(action, result)
     ok = not result.get("error")
+    if ok and action.get("request_id"):
+        owner_approval.mark(action["request_id"], status="used")
+    if ok and action["tool"] in ("reboot_server", "shutdown_server"):
+        store.audit(None, number, who, "chat_power_scheduled", f"host={host} tool={action['tool']}")
+        if action["tool"] == "reboot_server":                      # watch for it to come back and write that on the ticket
+            owner_approval.start_verifier(host, inst["instance_id"], inst["platform"], number, who, int(result.get("delay_seconds") or 60))
+    if ok and action["tool"] == "install_windows_updates":         # the install runs in the background: watch it and report on the ticket
+        owner_approval.start_patch_watch(host, inst["instance_id"], inst["platform"], number, who, result.get("job"))
+    lines = [str(x)[:200] for x in (result.get("lines") or [])][:12]
+    owner_note = _mail_owners_after(action, inst, who, number, text, lines) if ok and action.get("owner_after") else ""
+    note = (f"TRIAGE-1 chat action by {who}: {text}\nAction: {action['tool']} {chat_actions.args_for(action)} on {host}"
+            + ("\n" + "\n".join(lines) if lines else "") + (f"\n{owner_note}" if owner_note else ""))
     try:
-        registry.get_ticketing().add_note(number, f"TRIAGE-1 chat action by {who}: {text}")
+        registry.get_ticketing().add_note(number, note[:4000])
     except Exception:
         pass                                   # the audit row below still records it
     store.audit(None, number, who, "chat_action_done" if ok else "chat_action_failed", f"{action['tool']} {action['name']} {host}: {text[:200]}")
-    return {"ticket": number, "ok": ok, "message": text}
+    return {"ticket": number, "ok": ok, "message": text, "owner_note": owner_note}
 
 
 class CmdbRequest(BaseModel):

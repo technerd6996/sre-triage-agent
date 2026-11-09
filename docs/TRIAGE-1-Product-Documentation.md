@@ -176,6 +176,16 @@ The page remembers the last server you asked about, so "What about memory?" need
 | "What is the C drive utilization?" | The named drive (or every disk) with percent used, free and total GB. |
 | "Which process is consuming the CPU?" | The top five processes with memory, CPU and service name. |
 | "Who owns term-win-srv?" (CMDB, owner, support group, criticality) | The CMDB context for that server. |
+| "What is the uptime?" / "boot up time" / "is term-win-srv back?" | Last start and how long the server has been up. |
+| "Does zabbix-mon need a reboot?" | Whether a restart is pending, and why (Windows servicing keys, Linux reboot-required). |
+| "Can term-win-srv reach db01 on port 1433?" / "ping 8.8.8.8 from victim-test" | Name lookup, ping and TCP port test, run from that server. The first server named is the source. |
+| "Recent errors in the event log" / "in the journal" | Error and critical entries from the last hour (or the period you give), capped. |
+| "Who is logged in on term-win-srv?" | Sessions with their IDs and users. |
+| "Which services are stopped?" | Automatic services that are not running (Windows) or failed units (Linux). |
+| "List scheduled tasks" / "scheduled jobs" | Non-system tasks (Windows) or systemd timers and cron files (Linux). |
+| "Pending Windows updates" | Updates waiting, the latest installed updates and the Windows Update service state (Windows). |
+| "Patch job status" / "did the update finish?" | Progress or result of the last Windows update install started from the chat, including whether a restart is needed. |
+| "Which packages are upgradable?" / "security updates" / "is nginx installed?" | Package lists and pending updates (Linux; apt, dnf and yum are detected). |
 
 Read-only checks fetch credentials through a separate inquiry path with its own hourly limits (60 per hour overall and 20 per person by default). They open no ticket and start no run.
 
@@ -188,6 +198,15 @@ Read-only checks fetch credentials through a separate inquiry path with its own 
 | "free up space" / "clean temp files" | Delete temp files older than one day | L1 |
 | "clean old logs in C:\inetpub\logs\LogFiles older than 30 days" | Delete old logs; only folders on the administrator's allowed list are accepted; default 14 days | L1 |
 | "unlock jsmith" | Unlock an Active Directory account (runs through the one running Windows server) | L1 |
+| "stop the print spooler service" | Stop a service (protected services such as WinRM, sshd and TermService are refused) | L1 |
+| "disable the print spooler service at boot" / "enable ..." | Change whether a service starts at boot; its current state is not touched | L1 |
+| "log off session 3 on term-win-srv" | Log off one session by its ID (the card shows whose session it is; unsaved work is lost) | L1 |
+| "run the task Backup on term-win-srv" | Start one listed, non-system scheduled task or timer service now; the chat does not wait for it | L1 |
+| "install htop and curl on victim-test" / "update packages nginx" | Linux only. Several named packages in one request. The card shows a dry run first. Owners are mailed after it finishes | L1 |
+| "reboot victim-test because kernel patching" / "restart the server victim-test" | Restart the whole server after a warning delay (default 60 s). **Owner approval by email first** | L2 |
+| "shut down victim-test" | Power the server off. **Owner approval by email first** | L2 |
+| "remove telnet from victim-test" | Linux only: remove named packages (not purge). The dry run must show nothing else being removed. **Owner approval by email first** | L2 |
+| "install update KB5007651 on term-win-srv" | Windows only: install the named updates in the background through a one-time scheduled task. The card checks that each number is really pending. No automatic restart. **Owner approval by email first** | L2 |
 | "close INC0010689" | Resolve a ticket you opened from the chat, with drafted close notes | n/a |
 
 Polite requests count: "Can we restart the spooler service?" is treated as a request, while "how does restart work?" is a question. If a detail is missing the chat asks for it ("Which folder?", "Which account?"). Kill process and anything rated L2 or L3 is refused from the chat for now.
@@ -233,6 +252,107 @@ Steps 2 and 4 are the safety design. Step 2 changes nothing, so a card can be re
 - If the ticket cannot be created, nothing is changed on the server.
 - The ticket stays **In Progress**. After a successful action the result card offers a **Close INC...** button.
 - **Closing** works only for tickets you opened from the chat and that are not in the agent queue. The drafted notes list what was done; the ticket is resolved only after your second Confirm.
+
+### Linux package changes: dry run first, owners told afterwards
+
+- The card is prepared with a read-only dry run (`apt-get -s`, or `dnf --assumeno`). It shows what would be installed or upgraded, and it is **refused** when the plan would also remove something else, when the package manager reports an error (for example a conflict with an installed package), or when there is nothing to do.
+- Package names are validated and passed after `--`, so a name can never become an option or a command. Packages that grant or control privileges (sudo, doas, polkit, pkexec, openssh-server, systemd, libc, kernel images and similar) are on a deny list that an admin can edit. Commands are fixed templates run with `sudo -n`; the chat has no command that raises privileges.
+- After a successful install or update, the server's **owners are mailed** what was done, and the same text is written to the ticket. If no owner address is found, or the mail fails, the chat and the ticket say so plainly. The change itself is not undone.
+
+### Owner approval by email (reboot, shutdown, package removal, Windows update install)
+
+These actions can interrupt many people, so the engineer's own Confirm is not enough. The owners of the server approve first, by email, and the engineer pastes their reply back into the chat:
+
+```
+You: "reboot victim-test because kernel patching"
+  |
+  v
+Card: who would be disconnected, which owners will be emailed   (nothing sent yet)
+  | you press "Email the owners"
+  v
+TRIAGE-1: opens YOUR ticket  ->  stores request REQ-K7M2QX  ->  mails the owners from the CMDB
+  |
+  v
+Owner replies by email:  "Approved, go ahead tonight."
+  |
+  v
+You paste the WHOLE reply into the chat (with its From line)
+  |
+  v
+TRIAGE-1 checks the reply:
+  | - the request code REQ-K7M2QX is in it and the request is yours, open and not expired
+  | - only the top of the reply is read; quoted text and signatures below it are ignored
+  | - the From address is one of the owners the CMDB lists
+  | - an approval word is there ("approved", "go ahead" ...) and NO refusal, hold or condition word
+  v
+Card: "Owner approval recorded from ann@lab.local ... Go ahead?"
+  | you press Confirm (the last step)
+  v
+Reboot is scheduled -> the result and the reply text are written to the ticket -> owners are told it was done
+  |
+  v
+A background check watches for the server to answer again and writes "back after N min" on the ticket
+```
+
+What the check does with a reply:
+
+| Reply | Result |
+|---|---|
+| "Approved, go ahead tonight." / "No objection, proceed." / "Yes - agreed." | Accepted |
+| "Not approved, hold off." / "Don't reboot it today." / "Wait for my call, then go ahead." | **Refused**: the request stays refused and nothing runs |
+| "Approved if the backup finishes first." / "Go ahead after 22:00." / "Approved, but tell the team." | **Sent back to you**: a condition needs a person to read it |
+| "ok" / "Thanks." | Sent back: no clear approval word |
+| From an address that is not an owner, or no From line pasted | Sent back: the sender cannot be confirmed |
+
+The approval, refusal and condition words are admin settings, and the check is stricter than a human would be on purpose: when in doubt it refuses.
+
+> **A pasted email is evidence, not proof.** An engineer could paste a made-up reply. The protections are that the sender must match the CMDB owners, the pasted text is stored on the ticket and in the audit log, the owners are mailed again after the action so a false approval would be noticed, and the request code, expiry (24 hours) and single use stop replays. A stronger design, where owners reply to a mailbox that TRIAGE-1 reads itself, is possible later.
+
+Safeguards specific to these actions:
+- **TRIAGE-1 never reboots or shuts down the server it runs on.** On the reference install that is `term-win-srv`: its CMDB name differs from its operating system host name, so the check also compares IP addresses. More servers can be protected with the setting `chat.never_power_hosts`.
+- A server that was already restarted or shut down from the chat within the minimum gap (default 60 minutes) is refused.
+- The card for a reboot shows who is logged on and would be disconnected.
+- Nothing is sent and no ticket is opened until you press "Email the owners". If the mail cannot be sent, the ticket says so and nothing is changed.
+- Mail must be able to reach the owners, so owner mail needs SMTP or SES. Set **Mail transport for owner approval** (`owners.mail_transport`) to `smtp` or `ses`: it is separate from the main Notice transport, so P1 alerts can stay on SNS. With SNS only, the chat refuses these actions and says why.
+- The reboot check runs in the background; if TRIAGE-1 itself restarts during that time, the check is lost and you ask "is victim-test back?" instead.
+
+### How a Windows update install runs
+
+Windows refuses to install updates from a remote session, so TRIAGE-1 uses a **one-time scheduled task running as SYSTEM**:
+
+```
+Confirm
+  |
+  v
+Write a short script on the server  ->  register task TRIAGE1-WU-<job> (SYSTEM, run once)  ->  start it
+  |                                                    the chat returns at once
+  v
+The task uses the built-in Windows Update API for ONLY the KB numbers you named
+  | writes progress to C:\ProgramData\triage\wu_<job>.json
+  v
+It removes its own task and script when done
+  |
+  v
+TRIAGE-1 checks the result file every 2 minutes (up to 40 minutes) -> writes the result on the ticket -> mails the owners
+```
+
+Nothing restarts automatically. If an update needs a restart, the result says so and you can ask for a reboot (which needs its own owner approval). KB numbers are validated before they go into the script, and the script holds nothing else from the chat.
+
+### Owner contacts and mail
+
+Owner addresses come from the ServiceNow CMDB record of the server (the server table, `cmdb_ci_server` by default). Which fields are read is an admin setting (Notifications section):
+
+| Field on the server CI | Type | Status | What is read |
+|---|---|---|---|
+| `owned_by` | Reference to User | standard | The user's **Email** |
+| `managed_by` | Reference to User | standard | The user's **Email** |
+| `support_group` | Reference to Group | standard | The group's **Email** |
+| `u_owner_email` | String (255) | **new, add it** | One or more addresses (a shared mailbox), separated by comma, semicolon or space |
+| `u_maintenance_window` | String | optional, not used yet | Reserved for showing a maintenance window on cards |
+
+The owners' user and group records must have an email address, or TRIAGE-1 finds nobody to mail and says so.
+
+> **The mail transport must be able to address people.** SMTP and SES can. **SNS cannot**: it publishes to one fixed topic and ignores the To and Cc lists, so owners would never receive the message. TRIAGE-1 checks this and reports "Owner mail will NOT be sent" on the card and on the ticket instead of pretending. Switch Notifications to SMTP or SES to mail owners.
 
 ### Limits you may meet
 
@@ -367,6 +487,15 @@ The registry holds about 115 settings. The ones you are most likely to touch:
 | `knowledge.max_articles`, `max_chars`, `rerank`, `cache_seconds` | How much knowledge reaches the model, whether to rerank, how long to cache. | 3, 1500, on, 120 |
 | `approver_chat.verbs`, `service_aliases`, `action_token_minutes` | Phrase-to-tool table, "print spooler" to "Spooler" names, how long a card stays valid. | see panel, see panel, 5 |
 | `credentials.action_max_per_user_per_hour`, `inquiry_*` | Hourly limits for chat changes and chat read-only checks. | 10; 60 and 20 |
+| `chat.service_protected` | Services the chat will never stop or disable. | winrm, sshd, ssh, dbus, systemd-logind, rpcss, eventlog, termservice, lsass, networkmanager, network |
+| `chat.package_denylist` | Packages the chat will never install or update (a trailing `*` matches a prefix). | sudo, doas, polkit*, pkexec, openssh-server, systemd, glibc, libc6, kernel*, linux-image*, bash ... |
+| `chat.max_packages`, `chat.install_timeout_seconds` | Most packages per request, and the longest an install may run. | 10, 300 |
+| `owners.email_field`, `owners.user_fields`, `owners.group_fields` | Which CMDB fields supply owner addresses. | u_owner_email, owned_by and managed_by, support_group |
+| `owners.approve_words`, `owners.refuse_words`, `owners.condition_words` | What counts as approval, refusal or a condition in an owner's reply. | see panel |
+| `owners.require_sender_match`, `owners.approval_ttl_hours`, `owners.reply_scan_lines` | The reply's From must be an owner; how long a request stays open; how many lines of the reply are read. | on, 24, 3 |
+| `chat.patch_poll_seconds`, `chat.patch_wait_minutes` | How often a running Windows update install is checked, and how long to wait for it. | 120, 40 |
+| `chat.reboot_delay_seconds`, `chat.reboot_min_interval_minutes`, `chat.reboot_verify_minutes` | Warning time before a reboot, least gap between two on one server, how long to wait for it to return. | 60, 60, 15 |
+| `chat.never_power_hosts` | Servers that are never rebooted or shut down from the chat (the TRIAGE-1 server is always protected). | empty |
 | Prompts (eight of them) | The wording the model works from. Editing one rebuilds the agent at once. | built-in text |
 
 Anyone with the `config.manage` permission (Admin and Super admin) may change the safety settings. The admin page also shows run statistics, model usage, chat statistics (including how often answers came from the knowledge base), the audit log and the jobs queue.
@@ -381,7 +510,7 @@ Anyone with the `config.manage` permission (Admin and Super admin) may change th
 |---|---|---|---|
 | L0 | Read-only and ticket bookkeeping | checks, status, disk, CPU, memory, processes, logs, lookups, notes, resolve, escalate | Runs automatically |
 | L1 | Standard change | restart or start service, clear temp files, clean old logs, unlock account | Needs a human. In chat, the engineer's Confirm; in agent runs, an approval on the console |
-| L2 | High risk | kill process, and any tool missing from the table | Needs a human. Not available from chat yet |
+| L2 | High risk | reboot, shutdown, package removal and Windows update install (chat only), kill process, and any tool missing from the table | Needs a human. In chat, reboot, shutdown, package removal and Windows update install need the owners' email approval first, then your Confirm. Kill process is not available from chat |
 | L3 | Critical | (none by default) | No autonomous action, never from chat |
 
 The levels are enforced in code, not in prompts. A tool that is not in the table counts as L2.
@@ -456,7 +585,7 @@ Every approval, run and chat action writes an audit row with who, what and which
 ### Planned
 
 1. **Pick, assign and work an existing ticket** from chat, with engineer-to-ServiceNow-user matching by email and a takeover note.
-2. **Owner approval for high-risk actions** (kill process): a popup with "request approval", which emails the server owners and waits for an approver, or "no approval needed" with a typed reason that is audited and mailed afterwards.
+2. **Kill process from the chat** using the same owner approval, and owners replying to a mailbox that TRIAGE-1 reads itself instead of the engineer pasting the reply (stronger evidence).
 3. **Deployment profiles at first run** (single machine, app plus GPU box, hosted model as an explicit opt-in, custom) and a password chosen during setup.
 4. **Scheduled backups**, and rotation of credentials that were once stored in the project history.
 5. **Removing the old local runbook store** (table, search function, embedding library and the `local` option) one release after the ServiceNow knowledge base proves itself.

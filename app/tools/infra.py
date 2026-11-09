@@ -83,7 +83,7 @@ def _credentials(target: str, host: str, inquiry_user: str | None) -> dict:
     return pam.checkout(hid, host)
 
 
-def _win(script: str, *, inquiry_user: str | None = None) -> str:
+def _win(script: str, *, inquiry_user: str | None = None, timeout: int = 30) -> str:
     """Run a PowerShell script on the Windows server over WinRM and return stdout."""
     host = _host("windows")
     creds = _credentials("windows", host, inquiry_user)
@@ -91,8 +91,8 @@ def _win(script: str, *, inquiry_user: str | None = None) -> str:
         f"http://{host}:{int(creds.get('port', 5985))}/wsman",
         auth=(creds["username"], creds["password"]),
         transport=creds.get("transport", "ntlm"),
-        operation_timeout_sec=20,
-        read_timeout_sec=30,
+        operation_timeout_sec=max(20, timeout - 10),
+        read_timeout_sec=max(30, timeout),
     )
     try:
         r = session.run_ps(script)
@@ -115,7 +115,7 @@ def _win(script: str, *, inquiry_user: str | None = None) -> str:
             log.warning("Could not close WinRM session to %s: %s", host, str(e)[:150])
 
 
-def _linux(command: str, *, inquiry_user: str | None = None) -> str:
+def _linux(command: str, *, inquiry_user: str | None = None, timeout: int = 30) -> str:
     """Run a shell command on the Linux server over SSH and return stdout."""
     host = _host("linux")
     creds = _credentials("linux", host, inquiry_user)
@@ -141,7 +141,7 @@ def _linux(command: str, *, inquiry_user: str | None = None) -> str:
             look_for_keys=False,
             allow_agent=False,
         )
-        _, stdout, stderr = client.exec_command(command, timeout=30)
+        _, stdout, stderr = client.exec_command(command, timeout=timeout)
         out = stdout.read().decode(errors="replace").strip()
         code = stdout.channel.recv_exit_status()
         if code != 0:

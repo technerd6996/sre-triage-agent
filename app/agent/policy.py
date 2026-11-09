@@ -13,10 +13,18 @@ DEFAULT_RISK = {
     "check_ec2_status": 0, "check_security_group": 0, "get_cloudwatch_metric": 0,
     "check_memory_usage": 0, "check_cpu_usage": 0, "top_processes": 0,
     "check_oom_events": 0, "get_service_logs": 0, "find_large_files": 0,
+    # approver-chat-only read-only checks (app/tools/chat_tools.py; the agent does not have them)
+    "check_uptime": 0, "check_pending_reboot": 0, "check_network": 0, "get_event_errors": 0, "list_sessions": 0,
+    "list_failed_services": 0, "list_scheduled_jobs": 0, "check_windows_updates": 0, "list_packages": 0,
+    "list_upgradable": 0, "list_security_updates": 0,
     "escalate_l3": 0,  # notification only; no remediation happens at L3
     # L1: standard operations need a human
     "clear_temp_files": 1, "start_service": 1, "unlock_ad_account": 1,
     "restart_service": 1, "clean_old_logs": 1, "kill_process": 2,
+    # approver-chat-only changes (app/tools/chat_changes.py; the agent does not have them)
+    "stop_service": 1, "set_service_startup": 1, "logoff_session": 1, "run_scheduled_job": 1, "install_packages": 1,
+    # these three need the owners' email approval first (app/owner_approval.py), then the engineer's Confirm
+    "reboot_server": 2, "shutdown_server": 2, "remove_packages": 2, "install_windows_updates": 2, "check_patch_job": 0,
 }
 
 

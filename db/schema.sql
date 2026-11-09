@@ -262,3 +262,26 @@ create table if not exists public.ad_group_mappings (
 create index if not exists idx_runs_created on public.runs (created desc);
 create index if not exists idx_audit_ts on public.audit (ts desc);
 create index if not exists idx_llm_calls_ts on public.llm_calls (ts);
+
+-- Owner approval requests (reboot, shutdown, package removal): see app/owner_approval.py
+create table if not exists public.owner_requests (
+  id text not null,
+  ticket text,
+  requester text,
+  tool text,
+  args_json jsonb,
+  host text,
+  host_mode text,
+  label text,
+  level integer,
+  message text,
+  owners_json jsonb,
+  status text,
+  created double precision,
+  expires double precision,
+  approved_by text,
+  approved_at double precision,
+  approval_text text,
+  constraint owner_requests_pkey primary key (id)
+);
+create index if not exists idx_owner_requests_status on public.owner_requests (status, created desc);

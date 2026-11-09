@@ -616,59 +616,119 @@ async function proposeAction(card, instruction, chat, history, stopThinking) {
             remember(`[could not propose an action for: ${instruction}]`);
             return;
         }
-        const isClose = data.kind === 'close';
-        if (!isClose && data.host_mode === 'named') chat.lastInquiryServer = data.host;
-        card.innerHTML = formatSeverity(isClose
-            ? `**Resolve ${data.ticket}?**\n\nClose notes that will be saved on the ticket:\n\n> ${data.notes.replace(/\n/g, '\n> ')}`
-            : `**${data.title}**\n\n` +
-              `Risk level L${data.level}. A ServiceNow ticket owned by you is opened (outside the agent queue), ` +
-              `the action runs now from this chat, and the result is written to the ticket.`);
-        const row = mkEl('div', 'mt-3 flex gap-3');
-        const confirmBtn = mkEl('button', 'px-5 py-2 rounded-lg bg-[#FFB000] text-black font-semibold text-[15px] hover:bg-[#E6A000]', isClose ? 'Resolve ticket' : 'Confirm');
-        const cancelBtn = mkEl('button', 'px-5 py-2 rounded-lg border border-[#2E3744] text-gray-200 text-[15px] hover:border-gray-500', 'Cancel');
-        confirmBtn.type = cancelBtn.type = 'button';
-        row.append(confirmBtn, cancelBtn);
-        card.appendChild(row);
-        cancelBtn.onclick = () => {
-            row.remove();
-            card.innerHTML += formatSeverity('_Cancelled. Nothing was changed._');
-        };
-        confirmBtn.onclick = async () => {
-            confirmBtn.disabled = cancelBtn.disabled = true;
-            confirmBtn.textContent = 'Working\u2026';
-            try {
-                const r2 = await fetch('/api/approver-chat/act/confirm', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ token: data.token })
-                });
-                const d2 = await r2.json();
-                row.remove();
-                card.innerHTML += formatSeverity(r2.ok
-                    ? `${d2.ok ? '\u2705' : '\u26A0\uFE0F'} ${d2.message}` + (isClose ? '' : `\n\nTicket **${d2.ticket}** (assigned to you, still In Progress).`)
-                    : (d2.detail || 'Could not run it.'));
-                if (r2.ok && d2.ok && !isClose) {
-                    // the ticket stays open until the engineer says so: offer the next step right here
-                    const next = mkEl('div', 'mt-3');
-                    const closeBtn = mkEl('button', 'px-5 py-2 rounded-lg border border-[#FFB000] text-[#FFB000] text-[15px] hover:bg-[#FFB000] hover:text-black', `Close ${d2.ticket}`);
-                    closeBtn.type = 'button';
-                    closeBtn.onclick = async () => {
-                        next.remove();
-                        const bubble = appendDOM('assistant', '');
-                        await proposeAction(bubble, `close ${d2.ticket}`, chat, history, null);
-                    };
-                    next.appendChild(closeBtn);
-                    card.appendChild(next);
-                }
-            } catch (e) {
-                row.remove();
-                card.innerHTML += formatSeverity(`Failed: ${e.message}`);
-            }
-        };
-        remember(isClose ? `[proposed resolving ${data.ticket}]` : `[action proposed: ${data.title}]`);
+        showCard(card, data, chat, history, remember);
     } catch (e) {
         if (stopThinking) stopThinking();
         card.innerHTML = formatSeverity(`Could not check that: ${e.message}`);
+    }
+}
+
+// Shows the card for one proposed change (an action, a ticket close, or a request for the owners' approval).
+function showCard(card, data, chat, history, remember) {
+    if (data.kind === 'owner_request') {
+        // an action that needs the server owners' approval: nothing is sent until the engineer presses the button
+        card.innerHTML = formatSeverity(`**${data.title}**\n\n` +
+            (data.detail && data.detail.length ? data.detail.map((d) => `- ${d}`).join('\n') + '\n\n' : '') +
+            `This needs the server owners' approval first. These owners will be emailed: ${data.owners.join('; ')}.\n\n` +
+            `When an owner replies, paste the whole reply email here (with its From line) and I will check it. Your own Confirm is still the last step.`);
+        const orow = mkEl('div', 'mt-3 flex gap-3');
+        const mailBtn = mkEl('button', 'px-5 py-2 rounded-lg bg-[#FFB000] text-black font-semibold text-[15px] hover:bg-[#E6A000]', 'Email the owners');
+        const ocancel = mkEl('button', 'px-5 py-2 rounded-lg border border-[#2E3744] text-gray-200 text-[15px] hover:border-gray-500', 'Cancel');
+        mailBtn.type = ocancel.type = 'button';
+        orow.append(mailBtn, ocancel);
+        card.appendChild(orow);
+        ocancel.onclick = () => { orow.remove(); card.innerHTML += formatSeverity('_Cancelled. Nothing was sent or changed._'); };
+        mailBtn.onclick = async () => {
+            mailBtn.disabled = ocancel.disabled = true;
+            mailBtn.textContent = 'Sending\u2026';
+            try {
+                const r = await fetch('/api/approver-chat/act/owner-request', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: data.token })
+                });
+                const d = await r.json();
+                orow.remove();
+                card.innerHTML += formatSeverity(r.ok
+                    ? `\u2709\uFE0F Mail sent to ${d.owners.join('; ')}.\n\nRequest **${d.request_id}** on ticket **${d.ticket}**, valid for ${d.hours} hours. ` +
+                      `When an owner replies, paste the whole reply email here.`
+                    : (d.detail || 'The mail could not be sent. Nothing was changed.'));
+            } catch (e) {
+                orow.remove();
+                card.innerHTML += formatSeverity(`Failed: ${e.message}`);
+            }
+        };
+        remember(`[asked the owners to approve: ${data.title}]`);
+        return;
+    }
+    const isClose = data.kind === 'close';
+    if (!isClose && data.host_mode === 'named') chat.lastInquiryServer = data.host;
+    card.innerHTML = formatSeverity(isClose
+        ? `**Resolve ${data.ticket}?**\n\nClose notes that will be saved on the ticket:\n\n> ${data.notes.replace(/\n/g, '\n> ')}`
+        : `**${data.title}**\n\n` +
+          (data.detail && data.detail.length ? data.detail.map((d) => `- ${d}`).join('\n') + '\n\n' : '') +
+          `Risk level L${data.level}. A ServiceNow ticket owned by you is opened (outside the agent queue), ` +
+          `the action runs now from this chat, and the result is written to the ticket.`);
+    const row = mkEl('div', 'mt-3 flex gap-3');
+    const confirmBtn = mkEl('button', 'px-5 py-2 rounded-lg bg-[#FFB000] text-black font-semibold text-[15px] hover:bg-[#E6A000]', isClose ? 'Resolve ticket' : 'Confirm');
+    const cancelBtn = mkEl('button', 'px-5 py-2 rounded-lg border border-[#2E3744] text-gray-200 text-[15px] hover:border-gray-500', 'Cancel');
+    confirmBtn.type = cancelBtn.type = 'button';
+    row.append(confirmBtn, cancelBtn);
+    card.appendChild(row);
+    cancelBtn.onclick = () => {
+        row.remove();
+        card.innerHTML += formatSeverity('_Cancelled. Nothing was changed._');
+    };
+    confirmBtn.onclick = async () => {
+        confirmBtn.disabled = cancelBtn.disabled = true;
+        confirmBtn.textContent = 'Working\u2026';
+        try {
+            const r2 = await fetch('/api/approver-chat/act/confirm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: data.token })
+            });
+            const d2 = await r2.json();
+            row.remove();
+            card.innerHTML += formatSeverity(r2.ok
+                ? `${d2.ok ? '\u2705' : '\u26A0\uFE0F'} ${d2.message}` + (d2.owner_note ? `\n\n${d2.owner_note}` : '') + (isClose ? '' : `\n\nTicket **${d2.ticket}** (assigned to you, still In Progress).`)
+                : (d2.detail || 'Could not run it.'));
+            if (r2.ok && d2.ok && !isClose) {
+                // the ticket stays open until the engineer says so: offer the next step right here
+                const next = mkEl('div', 'mt-3');
+                const closeBtn = mkEl('button', 'px-5 py-2 rounded-lg border border-[#FFB000] text-[#FFB000] text-[15px] hover:bg-[#FFB000] hover:text-black', `Close ${d2.ticket}`);
+                closeBtn.type = 'button';
+                closeBtn.onclick = async () => {
+                    next.remove();
+                    const bubble = appendDOM('assistant', '');
+                    await proposeAction(bubble, `close ${d2.ticket}`, chat, history, null);
+                };
+                next.appendChild(closeBtn);
+                card.appendChild(next);
+            }
+        } catch (e) {
+            row.remove();
+            card.innerHTML += formatSeverity(`Failed: ${e.message}`);
+        }
+    };
+    remember(isClose ? `[proposed resolving ${data.ticket}]` : `[action proposed: ${data.title}]`);
+}
+
+// The engineer pasted an owner's reply email. The server decides whether it is an approval; if it is, the normal Confirm card comes back.
+async function handleOwnerReply(card, text, chat, history, stopThinking) {
+    const remember = (note) => history.push({ role: 'user', content: '[owner reply pasted]', skip: true },
+                                            { role: 'assistant', content: note, skip: true });
+    try {
+        const res = await fetch('/api/approver-chat/act/owner-reply', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text })
+        });
+        const data = await res.json();
+        if (stopThinking) stopThinking();
+        if (!res.ok) { card.innerHTML = formatSeverity(data.detail || 'I could not read that reply.'); remember('[owner reply not read]'); return; }
+        if (data.verdict === 'approved') { showCard(card, data.card, chat, history, remember); return; }
+        card.innerHTML = formatSeverity(`**Not accepted as an approval** (${data.request_id}).\n\n${data.message}\n\nNothing will run.`);
+        remember(`[owner reply for ${data.request_id}: ${data.verdict}]`);
+    } catch (e) {
+        if (stopThinking) stopThinking();
+        card.innerHTML = formatSeverity(`Could not check that reply: ${e.message}`);
     }
 }
 
@@ -721,14 +781,22 @@ async function streamResponse(query) {
     const isApprover = (currentUser?.caps || []).includes('console.act');
     const closeMatch = isApprover && /\b(close|resolve)\b/i.test(query) && /\bINC\d{5,}\b/i.test(query);
     const actionMatch = isApprover
-        && (closeMatch || /\b(restart|kill|stop|start|unlock)\b|\bfree up\b/i.test(query)
+        && (closeMatch || /\b(restart|kill|stop|start|unlock|enable|disable|install|upgrade|logoff|reboot|uninstall|remove|poweroff)\b|\bshut ?down\b|\bpower off\b|\bfree up\b|\blog off\b|\brun (the )?(scheduled )?(task|job)\b|\bupdate (the )?packages?\b/i.test(query)
             || (/\b(clean|clear)\b/i.test(query) && /\b(temp|temporary|logs?)\b/i.test(query)))
         // a question mark means they're asking, not instructing, unless it is a polite request:
         // "can we restart ...?", "could you stop ...?"
+        && !/^\s*(how|what|why|explain)\b/i.test(query)        // a how-to or explanation question is not an instruction
         && (closeMatch || !/\?\s*$/.test(query) || /^\s*(please\s+)?(can|could|would|should|shall|may)\s+(we|you|i)\b/i.test(query));
     const inquireMatch = !actionMatch && isApprover
-        && /\b(cpu|memory|mem|disks?|drives?|storage|process(es)?|cmdb|criticality|support group|health check)\b/i.test(query);
+        && (/\b(cpu|memory|mem|disks?|drives?|storage|process(es)?|cmdb|criticality|support group|health check)\b/i.test(query)
+            || /\b(uptime|up time|boot( |-)?up|boot time|booted|ping|dns|port|nslookup|telnet|reachab\w*|journal(ctl)?|syslog|sessions?|quser|cron|timers?|hotfix|patch(es|ing)?|packages?|upgradable|rpm|dpkg|apt)\b/i.test(query)
+            || /(last (boot|reboot|restart)|(pending|required|needed) (reboot|restart)|(reboot|restart) (pending|required|needed)|needs? (a )?(reboot|restart)|event (log|errors?)|error log|recent errors|logged (in|on)|scheduled (tasks?|jobs?)|(failed|stopped) (services?|units)|windows updates?|security (updates?|patches)|can .{0,60}\breach\b|is .{0,40}\bback\b)/i.test(query));
 
+    if (isApprover && /\bREQ-[A-Z0-9]{6}\b/.test(query) && query.length > 40) {
+        await handleOwnerReply(contentNode, query, chat, activeHistory, stopThinking);
+        backToListening();
+        return;
+    }
     if (actionMatch) {
         await proposeAction(contentNode, query, chat, activeHistory, stopThinking);
         backToListening();          // the chat is free for the next command while a card waits for a click
@@ -775,7 +843,13 @@ async function streamResponse(query) {
                 } else if (r.error) {
                     line += `the check failed: ${r.error}`;
                 } else if (r.summary) {
-                    line += r.summary;
+                    line += r.summary + (/[.!?]$/.test(r.summary) ? '' : '.');
+                    if (Array.isArray(r.lines) && r.lines.length) {
+                        // a list from one of the newer checks (updates, packages, sessions, events ...): one line each
+                        line += '\n\n' + r.lines.map((l) => `- ${String(l).replace(/^[-*]\s*/, '')}`).join('\n');
+                        if (r.more) line += `\n- ... and ${r.more} more`;
+                    }
+                    if (r.note) line += `\n\n_${r.note}_`;
                 } else {
                     line += JSON.stringify(r);
                 }

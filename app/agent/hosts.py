@@ -42,10 +42,12 @@ def resolve_server(ticket_text: str, ci_name: str = ""):
     active.bind({})  # never carry a previous ticket's server over
     try:
         hosts = registry.get_hosts()
-        host = hosts.find_by_name(ci_name) if ci_name and hasattr(hosts, "find_by_name") else None
-        if not host and ci_name:                 # providers without find_by_name: match the name as text
-            host = hosts.find_in_text(ci_name)
-        host = host or hosts.find_in_text(ticket_text)
+        # A server named in the message wins over the one the chat remembered ("cpu on zabbix-mon" must not run on the
+        # server asked about a minute ago). The remembered name is the fallback when the message names none, or several.
+        host = hosts.find_in_text(ticket_text)
+        if not host and ci_name:
+            host = hosts.find_by_name(ci_name) if hasattr(hosts, "find_by_name") else None
+            host = host or hosts.find_in_text(ci_name)         # providers without find_by_name: match the name as text
     except Exception as e:
         return None, f"Host lookup failed: {str(e)[:150]}."
     if not host:
