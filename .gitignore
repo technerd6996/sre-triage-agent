@@ -23,3 +23,6 @@ Creds/
 *.ppk
 *.db-shm
 *.db-wal
+
+# local project memory for the assistant (not part of the product)
+CLAUDE.md
