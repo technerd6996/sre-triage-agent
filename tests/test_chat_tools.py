@@ -232,3 +232,14 @@ def test_other_argument_reading():
     assert chat_reads.source_hint("ping db01 from web01") == "web01"
     assert chat_reads.source_hint("can web01 reach db01 on port 1433") == "web01"
     assert chat_reads.source_hint("can it reach db01") == ""
+
+
+@pytest.mark.parametrize("q", ["is the victim-test rebooted?", "is it up yet?", "has victim-test been restarted", "is victim-test up",
+                               "did victim-test come back", "when was victim-test rebooted"])
+def test_follow_up_questions_after_a_reboot_route_to_the_uptime_check(q):
+    assert chat_reads.pick(q) is T.check_uptime
+
+
+@pytest.mark.parametrize("q", ["reboot victim-test for patch update", "does victim-test need a reboot"])
+def test_asking_for_a_reboot_is_not_an_uptime_question(q):
+    assert chat_reads.pick(q) is not T.check_uptime

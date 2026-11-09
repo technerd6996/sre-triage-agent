@@ -7,8 +7,8 @@ Everything below is for **you** to set up. None of it was changed by the build. 
 | Item | State |
 |---|---|
 | 1 Restart the app | Done by the assistant (see the final report) |
-| 2 Owner mail transport | **Needs you**: SES or SMTP details. A new setting was built so P1 alerts can stay on SNS |
-| 3 `u_owner_email` field and owner emails | **Needs you**: the integration user cannot create CMDB fields (HTTP 403) and the owner addresses are yours to supply |
+| 2 Owner mail transport | **Done and verified (2026-11-09)**: SES accepts mail from `escalations_turtle@outlook.com` in ap-south-2 (`python -m scripts.test_ses` prints OK). P1 alerts stay on SNS. **Still to check by you**: whether the SES account is in sandbox (SES console > Account dashboard). In sandbox, each owner mailbox must also be a verified identity |
+| 3 Owner emails | **Done for the three test servers (2026-11-10)**: `owned_by` = VedaVidyadaran S on term-win-srv, victim-test and zabbix-mon; owner mail resolves to the email on that user's **profile** (`vedavidyadaran@outlook.com`). TRIAGE-1 now matches your ServiceNow user by username when the profile email differs from your login, and copies you on owner mail using the profile email. For real owners: set `owned_by` or `managed_by` to users whose profile has a deliverable email (no CMDB field needed). The optional `u_owner_email` field is still not created |
 | 4 `zabbix-mon` credential | **Needs you**: the secret is not available to the assistant |
 | 5 Publish the six runbooks | **Needs you**: the integration user cannot publish |
 | 6 Linux sudoers | **Needs you**. Finding: `ec2-user` on `victim-test` has `(ALL) NOPASSWD: ALL`, full unrestricted root |
@@ -41,12 +41,11 @@ Today's findings that drive this list:
 SNS publishes to one fixed topic and ignores To and Cc, so owners would never get the request or the notices. **Do not switch the main Notice transport**: your P1 alerts use it. Use the new, separate setting instead.
 
 - Where: Admin > Configuration > **Notifications** > **Mail transport for owner approval** (`owners.mail_transport`). It is `same` today; choose `ses` or `smtp`.
-- **Option A, SES** (already half configured: region `ap-south-2`, sender `escalations_turtle@outlook.com`):
-  1. In the AWS console, region ap-south-2, verify that sender identity in SES (an Outlook address works if you click the verification mail).
-  2. Give the IAM user `agent-traige` permission to send. The assistant found it has **no SES permissions at all** (access denied), so add a policy such as:
-     `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ses:SendEmail","Resource":"*"}]}`
-     (narrow `Resource` to the identity ARN if you prefer).
-  3. A new SES account is in **sandbox**: it can only mail addresses you have verified. Verify each owner mailbox, or request production access.
+- **Option A, SES** (configured: region `ap-south-2`, sender `escalations_turtle@outlook.com`; the owner transport is **already set to `ses`**):
+  1. **You must verify the sender.** In the AWS console, region **ap-south-2**: SES > Verified identities > Create identity > Email address > `escalations_turtle@outlook.com`. AWS sends a verification mail to that Outlook mailbox: click its link (valid 24 hours). The IAM user `agent-traige` cannot do this itself (it may send, but not verify identities), and the assistant did not try other credentials.
+  2. Check it: `python -m scripts.test_ses` from the repo root. It sends one message to Amazon's mailbox simulator, so nobody receives mail. It prints `OK` when the sender and the send permission both work. Today it prints `Email address is not verified`; that is the only thing missing.
+  3. A new SES account is in **sandbox**: even after step 1 it can only mail addresses you have verified. Verify each owner mailbox as an SES identity too, or request production access (SES console > Account dashboard).
+  4. Optional tidy-up: the IAM policy for `agent-traige` only needs `ses:SendEmail`.
 - **Option B, SMTP**: fill `notifications.smtp_host`, `smtp_port`, `smtp_user`, `smtp_password`, `smtp_from`, then set the owner transport to `smtp`.
 - Check: the Notifications **Test** button sends nothing. The real check is item 11, step 3. Until this is set, the chat refuses owner-approval actions and says why.
 

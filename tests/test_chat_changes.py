@@ -381,3 +381,39 @@ def test_owner_mail_can_use_its_own_transport_while_p1_alerts_stay_on_sns(monkey
     monkeypatch.setattr(owner_contacts.config, "get", lambda k: "same" if k == "owners.mail_transport" else real(k))
     ok, why = owner_contacts.can_address()
     assert not ok and "Mail transport for owner approval" in why
+
+
+@pytest.mark.real_cc
+def test_the_cc_address_is_the_profile_email_not_the_login_and_never_a_duplicate(monkeypatch):
+    seen = []
+
+    def fake(method, path, **kw):
+        seen.append(kw["params"]["sysparm_query"])
+        return [{"email": "Real.Person@Gmail.com"}]
+    monkeypatch.setattr(owner_contacts, "_request", fake)
+    assert owner_contacts.cc_for("vedavidyadaran@lab.local", ["ann@lab.local"]) == ["real.person@gmail.com"]
+    assert "email=vedavidyadaran@lab.local" in seen[0] and "user_name=vedavidyadaran" in seen[0]
+    assert owner_contacts.cc_for("vedavidyadaran@lab.local", ["real.person@gmail.com"]) == []             # already a recipient
+    monkeypatch.setattr(owner_contacts, "_request", lambda *a, **k: [])
+    assert owner_contacts.cc_for("nobody@lab.local", []) == [] and owner_contacts.cc_for("", []) == []
+
+    def boom(*a, **k):
+        raise RuntimeError("SNOW down")
+    monkeypatch.setattr(owner_contacts, "_request", boom)
+    assert owner_contacts.cc_for("x@lab.local", []) == []                                                  # never raises
+
+
+def test_a_user_is_found_by_username_when_the_profile_email_no_longer_matches(monkeypatch):
+    from app.adapters.servicenow import client as snow
+    asked = []
+
+    def fake(method, path, **kw):
+        q = kw["params"]["sysparm_query"]
+        asked.append(q)
+        if "user_name=vedavidyadaran" in q:
+            return [{"sys_id": "u-veda"}]
+        return []
+    monkeypatch.setattr(snow, "_request", fake)
+    assert snow._user_for("vedavidyadaran@lab.local") == "u-veda"
+    assert asked[0].endswith("email=vedavidyadaran@lab.local") and "user_name=vedavidyadaran" in asked[1]
+    assert snow._user_for("ghost@lab.local") is None and snow._user_for("") is None

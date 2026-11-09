@@ -14,7 +14,7 @@ _RULES = (
     (r"upgradable|outdated packages|available upgrades|package updates|packages? (that )?(can|could) be (updated|upgraded)", T.list_upgradable),
     (r"(patch|update)s? (job|status|progress|result)|status of (the )?(patch|update)|did the (patch|update)", T.check_patch_job),
     (r"windows updates?|\bhotfix|\bpatch(es|ing)?\b|pending updates|missing updates|installed updates|\bkb\d{6,}", T.check_windows_updates),
-    (r"\buptime\b|\bup ?time\b|boot( |-)?up|boot time|\bbooted\b|last (boot|reboot|restart)|when was .{0,40}(rebooted|restarted|booted)|how long .{0,40}\bup\b|is .{0,40}\bback\b",
+    (r"\buptime\b|\bup ?time\b|boot( |-)?up|boot time|\bbooted\b|last (boot|reboot|restart)|when was .{0,40}(rebooted|restarted|booted)|how long .{0,40}\bup\b|is .{0,40}\bback\b|\b(has|have|did|was|is)\b.{0,40}\b(rebooted|restarted|booted)\b|\bup yet\b|\bis (it|[a-z0-9._-]+) up\b|\b(come|came) back\b",
      T.check_uptime),
     (r"pending (reboot|restart)|(reboot|restart) (is )?(pending|required|needed)|needs? (a )?(reboot|restart)|reboot required",
      T.check_pending_reboot),

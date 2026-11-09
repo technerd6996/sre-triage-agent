@@ -330,7 +330,7 @@ def _patch_worker(host: str, host_id: str, platform: str, ticket: str, user: str
     try:
         oc = owner_contacts.contacts(host)
         if oc["emails"]:
-            owner_contacts.send(oc["emails"], [user] if "@" in user else [], f"[TRIAGE-1] Windows updates on {host}: result ({ticket})",
+            owner_contacts.send(oc["emails"], owner_contacts.cc_for(user, oc["emails"]), f"[TRIAGE-1] Windows updates on {host}: result ({ticket})",
                                 f"Result of the update install on {host}, started at the request of {user}.\n\n{text}\n\nTicket: {ticket}")
     except Exception:                                              # noqa: BLE001
         pass

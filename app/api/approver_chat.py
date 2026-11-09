@@ -231,7 +231,7 @@ def _mail_owners_after(action: dict, inst: dict, who: str, number: str, text: st
     body = "\n".join([f"TRIAGE-1 made a change on {inst['name']} at the request of {who}.", "",
                       f"What: {action['label']}", f"Result: {text}", f"Ticket: {number}", ""] + lines[:12] +
                      ["", "This message is a notice. No reply is needed unless something looks wrong."])
-    ok, detail = owner_contacts.send(oc["emails"], [who] if "@" in who else [], f"[TRIAGE-1] {action['label']} - done ({number})", body)
+    ok, detail = owner_contacts.send(oc["emails"], owner_contacts.cc_for(who, oc["emails"]), f"[TRIAGE-1] {action['label']} - done ({number})", body)
     store.audit(None, number, who, "chat_owner_mail_sent" if ok else "chat_owner_mail_failed",
                 f"to={','.join(oc['emails'])} {'' if ok else detail}"[:300])
     return (f"Owners mailed: {', '.join(oc['emails'])}." if ok else f"The owner mail FAILED ({detail}). Tell the owners yourself.")
@@ -274,7 +274,7 @@ def act_owner_request(req: OwnerRequestBody, request: Request):
         raise HTTPException(502, f"Could not open the ticket, so nothing was sent: {str(e)[:150]}")
     row = owner_approval.create_request(who, action, oc["emails"], ticket.id)
     subject, body = owner_approval.request_mail(row, who, action["message"])
-    ok, detail = owner_contacts.send(oc["emails"], [who] if "@" in who else [], subject, body)
+    ok, detail = owner_contacts.send(oc["emails"], owner_contacts.cc_for(who, oc["emails"]), subject, body)
     tk = registry.get_ticketing()
     if not ok:
         owner_approval.mark(row["id"], status="cancelled")

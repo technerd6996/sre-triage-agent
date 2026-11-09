@@ -601,8 +601,8 @@ function backToListening() {
 // A change asked for in the chat. Step 1 asks the server for ONE exact action (a service restart, or resolving a
 // ticket) and shows it as a card. Nothing changes until Confirm, which sends the card's single-use token.
 async function proposeAction(card, instruction, chat, history, stopThinking) {
-    const remember = (note) => history.push({ role: 'user', content: instruction, skip: true },
-                                            { role: 'assistant', content: note, skip: true });
+    const remember = (note) => { const e = { role: 'assistant', content: note, skip: true };
+                                 history.push({ role: 'user', content: instruction, skip: true }, e); return e; };
     try {
         const res = await fetch('/api/approver-chat/act/propose', {
             method: 'POST',
@@ -613,7 +613,7 @@ async function proposeAction(card, instruction, chat, history, stopThinking) {
         if (stopThinking) stopThinking();
         if (!res.ok) {
             card.innerHTML = formatSeverity(data.detail || 'I could not work out what to run.');
-            remember(`[could not propose an action for: ${instruction}]`);
+            remember(`I could not work out an action for: ${instruction}`);
             return;
         }
         showCard(card, data, chat, history, remember);
@@ -625,7 +625,11 @@ async function proposeAction(card, instruction, chat, history, stopThinking) {
 
 // Shows the card for one proposed change (an action, a ticket close, or a request for the owners' approval).
 function showCard(card, data, chat, history, remember) {
+    let noteRef = null;                                    // the transcript entry for this card, rewritten when the outcome is known
+    const setNote = (text) => { if (noteRef) noteRef.content = text; };
+    const rememberAction = (e) => { (chat.actions ??= []).push({ ...e, at: Date.now() }); chat.actions = chat.actions.slice(-20); saveState(); };
     if (data.kind === 'owner_request') {
+        chat.lastInquiryServer = data.host;
         // an action that needs the server owners' approval: nothing is sent until the engineer presses the button
         card.innerHTML = formatSeverity(`**${data.title}**\n\n` +
             (data.detail && data.detail.length ? data.detail.map((d) => `- ${d}`).join('\n') + '\n\n' : '') +
@@ -651,12 +655,16 @@ function showCard(card, data, chat, history, remember) {
                     ? `\u2709\uFE0F Mail sent to ${d.owners.join('; ')}.\n\nRequest **${d.request_id}** on ticket **${d.ticket}**, valid for ${d.hours} hours. ` +
                       `When an owner replies, paste the whole reply email here.`
                     : (d.detail || 'The mail could not be sent. Nothing was changed.'));
+                if (r.ok) {
+                    setNote(`Asked the owners to approve: ${data.title} Mail sent to ${d.owners.join('; ')}. Request ${d.request_id} on ticket ${d.ticket}.`);
+                    rememberAction({ kind: 'owner_request', ticket: d.ticket, request: d.request_id, label: data.title, detail: `waiting for the owners, mailed to ${d.owners.join('; ')}` });
+                }
             } catch (e) {
                 orow.remove();
                 card.innerHTML += formatSeverity(`Failed: ${e.message}`);
             }
         };
-        remember(`[asked the owners to approve: ${data.title}]`);
+        noteRef = remember(`Proposed, owners not asked yet: ${data.title}`);
         return;
     }
     const isClose = data.kind === 'close';
@@ -691,6 +699,10 @@ function showCard(card, data, chat, history, remember) {
             card.innerHTML += formatSeverity(r2.ok
                 ? `${d2.ok ? '\u2705' : '\u26A0\uFE0F'} ${d2.message}` + (d2.owner_note ? `\n\n${d2.owner_note}` : '') + (isClose ? '' : `\n\nTicket **${d2.ticket}** (assigned to you, still In Progress).`)
                 : (d2.detail || 'Could not run it.'));
+            if (r2.ok) {
+                setNote(`${data.title || ('Resolve ' + d2.ticket)} -> ${d2.message}` + (d2.owner_note ? ` ${d2.owner_note}` : '') + ` Ticket ${d2.ticket}.`);
+                rememberAction({ kind: isClose ? 'closed' : 'done', ticket: d2.ticket, label: data.title || ('resolve ' + d2.ticket), result: d2.message });
+            }
             if (r2.ok && d2.ok && !isClose) {
                 // the ticket stays open until the engineer says so: offer the next step right here
                 const next = mkEl('div', 'mt-3');
@@ -709,27 +721,41 @@ function showCard(card, data, chat, history, remember) {
             card.innerHTML += formatSeverity(`Failed: ${e.message}`);
         }
     };
-    remember(isClose ? `[proposed resolving ${data.ticket}]` : `[action proposed: ${data.title}]`);
+    noteRef = remember(isClose ? `Proposed resolving ${data.ticket}.` : `Proposed: ${data.title}`);
 }
 
 // The engineer pasted an owner's reply email. The server decides whether it is an approval; if it is, the normal Confirm card comes back.
 async function handleOwnerReply(card, text, chat, history, stopThinking) {
-    const remember = (note) => history.push({ role: 'user', content: '[owner reply pasted]', skip: true },
-                                            { role: 'assistant', content: note, skip: true });
+    const remember = (note) => { const e = { role: 'assistant', content: note, skip: true };
+                                 history.push({ role: 'user', content: 'Owner reply pasted', skip: true }, e); return e; };
     try {
         const res = await fetch('/api/approver-chat/act/owner-reply', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text })
         });
         const data = await res.json();
         if (stopThinking) stopThinking();
-        if (!res.ok) { card.innerHTML = formatSeverity(data.detail || 'I could not read that reply.'); remember('[owner reply not read]'); return; }
+        if (!res.ok) { card.innerHTML = formatSeverity(data.detail || 'I could not read that reply.'); remember('The owner reply could not be read.'); return; }
         if (data.verdict === 'approved') { showCard(card, data.card, chat, history, remember); return; }
         card.innerHTML = formatSeverity(`**Not accepted as an approval** (${data.request_id}).\n\n${data.message}\n\nNothing will run.`);
-        remember(`[owner reply for ${data.request_id}: ${data.verdict}]`);
+        remember(`Owner reply for ${data.request_id} was not accepted (${data.verdict}). Nothing ran.`);
     } catch (e) {
         if (stopThinking) stopThinking();
         card.innerHTML = formatSeverity(`Could not check that reply: ${e.message}`);
     }
+}
+
+// "What was the ticket number?" is answered from what this chat actually did (it is not a question for the model).
+function answerFromMemory(query, chat) {
+    const acts = chat.actions || [];
+    if (!acts.length) return '';
+    const asks = /^\s*(what|which|whats|what's|show|tell|give|remind|where|can you (tell|give|show))\b.*\b(ticket|incident|request|req)\b/i.test(query)
+              || /\b(ticket|incident|request)\s*(number|no\.?|id|code)\b/i.test(query);
+    if (!asks) return '';
+    const by = {};
+    acts.forEach((a) => { const k = a.ticket; by[k] = { ...(by[k] || {}), ...a, request: a.request || (by[k] || {}).request }; });
+    const lines = Object.values(by).slice(-3).reverse().map((a) =>
+        `- **${a.ticket}**${a.request ? ` (request ${a.request})` : ''}: ${a.label}` + (a.result ? ` -> ${a.result}` : (a.detail ? ` (${a.detail})` : '')));
+    return 'From this chat:\n\n' + lines.join('\n');
 }
 
 async function streamResponse(query) {
@@ -790,10 +816,18 @@ async function streamResponse(query) {
     const inquireMatch = !actionMatch && isApprover
         && (/\b(cpu|memory|mem|disks?|drives?|storage|process(es)?|cmdb|criticality|support group|health check)\b/i.test(query)
             || /\b(uptime|up time|boot( |-)?up|boot time|booted|ping|dns|port|nslookup|telnet|reachab\w*|journal(ctl)?|syslog|sessions?|quser|cron|timers?|hotfix|patch(es|ing)?|packages?|upgradable|rpm|dpkg|apt)\b/i.test(query)
-            || /(last (boot|reboot|restart)|(pending|required|needed) (reboot|restart)|(reboot|restart) (pending|required|needed)|needs? (a )?(reboot|restart)|event (log|errors?)|error log|recent errors|logged (in|on)|scheduled (tasks?|jobs?)|(failed|stopped) (services?|units)|windows updates?|security (updates?|patches)|can .{0,60}\breach\b|is .{0,40}\bback\b)/i.test(query));
+            || /(last (boot|reboot|restart)|(pending|required|needed) (reboot|restart)|(reboot|restart) (pending|required|needed)|needs? (a )?(reboot|restart)|event (log|errors?)|error log|recent errors|logged (in|on)|scheduled (tasks?|jobs?)|(failed|stopped) (services?|units)|windows updates?|security (updates?|patches)|can .{0,60}\breach\b|is .{0,40}\bback\b|(has|have|did|was|is)\b.{0,40}\b(rebooted|restarted|booted)\b|\bup yet\b|\bis (it|[a-z0-9._-]+) up\b|(come|came) back)/i.test(query));
 
     if (isApprover && /\bREQ-[A-Z0-9]{6}\b/.test(query) && query.length > 40) {
         await handleOwnerReply(contentNode, query, chat, activeHistory, stopThinking);
+        backToListening();
+        return;
+    }
+    const remembered = isApprover ? answerFromMemory(query, chat) : '';
+    if (remembered) {
+        stopThinking();
+        contentNode.innerHTML = formatSeverity(remembered);
+        activeHistory.push({ role: 'user', content: query, skip: true }, { role: 'assistant', content: remembered, skip: true });
         backToListening();
         return;
     }

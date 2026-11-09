@@ -181,12 +181,27 @@ def _user_by_email(email: str):
     return rows[0]["sys_id"] if rows else None
 
 
+def _user_for(login: str):
+    """sys_id of the person behind a TRIAGE-1 login such as 'vedavidyadaran@lab.local': by email first, then by user name
+    ('vedavidyadaran'). Lets a user change the email on their ServiceNow profile without losing ticket ownership."""
+    login = (login or "").replace("^", "").strip()
+    found = _user_by_email(login)
+    if found or not login:
+        return found
+    name = login.split("@", 1)[0].strip()
+    if not name:
+        return None
+    rows = _request("GET", "sys_user", params={
+        "sysparm_query": f"active=true^user_name={name}", "sysparm_limit": 1, "sysparm_fields": "sys_id"})
+    return rows[0]["sys_id"] if rows else None
+
+
 def create_incident_for(short_description: str, description: str, user_email: str, urgency: int = 3,
                         impact: int = 3, ci: str = "", note: str = "") -> dict:
     """Incident opened by a person from the approver chat: they are the caller and the assignee, and it is NOT put
     in the L1 assignment group, so the agent queue never sees it. If no ServiceNow user has this email the ticket is
     still created (caller = integration user, unassigned) and the work note names the person."""
-    uid = _user_by_email(user_email)
+    uid = _user_for(user_email)
     body = {
         "short_description": short_description,
         "description": description,
@@ -202,7 +217,7 @@ def create_incident_for(short_description: str, description: str, user_email: st
         if ci_id:
             body["cmdb_ci"] = ci_id
     created = _request("POST", "incident", json=body)
-    who = user_email if uid else f"{user_email} (no ServiceNow user has this email, so the ticket is unassigned)"
+    who = user_email if uid else f"{user_email} (no ServiceNow user matches this email or user name, so the ticket is unassigned)"
     _request("PATCH", f"incident/{created['sys_id']}", json={
         "state": str(STATE_IN_PROGRESS), "work_notes": note or f"Opened from TRIAGE-1 chat by {who}."})
     return _fetch(created["number"])

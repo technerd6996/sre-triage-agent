@@ -15,9 +15,9 @@ log = logging.getLogger("triage.owners")
 config.register("owners.email_field", "CMDB text field holding owner email addresses", "u_owner_email", "text", "notifications",
                 help="A text field on the server CI with one or more addresses (a shared mailbox), separated by comma, semicolon or space. "
                      "Leave empty if you only use the standard owner fields.")
-config.register("owners.user_fields", "CMDB user fields whose email is used", "owned_by,managed_by", "text", "notifications",
+config.register("owners.user_fields", "CMDB user fields whose email is used", "owned_by,managed_by,assigned_to", "text", "notifications",
                 help="Reference-to-user fields on the server CI. Each user's Email on the user record is mailed.")
-config.register("owners.group_fields", "CMDB group fields whose email is used", "support_group", "text", "notifications",
+config.register("owners.group_fields", "CMDB group fields whose email is used", "support_group,managed_by_group", "text", "notifications",
                 help="Reference-to-group fields on the server CI. The group's Email on the group record is mailed.")
 
 config.register("owners.mail_transport", "Mail transport for owner approval and owner notices", "same", "select", "notifications",
@@ -94,6 +94,22 @@ def contacts(host_name: str) -> dict:
     except Exception as e:                                         # noqa: BLE001  a CMDB problem must not break the action
         out["error"] = f"owner lookup failed: {str(e)[:150]}"
     return out
+
+
+def cc_for(login: str, to: list) -> list:
+    """The engineer's own mail address to copy on owner mail: the Email on their ServiceNow PROFILE (found by email or user name),
+    not their login id, which may be a lab-only address nobody can receive at. Never a duplicate of a recipient. Never raises."""
+    try:
+        clean = (login or "").replace("^", "").strip()
+        name = clean.split("@", 1)[0]
+        if not clean:
+            return []
+        rows = _request("GET", "sys_user", params={"sysparm_query": f"active=true^email={clean}^ORuser_name={name}",
+                                                   "sysparm_limit": 1, "sysparm_fields": "email"})
+        have = {t.lower() for t in to}
+        return [e for e in emails_in(rows[0].get("email", "") if rows else "")[:1] if e not in have]
+    except Exception:                                              # noqa: BLE001
+        return []
 
 
 def _notifier():

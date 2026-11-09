@@ -212,7 +212,7 @@ def test_the_ticket_is_the_engineers_and_not_in_the_agent_group(monkeypatch):
 
 def test_an_unknown_email_still_gets_an_unassigned_ticket_with_a_note(monkeypatch):
     calls = _snow_calls(monkeypatch, None)
-    monkeypatch.setattr(snow, "_user_by_email", lambda e: None)
+    monkeypatch.setattr(snow, "_user_for", lambda login: None)            # neither the email nor the user name matches anyone
     monkeypatch.setattr(snow, "_user_id", lambda u: "svc")
     snow.create_incident_for("t", "d", "nobody@lab.local")
     body = next(kw["json"] for m, p, kw in calls if m == "POST")
