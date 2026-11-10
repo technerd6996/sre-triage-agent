@@ -35,8 +35,14 @@ RETRY_METHODS = {"GET", "PATCH", "PUT"}  # POST (create) is never retried: it co
 
 
 def _request(method: str, path: str, identity: str = "agent", **kwargs):
-    """Single place that talks to SNOW. Retries transient failures on safe methods.
-    Raises with the response body on errors."""
+    """Single place that talks to SNOW (timed as telemetry: system 'servicenow', operation 'GET incident')."""
+    from app import telemetry
+    with telemetry.outbound("servicenow", f"{method.upper()} {str(path).split('/')[0]}"):
+        return _request_raw(method, path, identity, **kwargs)
+
+
+def _request_raw(method: str, path: str, identity: str = "agent", **kwargs):
+    """Retries transient failures on safe methods. Raises with the response body on errors."""
     base = os.environ["SNOW_INSTANCE"].strip().rstrip("/")
     if not base.startswith("http"):
         base = f"https://{base}.service-now.com" if "." not in base else f"https://{base}"

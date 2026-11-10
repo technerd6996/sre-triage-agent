@@ -120,6 +120,10 @@ def service_context(host: str, service: str = "") -> dict:
         return hit[1]
     out = {"host": host, "service": service, "found": False, "scope": "", "criticality": None,
            "services": [], "summary": "", "error": ""}
+    from app.ports import registry
+    if not registry.is_servicenow():
+        out["error"] = "CMDB relationships are read from ServiceNow, and this install uses another ticketing tool"
+        return out
     try:
         host_ids = _find(host) if host else []
         start, scope = [], ""

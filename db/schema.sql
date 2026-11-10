@@ -285,3 +285,20 @@ create table if not exists public.owner_requests (
   constraint owner_requests_pkey primary key (id)
 );
 create index if not exists idx_owner_requests_status on public.owner_requests (status, created desc);
+
+-- App telemetry in the OpenTelemetry model (traces, metrics, logs of the web app itself; never runs or audit).
+-- Written by app/telemetry.py, shown on the admin Performance page, purged by telemetry.retention_hours.
+create table if not exists public.otel_spans (
+  span_id text primary key, trace_id text not null, parent_id text, name text, kind text,
+  start_ts double precision not null, duration_ms double precision, status text, error text, attrs jsonb);
+create index if not exists idx_otel_spans_trace on public.otel_spans (trace_id);
+create index if not exists idx_otel_spans_start on public.otel_spans (start_ts desc);
+create table if not exists public.otel_metrics (
+  id bigserial primary key, ts double precision not null, name text not null, kind text, attrs jsonb,
+  n_count bigint, total double precision, vmin double precision, vmax double precision,
+  bounds jsonb, buckets jsonb, value double precision);
+create index if not exists idx_otel_metrics_ts on public.otel_metrics (name, ts desc);
+create table if not exists public.otel_logs (
+  id bigserial primary key, ts double precision not null, severity text, body text,
+  trace_id text, span_id text, attrs jsonb);
+create index if not exists idx_otel_logs_ts on public.otel_logs (ts desc);

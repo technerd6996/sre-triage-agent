@@ -1,5 +1,7 @@
 """Active Directory (LDAP) adapter."""
 import os
+
+from app import telemetry
 import logging
 from ssl import CERT_NONE, CERT_REQUIRED
 from ldap3 import Server, Connection, ALL, SUBTREE, NTLM, SIMPLE, Tls
@@ -95,6 +97,7 @@ class ActiveDirectoryIdentity:
     def _service_connection(self) -> Connection:
         return self._get_connection(os.getenv("IDENTITY_BIND_USER"), os.getenv("IDENTITY_BIND_PASSWORD", ""))
 
+    @telemetry.traced("ad", "authenticate")
     def authenticate(self, username: str, password: str) -> bool:
         domain = os.getenv("IDENTITY_DOMAIN", "")
         upn = f"{username}@{domain}" if "@" not in username else username
@@ -123,6 +126,7 @@ class ActiveDirectoryIdentity:
         parts = [p.strip() for p in (search_base or "").split(",") if p.strip().upper().startswith("DC=")]
         return ",".join(parts) or search_base
 
+    @telemetry.traced("ad", "get_groups")
     def get_groups(self, username: str) -> list[str]:
         """Stable group IDs (objectGUID), including nested groups. Expects a bare sAMAccountName."""
         search_base = os.getenv("IDENTITY_SEARCH_BASE", "")
@@ -148,6 +152,7 @@ class ActiveDirectoryIdentity:
             if conn:
                 conn.unbind()
 
+    @telemetry.traced("ad", "search_groups")
     def search_groups(self, prefix: str) -> list[dict]:
         search_base = os.getenv("IDENTITY_SEARCH_BASE", "")
         conn = None

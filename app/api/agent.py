@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from app.agent import policy
-from app import config, store
+from app import config, licence, store, telemetry
 from app import jobs
 from app.llm import usage
 from app.agent.agent import THREAD_TOOLS, resume, start
@@ -43,7 +43,7 @@ def _stall_timeout() -> int:           # no progress -> run marked failed
 
 
 class RunRequest(BaseModel):
-    ticket: str = Field(pattern=r"^INC\d{7,}$")
+    ticket: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9-]{0,39}$")
 
 
 class DecisionRequest(BaseModel):
@@ -496,6 +496,7 @@ def _already_worked() -> set:
 
 
 def _auto_loop():
+    telemetry.mute()                       # the poller belongs to agent runs: not part of app telemetry
     fails = 0
     while _auto["enabled"]:
         try:
@@ -518,11 +519,12 @@ def _auto_loop():
                     break
             if not _auto["enabled"]:
                 break
-            if len(jobs.queued()) < 5:                  # keep the backlog short; the queue is already ordered
+            if len(jobs.queued()) < 5 and licence.auto_allowed():      # over the plan past the grace period: no NEW automatic tickets
                 worked = _already_worked()
                 for n in list_queue(exclude=worked):      # ask ServiceNow only for tickets not worked yet
                     if n not in worked:
                         jobs.enqueue(n, "auto", "auto-mode", 3)
+                        licence.count_auto()
         except Exception as e:
             log.warning("Auto-poll error: %s", str(e)[:200])
         time.sleep(config.get("agent.poll_seconds"))
@@ -620,6 +622,7 @@ def _approval_timeout() -> int:
 
 
 def _watchdog():
+    telemetry.mute()
     while True:
         time.sleep(30)
         try:
@@ -641,6 +644,7 @@ threading.Thread(target=_watchdog, daemon=True, name="run-watchdog").start()
 
 def _dispatcher():
     """Starts the best queued job whenever a run slot is free."""
+    telemetry.mute()
     while True:
         time.sleep(2)
         try:

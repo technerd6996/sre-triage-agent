@@ -1,0 +1,23 @@
+<service>
+  <id>TRIAGE1</id>
+  <name>TRIAGE-1</name>
+  <description>TRIAGE-1 incident triage server</description>
+  <executable>@APP@\triage1.exe</executable>
+  <arguments>serve</arguments>
+  <workingdirectory>@APP@</workingdirectory>
+  <env name="TRIAGE_SERVICE_ACCOUNT" value="NT SERVICE\TRIAGE1"/>
+  <env name="PATH" value="@APP@\pgsql\bin;%PATH%"/>
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <depend>@DEPEND@</depend>
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <onfailure action="restart" delay="60 sec"/>
+  <resetfailure>1 hour</resetfailure>
+  <stoptimeout>20 sec</stoptimeout>
+  <logpath>@HOME@\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+</service>

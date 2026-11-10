@@ -102,7 +102,7 @@ from app.tools.snow import add_work_note, create_incident, get_sla, search_users
 
 @router.get("/issues/{number}/sla")
 def issue_sla(number: str):
-    if not re.fullmatch(r"INC\d{7,10}", number):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,39}", number):       # ids differ per ticketing tool
         raise HTTPException(422, "Invalid ticket number")
     return get_sla(number)
 
@@ -202,7 +202,7 @@ class NoteRequest(BaseModel):
 
 @router.post("/issues/{number}/note")
 def add_to_issue(number: str, req: NoteRequest, request: Request):
-    if not re.fullmatch(r"INC\d{7,10}", number):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,39}", number):       # ids differ per ticketing tool
         raise HTTPException(422, "Invalid ticket number")
     if not _open_tickets(getattr(request.state, "user", ""), number=number):
         raise HTTPException(404, "That ticket is not open, or it is not yours")

@@ -41,6 +41,11 @@ app = FastAPI()
 from app.auth import AuthMiddleware
 from app import bootstrap
 app.add_middleware(AuthMiddleware)
+from app import telemetry
+app.add_middleware(telemetry.TelemetryMiddleware)       # added after Auth, so it is outermost and times everything
+app.router.on_startup.append(telemetry.setup)
+from app import backup  # noqa: E402
+app.router.on_startup.append(backup.start)            # daily database + key-file backup, made by the app itself      # OpenTelemetry providers + tables, once the app is starting
 
 
 @app.middleware("http")
@@ -87,6 +92,8 @@ except Exception as e:
     log.warning("Auth API not loaded: %s", e)
 
 app.include_router(admin_router)
+from app.api.telemetry_api import router as telemetry_router
+app.include_router(telemetry_router)
 from app.api.config_pane import router as config_pane_router
 app.include_router(config_pane_router)
 from app.api.setup import router as setup_router
@@ -380,6 +387,11 @@ def canned_stream(text: str, incident: dict | None):
         yield "data: [DONE]\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream")
 
+def _status(text: str) -> str:
+    """A progress line for the page: what the server is really doing right now (shown above the answer until it starts)."""
+    return f"data: {json.dumps({'status': text})}\n\n"
+
+
 OFFTOPIC_RE = re.compile(r"^\s*I['\u2019]?m a triage assistant", re.IGNORECASE)
 OFFTOPIC_REPLY = ("I'm a triage assistant, so I can only help with error logs, stack traces, and specific "
                   "SRE or infrastructure questions. Try pasting a log, or ask something like why nginx "
@@ -416,66 +428,71 @@ def chat_endpoint(req: ChatRequest, request: Request):
         store.add_rag_event({"user_hash": _uh, "query": redact(safe_query)[:300], "kind": "canned"})
         return canned_stream(text, incident_info)
 
-    # 2. Runbook knowledge from ServiceNow (or the old local store). A failure here must not kill the chat.
-    _t = time.time()
-    supa_ctx, raw_chunks, rag_scores, articles, sources = [], [], [], [], []
-    source_mode = config.get("knowledge.source")
-    if source_mode == "servicenow":
-        know = knowledge.retrieve(retrieval_query(safe_query, safe_history))
-        supa_ctx, sources, articles = know["chunks"], know["ids"], know["articles"]
-        rag_scores = [{"rank": i + 1} for i in range(len(sources))]
-        if know["error"]:
-            log.warning("Knowledge search: %s", know["error"])
-    elif source_mode == "local":
-        try:
-            res = supabase.rpc("hybrid_search", {
-                "query_text": safe_query,
-                "query_embedding": _embedder().encode(safe_query).tolist(),
-                "match_count": 3
-            }).execute()
-            raw_chunks = [d['content'] for d in res.data] if res.data else []
-            rag_scores = [{k: v for k, v in d.items() if k != 'content' and isinstance(v, (int, float))}
-                          for d in (res.data or [])]
-            supa_ctx = [format_chunk(c) for c in raw_chunks]
-        except Exception as e:
-            log.warning("Hybrid retrieval failed, continuing without it: %s", e)
-        sources = retrieved_doc_ids(raw_chunks)
-    topology = knowledge.relationships(safe_query)       # live CMDB relationships when a server is named
-    if topology:
-        supa_ctx = supa_ctx + [topology]
-    t_vec = time.time() - _t
-
-    # 4. Combine Context and Augment Prompt
-    combined = "\n\n".join(supa_ctx)
-    rag_block = (f"--- RETRIEVED KNOWLEDGE (RAG) ---\n{combined.strip()}\n---------------------------------"
-                 if combined.strip() else "")
-
-    if looks_like_log(safe_query):
-        # Incident evidence: the log comes FIRST, knowledge after it, and the mode is stated explicitly
-        prompt = (f"INCIDENT EVIDENCE (Mode 1):\n{safe_query}\n\n"
-                  + (f"{rag_block}\n\n" if rag_block else "")
-                  + "Respond in the Mode 1 format. Your reply must start with 'SEVERITY:'. "
-                    "Use the retrieved knowledge only to name matching runbook IDs inside checklist steps; "
-                    "do not summarize it.")
-    elif rag_block:
-        prompt = f"{rag_block}\n\n{safe_query}"
-    else:
-        prompt = safe_query
-
-    # 5. Construct Payload (Inject System Prompt Backend-Side)
-    colab_messages = [{"role": "system", "content": config.get("prompt.system")}] + safe_history + [{"role": "user", "content": prompt}]
-
-
-    # Detect a live issue so the UI can offer the Create incident button (chat never creates tickets)
-    incident_info = analyze_chat_for_incident(safe_query, safe_history)
-
-        # 6. Stream Generator connecting to Colab; failures are sent to the browser as readable errors
     def stream_generator():
+        # 2. Runbook knowledge from ServiceNow (or the old local store). A failure here must not kill the chat.
+        _t = time.time()
+        supa_ctx, raw_chunks, rag_scores, articles, sources = [], [], [], [], []
+        source_mode = config.get("knowledge.source")
+        if source_mode in ("servicenow", "local"):
+            yield _status("Searching runbooks…")
+        if source_mode == "servicenow":
+            know = knowledge.retrieve(retrieval_query(safe_query, safe_history))
+            supa_ctx, sources, articles = know["chunks"], know["ids"], know["articles"]
+            rag_scores = [{"rank": i + 1} for i in range(len(sources))]
+            if know["error"]:
+                log.warning("Knowledge search: %s", know["error"])
+        elif source_mode == "local":
+            try:
+                res = supabase.rpc("hybrid_search", {
+                    "query_text": safe_query,
+                    "query_embedding": _embedder().encode(safe_query).tolist(),
+                    "match_count": 3
+                }).execute()
+                raw_chunks = [d['content'] for d in res.data] if res.data else []
+                rag_scores = [{k: v for k, v in d.items() if k != 'content' and isinstance(v, (int, float))}
+                              for d in (res.data or [])]
+                supa_ctx = [format_chunk(c) for c in raw_chunks]
+            except Exception as e:
+                log.warning("Hybrid retrieval failed, continuing without it: %s", e)
+            sources = retrieved_doc_ids(raw_chunks)
+        if config.get("knowledge.relationships"):
+            yield _status("Checking the CMDB…")
+        topology = knowledge.relationships(safe_query)       # live CMDB relationships when a server is named
+        if topology:
+            supa_ctx = supa_ctx + [topology]
+        t_vec = time.time() - _t
+
+        # 4. Combine Context and Augment Prompt
+        combined = "\n\n".join(supa_ctx)
+        rag_block = (f"--- RETRIEVED KNOWLEDGE (RAG) ---\n{combined.strip()}\n---------------------------------"
+                     if combined.strip() else "")
+
+        if looks_like_log(safe_query):
+            # Incident evidence: the log comes FIRST, knowledge after it, and the mode is stated explicitly
+            prompt = (f"INCIDENT EVIDENCE (Mode 1):\n{safe_query}\n\n"
+                      + (f"{rag_block}\n\n" if rag_block else "")
+                      + "Respond in the Mode 1 format. Your reply must start with 'SEVERITY:'. "
+                        "Use the retrieved knowledge only to name matching runbook IDs inside checklist steps; "
+                        "do not summarize it.")
+        elif rag_block:
+            prompt = f"{rag_block}\n\n{safe_query}"
+        else:
+            prompt = safe_query
+
+        # 5. Construct Payload (Inject System Prompt Backend-Side)
+        colab_messages = [{"role": "system", "content": config.get("prompt.system") + "\n\n" + config.get("prompt.grounding")}] + safe_history + [{"role": "user", "content": prompt}]
+
+
+        # Detect a live issue so the UI can offer the Create incident button (chat never creates tickets)
+        incident_info = analyze_chat_for_incident(safe_query, safe_history)
+
         yield f"data: {json.dumps({'meta': {'sources': sources, 'incident': incident_info, 'articles': [{k: a[k] for k in ('id', 'title', 'url')} for a in articles]}})}\n\n"
         tokens_in = usage.count_messages(colab_messages)
         sent = []                              # text actually streamed to the browser, for token counting
         try:
+            yield _status("Waiting for the model…")
             with llm_slot("chat") as waited:
+                yield _status("Writing the answer…")
                 t0 = time.time()
                 with llm_post(colab_messages, timeout=(10, 300), thinking=False) as r:
                     if r.status_code != 200:
@@ -519,7 +536,16 @@ def chat_endpoint(req: ChatRequest, request: Request):
         yield "data: [DONE]\n\n"
 
 
-    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+    def safe_stream():
+        # The search and prompt steps now run inside the stream, so a failure there must reach the page as a readable error.
+        try:
+            yield from stream_generator()
+        except Exception as e:
+            log.error("Chat failed before the model was reached: %s", e)
+            yield f"data: {json.dumps({'error': 'Something went wrong while preparing the answer. Check the server log for details.'})}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(safe_stream(), media_type="text/event-stream")
 
 from app import rbac
 rbac.warn_unruled(app)

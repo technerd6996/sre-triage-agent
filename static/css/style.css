@@ -204,3 +204,22 @@ body { font-family: 'IBM Plex Sans', sans-serif; background-color: var(--bg); co
   animation: shimmer 2s linear infinite;
 }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* waiting phase: the new words fade in, a counter shows elapsed time, a slim bar slides while work goes on */
+.thinking-label.swap { animation: label-in .28s ease-out, shimmer 2s linear infinite; }
+@keyframes label-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.thinking-time { color: var(--subtle); font-size: 13px; font-variant-numeric: tabular-nums; }
+.thinking-bar { position: relative; height: 2px; width: 150px; margin-top: 9px; border-radius: 2px; overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.thinking-bar::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 38%; border-radius: 2px; background: var(--accent);
+  animation: think-slide 1.4s ease-in-out infinite; }
+@keyframes think-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(380%); } }
+
+/* the answer while it is being written */
+.stream-cursor { display: inline-block; width: .5em; height: 1.05em; margin-left: 2px; vertical-align: text-bottom; border-radius: 2px;
+  background: var(--accent); animation: cursor-blink 1s steps(1) infinite; }
+@keyframes cursor-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .thinking-dots i, .thinking-bar::after, .shimmer, .thinking-label.swap { animation: none; }
+  .thinking-label.shimmer { -webkit-text-fill-color: currentColor; }
+}

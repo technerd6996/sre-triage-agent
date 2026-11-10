@@ -45,6 +45,15 @@
             </div>
             <div id="keybox" class="note rounded-lg p-3 mt-3 text-[14px] hidden"></div>
 
+            <div id="adminbox" class="hidden">
+                <h2 class="text-[16px] font-semibold mt-6">Super Admin password</h2>
+                <p class="text-[13px] mt-1" style="color: var(--subtle)">For the first account, <code id="admin-user"></code>. There is no default password: you choose it here. <span id="pw-rule"></span></p>
+                <label for="pw1" class="field-label mt-3">Password</label>
+                <input id="pw1" type="password" class="field-input" autocomplete="new-password">
+                <label for="pw2" class="field-label mt-3">Repeat password</label>
+                <input id="pw2" type="password" class="field-input" autocomplete="new-password">
+            </div>
+
             <div id="msg" role="alert" class="err rounded-lg px-3 py-2.5 text-[14px] mt-4 hidden"></div>
             <button type="button" id="finish" class="btn mt-5 w-full py-3 rounded-lg font-semibold text-[16px]" disabled>Finish setup</button>
         </div>
@@ -54,8 +63,7 @@
             <p id="done-text" class="text-[14px] mt-2" style="color: var(--muted)"></p>
             <div id="creds" class="note rounded-lg p-3 mt-3 text-[14px] hidden">
                 <div>User: <code id="done-user"></code></div>
-                <div class="mt-1">Default password: <code id="done-pass"></code></div>
-                <p class="mt-2" style="color: var(--muted)">This is shown once. You will be asked to change it at your first sign-in.</p>
+                <p class="mt-2" style="color: var(--muted)">Sign in with the password you just chose. It is not shown or stored anywhere readable.</p>
             </div>
             <a href="/static/login.html" class="btn mt-5 block text-center w-full py-3 rounded-lg font-semibold text-[16px]">Continue to sign in</a>
         </div>
@@ -70,9 +78,10 @@
             if (!ok) li.style.color = 'var(--danger)';
             return li;
         }
-        async function post(url) {
+        let adminNeeded = false, minPw = 12;
+        async function post(url, extra) {
             const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                           body: JSON.stringify({ code: $('code').value.trim() }) });
+                                           body: JSON.stringify({ code: $('code').value.trim(), ...(extra || {}) }) });
             const data = await res.json().catch(() => ({}));
             return { ok: res.ok, data, error: typeof data.detail === 'string' ? data.detail : 'The request failed.' };
         }
@@ -89,6 +98,10 @@
                 row(s.secret_key, s.secret_key ? 'Encryption key is set' : 'Encryption key is not set (needed to store secrets)'));
             $('genkey').classList.toggle('hidden', s.secret_key);
             $('finish').disabled = !s.database.ok;
+            adminNeeded = !!s.admin_needed; minPw = s.min_password || minPw;
+            $('adminbox').classList.toggle('hidden', !adminNeeded);
+            $('admin-user').textContent = s.admin_user || '';
+            $('pw-rule').textContent = 'At least ' + minPw + ' characters.';
         }
 
         $('recheck').addEventListener('click', load);
@@ -111,15 +124,18 @@
 
         $('finish').addEventListener('click', async () => {
             $('msg').classList.add('hidden');
+            if (adminNeeded) {
+                if ($('pw1').value.length < minPw) return fail('The password must be at least ' + minPw + ' characters.');
+                if ($('pw1').value !== $('pw2').value) return fail('The two passwords do not match.');
+            }
             $('finish').disabled = true;
-            const r = await post('/api/setup/complete');
+            const r = await post('/api/setup/complete', adminNeeded ? { password: $('pw1').value } : null);
             if (!r.ok) { fail(r.error); $('finish').disabled = false; return; }
             $('form').classList.add('hidden');
             $('done').classList.remove('hidden');
             if (r.data.created) {
-                $('done-text').textContent = 'The Default Super Admin account has been created.';
+                $('done-text').textContent = 'The Super Admin account has been created.';
                 $('done-user').textContent = r.data.username;
-                $('done-pass').textContent = r.data.default_password;
                 $('creds').classList.remove('hidden');
             } else {
                 $('done-text').textContent = 'An admin account already exists. Sign in with it.';

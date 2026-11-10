@@ -7,7 +7,7 @@ import logging
 import os
 import re
 
-from app import config
+from app import config, telemetry
 from app.ports import registry
 
 log = logging.getLogger("triage.owners")
@@ -48,6 +48,10 @@ def _ref(v) -> str:
 def contacts(host_name: str) -> dict:
     """{'emails': [...], 'who': ['Ann (owned_by)', ...], 'error': ''} for the server CI. Never raises."""
     out = {"emails": [], "who": [], "error": ""}
+    from app.ports import registry
+    if not registry.is_servicenow():
+        out["error"] = "server owners are read from the ServiceNow CMDB, and this install uses another ticketing tool"
+        return out
     try:
         user_f, group_f, text_f = _fields("owners.user_fields"), _fields("owners.group_fields"), _fields("owners.email_field")
         wanted = user_f + group_f + text_f
@@ -132,6 +136,7 @@ def can_address() -> tuple:
         return False, f"mail is not set up: {str(e)[:120]}"
 
 
+@telemetry.traced("mail", "send", failed=lambda r: None if r[0] else r[1])
 def send(to: list, cc: list, subject: str, body: str) -> tuple:
     """(True, message id) or (False, reason). Never raises, and never pretends: a transport that cannot address people is a failure."""
     ok, why = can_address()

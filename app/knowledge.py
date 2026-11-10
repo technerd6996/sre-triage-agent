@@ -9,6 +9,7 @@ without knowledge (and says so in the log/stats) instead of failing.
 
 Settings (admin panel, group "knowledge", applied at once): knowledge.source = servicenow | local | off.
 'local' keeps the old Postgres runbook search for one release as a way back; it has no upload page any more."""
+import contextvars
 import json
 import logging
 import os
@@ -17,7 +18,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
-from app import config
+from app import config, telemetry
 
 log = logging.getLogger("triage.knowledge")
 
@@ -62,6 +63,11 @@ def _sn_base() -> str:
 def _request(*a, **kw):
     from app.adapters.servicenow.client import _request as snow_request     # lazy: keeps this module cheap to import
     return snow_request(*a, **kw)
+
+
+def _on_servicenow() -> bool:
+    from app.ports import registry
+    return registry.is_servicenow()
 
 
 def keywords(question: str, limit: int = 8) -> list:
@@ -157,10 +163,11 @@ def _rerank(question: str, arts: list, keep: int) -> list:
 
 
 # ---------------------------------------------------------------- public
+@telemetry.traced("knowledge", "retrieve", failed=lambda r: r.get("error") or None)
 def retrieve(question: str) -> dict:
     """{'articles': [{id,title,url,text}], 'chunks': [str for the prompt], 'ids': [KB numbers], 'error': str, 'seconds': float}"""
     out = {"articles": [], "chunks": [], "ids": [], "error": "", "seconds": 0.0}
-    if config.get("knowledge.source") != "servicenow":
+    if config.get("knowledge.source") != "servicenow" or not _on_servicenow():
         return out
     t0 = time.time()
     key = (question or "").strip().lower()[:300]
@@ -172,7 +179,8 @@ def retrieve(question: str) -> dict:
         best = hit[1]                                  # already searched AND reranked: no ServiceNow call, no model call
     else:
         try:
-            arts = _POOL.submit(_search_sn, question).result(timeout=float(config.get("knowledge.timeout_seconds")))
+            arts = _POOL.submit(contextvars.copy_context().run, _search_sn, question).result(
+                timeout=float(config.get("knowledge.timeout_seconds")))      # the copy keeps the request's trace and run context
         except FutureTimeout:
             out.update(error="ServiceNow search timed out", seconds=round(time.time() - t0, 2))
             return out
@@ -197,7 +205,7 @@ def retrieve(question: str) -> dict:
 
 def relationships(question: str) -> str:
     """'Topology:' lines from the ServiceNow CMDB for the server named in the question, or ''. Never raises."""
-    if not config.get("knowledge.relationships"):
+    if not config.get("knowledge.relationships") or not _on_servicenow():
         return ""
     try:
         from app.ports import registry
@@ -222,6 +230,8 @@ def relationships(question: str) -> str:
 
 def test() -> str:
     """For the admin Test button: is the knowledge base reachable and does it hold published articles?"""
+    if not _on_servicenow():
+        return "the runbook search reads ServiceNow, and this install uses another ticketing tool, so it is off"
     kb = (config.get("knowledge.kb_name") or "").replace("^", "").strip()
     if config.get("knowledge.source") == "off":
         return "knowledge is switched off"

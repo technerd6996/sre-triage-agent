@@ -327,5 +327,14 @@ RULES:
 5. Briefly explain your reasoning before stating the verdict.
 """
 
+GROUNDING_RULE = """GROUNDING RULE (applies to every answer, above all other instructions):
+You cannot see, query or run anything on any server. Do not state or imply which services, agents, software, tools (for example SCCM),
+versions, patches or settings exist or are running on a particular server, or how something was installed or managed, unless a message
+in THIS conversation shows that result from a real check. If asked, say plainly that you have not checked, and name the check to ask for,
+for example: "are there any sccm services on <server>?" or "pending windows updates on <server>". Never fill a gap with a plausible guess."""
+config.register("prompt.grounding", "Rule against inventing facts about servers (added to every chat answer)", GROUNDING_RULE, "text", "prompts",
+                multiline=True, max_len=4000,
+                help="Added after the chat assistant prompt on every answer. It stops the model from describing what is on a server "
+                     "when no check was run.")
 config.register("prompt.system", "Chat assistant system prompt", SYSTEM_PROMPT, "text", "prompts", multiline=True, max_len=40000)
 config.register("prompt.checker", "Checker agent prompt", CHECKER_PROMPT, "text", "prompts", multiline=True, max_len=40000)

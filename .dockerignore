@@ -1,0 +1,12 @@
+# Only what the image needs is allowed in, so secrets and vendor tools cannot be copied by accident.
+*
+!app
+!static
+!skills
+!db/schema.sql
+!requirements-prod.txt
+!packaging/constraints.txt
+!packaging/triage1.py
+**/__pycache__
+**/*.pyc
+static/v1

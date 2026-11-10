@@ -53,7 +53,10 @@ def chat(monkeypatch):
         async def collect():
             return [c.decode() if isinstance(c, bytes) else c async for c in resp.body_iterator]
         lines = "".join(asyncio.run(collect())).split("\n\n")
-        return [json.loads(l[6:]) for l in lines if l.startswith("data: ") and l != "data: [DONE]"]
+        every = [json.loads(l[6:]) for l in lines if l.startswith("data: ") and l != "data: [DONE]"]
+        ask.statuses = [e["status"] for e in every if "status" in e]          # progress lines for the page
+        return [e for e in every if "status" not in e]
+    ask.statuses = []
     return ask, sent, events
 
 
@@ -97,3 +100,29 @@ def test_an_answer_that_cites_an_article_that_was_not_retrieved_is_flagged(chat,
     _know(monkeypatch, articles=[], chunks=[], ids=[])
     ask()                                               # the model's reply cites KB0010001, which was not retrieved
     assert events[0]["phantom"] == ["KB0010001"]
+
+
+def test_the_page_is_told_each_real_step_in_order(chat, monkeypatch):
+    ask, _, _ = chat
+    _know(monkeypatch)
+    monkeypatch.setattr(knowledge, "relationships", lambda q: "")
+    ask()
+    assert ask.statuses == ["Searching runbooks…", "Checking the CMDB…", "Waiting for the model…", "Writing the answer…"]
+
+
+def test_no_search_step_is_announced_when_knowledge_is_off(chat, monkeypatch):
+    ask, _, _ = chat
+    real = m.config.get
+    monkeypatch.setattr(m.config, "get", lambda k: "off" if k == "knowledge.source" else real(k))
+    ask()
+    assert "Searching runbooks…" not in ask.statuses and ask.statuses[-1] == "Writing the answer…"
+
+
+def test_a_failure_while_preparing_the_answer_reaches_the_page_as_an_error(chat, monkeypatch):
+    ask, _, _ = chat
+
+    def boom(q):
+        raise RuntimeError("database is down")
+    monkeypatch.setattr(knowledge, "retrieve", boom)
+    out = ask()
+    assert out[-1]["error"].startswith("Something went wrong while preparing the answer") and "database" not in out[-1]["error"]

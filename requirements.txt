@@ -11,9 +11,12 @@ pywinrm
 sentence-transformers
 boto3
 passlib==1.7.4
+cryptography
 bcrypt==4.0.1
 hvac
 ldap3
 pycryptodome
 psycopg[binary,pool]
 langgraph-checkpoint-postgres
+opentelemetry-sdk==1.45.1
+psutil

@@ -13,7 +13,7 @@ import secrets
 import threading
 import time
 
-from app import config
+from app import config, licence
 from app.agent import policy
 
 _DEFAULT_VERBS = ("restart = restart_service\nstart = start_service\n"
@@ -74,7 +74,7 @@ class AskBack(Exception):
     """The message is not enough to act on. The text is shown to the engineer as the next question."""
 
 
-_TICKET = re.compile(r"\bINC\d{5,}\b", re.I)
+_TICKET = re.compile(r"\b(?:(?i:INC\d{5,})|[A-Z][A-Z0-9]{1,9}-\d+)\b")        # ServiceNow and BMC, or a Jira key
 
 
 def close_intent(message: str) -> bool:
@@ -473,11 +473,20 @@ def propose(message: str, user: str, resolve) -> dict:
     if level >= 2 and not needs_owner:
         raise AskBack(f"{tool_name} is high risk (L2) and needs the server owners' approval. Use the Agent Console for now.")
 
+    try:                                             # plan switches: a feature outside the plan is refused with a plain message
+        licence.require("owner_approval" if needs_owner else "chat_changes")
+    except licence.NotInPlan as e:
+        raise AskBack(str(e))
+
     inst = resolver(spec["host"])
     # "restart the server" means the whole machine, not a service called "server"
     if tool_name == "restart_service" and _means_machine(_service_from(message, verb), inst["name"]):
         tool_name, spec = "reboot_server", ACTIONS["reboot_server"]
         level, needs_owner = policy.risk_level(tool_name), True
+        try:
+            licence.require("owner_approval")
+        except licence.NotInPlan as e:
+            raise AskBack(str(e))
     built = spec["args"](message, verb, inst)
     action = {"kind": "action", "user": user, "tool": tool_name, "verb": verb, "args": built["args"],
               "name": built["name"], "title": built["title"], "label": built["label"], "host": inst["name"],

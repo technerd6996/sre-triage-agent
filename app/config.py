@@ -185,6 +185,8 @@ register("security.min_password", "Minimum password length", 12, "int", "securit
 register("security.session_cache_seconds", "Session lookup cache (seconds)", 45, "int", "security", lo=0, hi=600,
          help="Also the longest a disabled user keeps access.")
 _add("credentials.manage_in_app", "Manage host credentials inside the app", "PAM_MANAGE_IN_APP", "bool", False, "credentials", live=True)
+register("credentials.provider", "Where server logins are stored", "", "select", "credentials", options=("", "awssm", "cyberark"),
+         help="Empty means AWS Secrets Manager, unless the environment says otherwise. CyberArk uses the CCP fields in this section.")
 _add("credentials.secret_prefix", "Secrets Manager prefix for host credentials", "PAM_SECRET_PREFIX", "text", "triage/pam/hosts", "credentials", live=True)
 
 _add("limits.ticket_rate_window", "Ticket rate window (seconds)", "TICKET_RATE_WINDOW", "int", 600, "limits", lo=10, hi=86400)
@@ -389,7 +391,7 @@ def reset(key: str, by: str = "system") -> None:
 def describe(group: str | None = None) -> list[dict]:
     """What the Configuration pane will render: value, where it came from, and its limits."""
     out = []
-    for s in SETTINGS.values():
+    for s in list(SETTINGS.values()):
         if group and s.group != group:
             continue
         item = {"key": s.key, "label": s.label, "kind": s.kind, "group": s.group, "live": s.live, "multiline": s.multiline,
@@ -453,7 +455,7 @@ def hydrate_environ() -> int:
     """Copies saved settings and secrets into os.environ so code that still uses os.getenv sees them.
     A saved value wins over the .env, as in get(). A failure never stops the app from starting."""
     n = 0
-    for s in SETTINGS.values():
+    for s in list(SETTINGS.values()):
         if not (s.bridge and s.env):
             continue
         try:

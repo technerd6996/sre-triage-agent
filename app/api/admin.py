@@ -12,6 +12,13 @@ class ChatSwitch(BaseModel):
     enabled: bool
 
 
+@router.get("/api/admin/licence")
+def licence_status():
+    """Plan, limits, usage and warnings, for the admin Overview."""
+    from app import licence
+    return licence.status()
+
+
 @router.get("/api/chat/status")                      # any logged-in user: lets the UI know chat is off
 def chat_status():
     return {"enabled": bool(store.get_setting("chat_enabled", True)),
@@ -379,7 +386,7 @@ def api_health(request: Request):
     def probe(p):
         t = time.time()
         try:
-            r = _rq.get(base + p, cookies=ck, timeout=8)
+            r = _rq.get(base + p, cookies=ck, timeout=8, headers={"X-Triage-Probe": "1"})      # telemetry ignores these
             return {"path": p, "ok": r.status_code < 500, "status": r.status_code, "ms": int((time.time() - t) * 1000)}
         except Exception as e:
             return {"path": p, "ok": False, "status": None, "ms": int((time.time() - t) * 1000), "error": str(e)[:80]}

@@ -9,7 +9,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 
-from app import config
+from app import config, telemetry
 from app.llm import usage
 from app.ports import registry
 from app.ports.errors import NotFound, PortError
@@ -55,6 +55,7 @@ def _allow(run_id: str):
     return None
 
 
+@telemetry.traced("credential_store", "checkout")
 def checkout(*keys: str) -> dict:
     """The credential stored for the first key that has one. Pass the stable host id first,
     then the address as a fallback. Raises RuntimeError with a message that is safe to show."""
@@ -137,6 +138,7 @@ def _allow_action(user_id: str, ticket: str):
     return None
 
 
+@telemetry.traced("credential_store", "checkout_for_action")
 def checkout_for_action(user_id: str, ticket: str, *keys: str) -> dict:
     """Credential fetch for a change a person confirmed in the approver chat (no agent run). Own hourly limit per
     person, and every checkout is audited under THEIR name with the ticket. Raises RuntimeError (safe to show)."""
@@ -169,6 +171,7 @@ def checkout_for_action(user_id: str, ticket: str, *keys: str) -> dict:
     return data
 
 
+@telemetry.traced("credential_store", "checkout_for_inquiry")
 def checkout_for_inquiry(user_id: str, *keys: str) -> dict:
     """Read-only credential fetch with no agent run: used only by /api/approver-chat/inquire.
     Rate-limited separately from checkout() so inquiry traffic never shares or depletes a

@@ -1,6 +1,6 @@
 # TRIAGE-1 Product Documentation
 
-An L1 SRE assistant for ServiceNow incidents. Document date 2026-11-10. Describes the build that passes 406 automated tests.
+An L1 SRE assistant for ServiceNow incidents. Document date 2026-11-10. Describes the build that passes 542 automated tests.
 
 ## Contents
 
@@ -56,7 +56,7 @@ The app is the only thing that talks to the outside systems. Browsers never reac
 
 | Place | What it holds |
 |---|---|
-| PostgreSQL 17 (local, localhost only) | Users and sessions, runs and their events, approvals, the audit log, the job queue, settings (secrets are encrypted), model call statistics, chat statistics. Agent checkpoints use the same database. |
+| PostgreSQL 17 (local, localhost only) | Users and sessions, runs and their events, approvals, the audit log, the job queue, settings (secrets are encrypted), model call statistics, chat statistics, and the app's own telemetry (traces, metrics, logs; kept 72 hours by default). Agent checkpoints use the same database. |
 | `C:\ProgramData\triage\bootstrap.json` | The two root secrets: `DATABASE_URL` and `TRIAGE_SECRET_KEY`. Created automatically, readable only by its owner and Administrators. There is no `.env` file. |
 | ServiceNow | Incidents, the runbook knowledge base, the playbook knowledge base, CMDB servers and relationships, users. |
 | Project files | `runbooks/*.md` (source for the runbook articles), `skills/*/SKILL.md` (agent playbooks, can also come from ServiceNow), `db/schema.sql` (applied by the start script). |
@@ -83,7 +83,7 @@ The script starts local PostgreSQL if needed, applies `db/schema.sql`, then serv
 
 ### First sign-in
 
-The first run creates a super admin account, `superadmin@triage.local`, with a default password defined in `app/bootstrap.py`. The login page shows a warning while that password is unchanged. Change it at first sign-in. A password chosen during setup is on the roadmap.
+The setup page creates the first super admin account, `superadmin@triage.local`, with a password **you choose on that page** (typed twice, checked against the minimum length). There is no shipped default password. Installs made before this change may still have the old default; the login page warns while it is unchanged, and that old password is refused as a new password.
 
 > **Back up `bootstrap.json`.** Without `TRIAGE_SECRET_KEY` the saved credentials in the database cannot be decrypted.
 
@@ -151,6 +151,8 @@ A slow or unavailable ServiceNow never blocks the chat. It only removes the runb
 - **Raise a ticket.** When a message describes a live problem, a **Create incident** button appears. Chat itself never creates a ticket.
 - **Logs.** A pasted log is trimmed to its error lines and answered with a severity, a hypothesis and a checklist.
 - Chat replies are generated with the model's reasoning mode off, so internal reasoning text never appears in answers.
+- **While you wait.** The chat says what it is really doing, with a seconds counter after three seconds: "Searching runbooks…", "Checking the CMDB…", "Waiting for the model…", "Writing the answer…". A step shorter than a third of a second is skipped so the words do not flicker. For a server check in the approver chat the label names the check ("Checking Windows updates on the server…") and changes to "Still waiting for the server to answer…" after six seconds.
+- **While it writes.** The answer appears at a steady pace with a blinking cursor, instead of in bursts. It never lags far behind the model, shows everything at once when the browser tab is in the background or the system asks for reduced motion, and does not pull the page down if you scrolled up to read. A table or code block can look unfinished until its last line arrives.
 
 ---
 
@@ -192,8 +194,9 @@ The notes that go to the model as conversation history are plain sentences ("Res
 | "Who is logged in on term-win-srv?" | Sessions with their IDs and users. |
 | "Which services are stopped?" | Automatic services that are not running (Windows) or failed units (Linux). |
 | "List scheduled tasks" / "scheduled jobs" | Non-system tasks (Windows) or systemd timers and cron files (Linux). |
-| "Pending Windows updates" | Updates waiting, the latest installed updates and the Windows Update service state (Windows). |
-| "Patch job status" / "did the update finish?" | Progress or result of the last Windows update install started from the chat, including whether a restart is needed. |
+| "Pending Windows updates" / "patch status" / "when was the last patch installed?" | Updates waiting, the latest installed updates, the date of the last install and the Windows Update service state (Windows). |
+| "Is the spooler service running?" / "are there any sccm services?" | Looks the service up on the server by name or display name and shows its state, or says plainly that no such service exists. Words like sccm, defender or sql expand to the real service names through the setting `chat.service_search_aliases`. |
+| "Patch job status" / "did the update finish?" (the word "job" or "finish" is what selects this one) | Progress or result of the last Windows update install started from the chat, including whether a restart is needed. |
 | "Which packages are upgradable?" / "security updates" / "is nginx installed?" | Package lists and pending updates (Linux; apt, dnf and yum are detected). |
 
 Read-only checks fetch credentials through a separate inquiry path with its own hourly limits (60 per hour overall and 20 per person by default). They open no ticket and start no run.
@@ -489,7 +492,7 @@ The admin page has a **Configuration** area with one section per topic. Sections
 | Panel | Sections |
 |---|---|
 | Connections | Ticketing (ServiceNow), Identity (AD), Knowledge source, Notifications, Credentials (PAM) |
-| Behaviour | Model runtime, Agent behaviour, Limits and timings, Security and access, Safety policy (approvals), Prompts and messages |
+| Behaviour | Model runtime, Agent behaviour, Limits and timings, Security and access, Safety policy (approvals), Prompts and messages, Telemetry (app monitoring), Backups, Licence and plan |
 
 The registry holds about 115 settings. The ones you are most likely to touch:
 
@@ -518,6 +521,110 @@ The registry holds about 115 settings. The ones you are most likely to touch:
 | Prompts (eight of them) | The wording the model works from. Editing one rebuilds the agent at once. | built-in text |
 
 Anyone with the `config.manage` permission (Admin and Super admin) may change the safety settings. The admin page also shows run statistics, model usage, chat statistics (including how often answers came from the knowledge base), the audit log and the jobs queue.
+
+---
+
+### Licence and plans
+
+A licence key sets the plan: which features are on and how many servers, approver seats and automatic tickets are included.
+
+| | Starter | Team | Commander |
+|---|---|---|---|
+| Servers | 25 | 100 | unlimited |
+| Approver seats | 2 | 10 | 50 |
+| Automatic tickets per month | 200 | 1,500 | 10,000 |
+| Chat read-only checks | yes | yes | yes |
+| Changes from the approver chat | no | yes | yes |
+| Owner approval by email (reboot, shutdown, package removal, Windows updates) | no | no | yes |
+| Telemetry export and alerts (not built yet) | no | no | yes |
+
+A key carries its own numbers, so a custom deal needs no code change. Without a key the app runs as **Unlicensed**: the Starter limits and no paid features.
+
+```
+Vendor (private signing key, never shipped)
+  | scripts\licence_tool.py issue --customer ... --plan Team --days 365
+  v
+Licence key  TRIAGE1-<plan and limits>.<signature>
+  | pasted into Admin > Behaviour > Licence and plan
+  v
+TRIAGE-1 checks the signature with the built-in public key (offline, no internet)
+  |-- signature wrong or key edited -> refused when saved
+  |-- feature not in the plan       -> that action is refused at once, with a plain message
+  |-- over a limit, or expired      -> warning + 14 days of grace -> then only NEW AUTOMATIC tickets stop
+  v
+People can always sign in, chat and approve.
+```
+
+What is counted: **servers** = the servers in the host list; **approver seats** = active people whose role lets them act (approvers and super admins); **automatic tickets** = tickets the automatic mode queues in the calendar month. A warning appears at 80% of a limit. Being back within the limits clears the grace period. The admin Overview shows the plan and the counts; **Check licence** in the section shows the detail. Grace starting and ending are written to the audit log.
+
+Honest limit: the key cannot be forged or edited without the vendor's private key, but someone who can change the program's code can remove the check. A compiled build (planned with the installers) raises that effort; only a hosted service can enforce it fully.
+
+For the vendor: `scripts\licence_tool.py keygen` makes the signing key once (the public half is in `app/licence.py`); `issue` prints a key; `show` reads one. Keep the private key off customer machines and out of the repository: whoever holds it can issue licences.
+
+### Ticketing tools and CyberArk
+
+Each licence key is issued for **one ticketing tool**, and only that tool can be used by that install: `licence_tool.py issue ... --itsm servicenow|jira|bmc|manageengine|freshservice`. The admin panel shows the connection section of that tool only.
+
+| Tool | Sign-in | Ticket id |
+|---|---|---|
+| ServiceNow | user and password | INC number |
+| Jira Service Management (Cloud) | account email and API token | issue key (OPS-123) |
+| BMC Helix / Remedy | user and password (JWT) | Incident Number |
+| ManageEngine ServiceDesk Plus | technician key | request id |
+| Freshservice | API key | ticket id |
+
+Only ServiceNow is proven on a real system. The other four were written from their published APIs and tested against simulated replies: expect field or workflow names to need adjusting on a first real connection.
+
+With a tool other than ServiceNow these are **off**, and say so: the runbook search, CMDB relationships, and server owners. Because owners come from the CMDB, owner approval by email cannot find anyone to mail, so reboot, shutdown, package removal and Windows update install are not available. SLA details are not read. Closing a ticket from chat understands INC numbers and Jira keys, not plain numeric ids.
+
+**CyberArk.** Connections > Credentials > "Where server logins are stored" = `cyberark`, then the CCP address, Application ID and safe (optional client certificate and CA bundle). TRIAGE-1 calls the Central Credential Provider over HTTPS and looks up one account per server, named by the pattern `{key}` (host id first, then address). A value that looks like a private key is used as an SSH key, otherwise as a password. All checkout limits and audit rows work as before. Not yet tested against a real CyberArk.
+
+### Performance page: traces, metrics and logs of the web app
+
+The **Performance** page measures the web app itself with OpenTelemetry (traces, metrics and logs), and nothing else. It answers "is TRIAGE-1 fast and working?", not "how did the agent do?". Agent runs, the run console and the audit log are left out on purpose.
+
+| What is measured | Examples |
+|---|---|
+| Web requests | Every page and API call: route, status, how long. Grouped into areas: chat, approver chat checks, approver chat actions, tickets from chat, sign-in, admin, pages. |
+| Calls to outside systems | ServiceNow (per table and verb), Active Directory, mail (SES or SMTP), the credential store, the knowledge search, and chat/title/rerank calls to the model server. |
+| Chat and approver chat | The request behind each chat message, check, card and Confirm: how long it took and whether it failed. Never the message text. |
+| App health | Database query time, connections in use and waiting, how long chat waits for a model slot, time to first token, and the app's own CPU, memory and thread count. |
+
+Left out: anything that runs inside an agent run, the poller, dispatcher and watchdog threads, the run and audit tables, the run console's polling (`/api/agent/*`), the admin self-check, and the Performance page's own requests. These are settings, not code (`telemetry.exclude_paths`, `telemetry.exclude_tables`).
+
+```
+Web request -> TelemetryMiddleware starts a trace (one root span per request)
+  |-- ServiceNow / AD / mail / model / credential store calls -> child spans + a timing metric
+  |-- database queries -> a timing metric (a slow query also gets its own span)
+  |-- failures -> a log line, tied to the same trace id
+  v
+Spans, metrics and logs are batched -> written to this app's own Postgres
+  (otel_spans | otel_metrics | otel_logs) -> shown on the Performance page
+  Nothing is sent outside the machine.
+```
+
+The page has four tabs and a time window (1 hour, 6 hours, 24 hours, 3 days):
+
+| Tab | Shows |
+|---|---|
+| Overview | Requests, failed requests, latency p50/p95/p99, outside-call failures, database p95, model queue wait, app CPU and memory; requests over time with failures in red; tables by area, slowest routes, outside systems, slowest outside operations and the model queue. |
+| Traces | Recent requests, filterable by failed only, slower than, and area. Click one to see a waterfall of its steps (for example the ServiceNow call inside a confirm) and the log lines from that request. |
+| Logs | The app's own events: failed or slow outside calls and server errors. Click a trace id to open that trace. |
+| Model (AI) | The earlier model statistics: calls, tokens, time to first token, latency, cost by skill. These count chat and runs together. |
+
+Which traces are kept: **every failed or slow request is kept**; other requests are kept by chance (`telemetry.trace_sample_percent`, 100 by default). The metrics always count every request, so the numbers do not depend on the sampling. Data older than `telemetry.retention_hours` (72) is deleted every ten minutes, and the stored spans and log lines are capped (`telemetry.max_rows`, 50000).
+
+| Setting (Behaviour > Telemetry) | What it does | Default |
+|---|---|---|
+| `telemetry.enabled` | Turns collection on or off at once. | on |
+| `telemetry.retention_hours`, `telemetry.max_rows` | How long and how much is kept. | 72, 50000 |
+| `telemetry.trace_sample_percent` | Share of normal requests whose trace is kept. Failed and slow ones are always kept. | 100 |
+| `telemetry.slow_ms`, `telemetry.slow_db_ms` | What counts as a slow request or outside call, and a slow database query (gets its own span). | 1000, 250 |
+| `telemetry.log_level` | Lowest level kept: INFO, WARNING or ERROR. | WARNING |
+| `telemetry.exclude_paths`, `telemetry.exclude_tables` | Web paths and database tables that are not measured. | run screens and polling; run and audit tables |
+| `telemetry.metric_interval_seconds` | How often metrics are written (needs a restart). | 60 |
+
+Who can see it: the same people who see monitoring (`monitor.view`: approvers, auditors, admins). The page shows request routes, system names and error text, never message text, tickets' contents or credentials.
 
 ---
 
@@ -566,8 +673,8 @@ Every approval, run and chat action writes an audit row with who, what and which
 ### Routine
 
 - **Code changes need a restart; settings do not.** After copying new files, stop and start the app, then hard-refresh the browser (Ctrl+F5).
-- Back up nightly: a `pg_dump` of the `triage` database and a copy of `bootstrap.json`. Scheduling this is on the roadmap.
-- Run the tests: `.venv\Scripts\python.exe -m pytest tests -q` (406 pass at the time of writing).
+- **Backups are automatic.** Every day at the hour set in Behaviour > Backups (02:00 by default) the app writes a `pg_dump` of the `triage` database and a copy of `bootstrap.json` to the backup folder (`backups` next to `bootstrap.json` unless you set another), keeps 14 days and records the result in the audit log (`backup_done` / `backup_failed`). If the app was off at that hour it backs up when it is next running and the last good backup is over 36 hours old. **Back up now** in that section makes one at once. No scheduled task and no elevated session are needed. Set the folder to another disk or a share and copy it off the machine: the backup holds the encryption key and the encrypted credentials. Restoring is manual: `pg_restore` the dump and put the matching `bootstrap-*.json` back as `bootstrap.json`.
+- Run the tests: `.venv\Scripts\python.exe -m pytest tests -q` (542 pass at the time of writing).
 - After editing the page scripts, check them with `node --check`. The scripts in `static/` are not type checked.
 
 ### Troubleshooting
@@ -589,6 +696,8 @@ Every approval, run and chat action writes an audit row with who, what and which
 | Owner approval mail is not in the inbox | Check Junk first. If SES says `Email address is not verified`, the account is in sandbox and that mailbox must be verified. Sender and owner on the same provider can be dropped as spoofing (see "Owner contacts and mail"). |
 | The card says no owner address was found | The server's CMDB record has no `owned_by`, `managed_by`, `assigned_to` or group with an email, or the person's profile Email is empty. Fill the owner on the CI and the profile Email, or set `u_owner_email`. |
 | "Is it up yet?" or "what was the ticket number?" gets the generic "I'm a triage assistant" reply | An old page script is cached: hard-refresh (Ctrl+F5). Ticket numbers are remembered per browser; ask in the same browser where you ran the action. |
+| The Performance page says "Nothing recorded" | Metrics are written once a minute: use the app, wait a minute, press Refresh. Check the badge on the page says Collecting and `telemetry.enabled` is on. After a code update the app must be restarted once. |
+| Performance numbers look too low or traces are missing | Run screens and polling are excluded on purpose (`telemetry.exclude_paths`). Normal fast requests are kept by chance (`telemetry.trace_sample_percent`); the counts and percentiles still include every request. |
 | Jobs stay queued | The model health check is failing (the app calls `/health` on the model server) or all run places are busy. |
 
 ---
@@ -605,6 +714,11 @@ On 2026-11-10 the owner approval path was run for real once: a reboot of `victim
 
 ### Limits today
 
+- Telemetry stays inside TRIAGE-1: there is no OTLP export to Grafana, Jaeger or a collector yet, and no alerting on the numbers.
+- Whether an approver action succeeded is judged by the HTTP status of its request. A confirm that returns 200 with a failed action is not counted as a failed request (the ticket and audit log show it).
+- Percentiles are estimated from histogram buckets (accurate to the bucket), not computed from every sample.
+- Calls made by timer threads (the chat ticket undo timer, the reboot and patch watchers) are traced on their own, without a web request above them.
+
 - Owner mail works only for recipients SES can deliver to: in sandbox each owner mailbox must be verified, and a mail provider may filter same-domain senders to Junk.
 - The list of what the chat did (used for "what was the ticket number?") lives in the browser, not on the server.
 - From chat you can close only tickets you opened there. There is no "pick up an existing ticket" yet.
@@ -618,6 +732,6 @@ On 2026-11-10 the owner approval path was run for real once: a reboot of `victim
 
 1. **Pick, assign and work an existing ticket** from chat, with engineer-to-ServiceNow-user matching by email and a takeover note.
 2. **Kill process from the chat** using the same owner approval, and owners replying to a mailbox that TRIAGE-1 reads itself instead of the engineer pasting the reply (stronger evidence).
-3. **Deployment profiles at first run** (single machine, app plus GPU box, hosted model as an explicit opt-in, custom) and a password chosen during setup.
-4. **Scheduled backups**, and rotation of credentials that were once stored in the project history.
+3. **Deployment profiles at first run** (single machine, app plus GPU box, hosted model as an explicit opt-in, custom).
+4. **Rotation of credentials** that were once stored in the project history: the checklist is `docs/CREDENTIAL-ROTATION.md` (built from `scripts/scan_history.py`, which lists where a secret is and what kind, never the value). The rotation itself is done by you at each system.
 5. **Removing the old local runbook store** (table, search function, embedding library and the `local` option) one release after the ServiceNow knowledge base proves itself.

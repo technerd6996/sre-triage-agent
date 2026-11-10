@@ -46,8 +46,9 @@ def load() -> None:
 def _lock(p: Path) -> None:
     """Owner and Administrators only."""
     if os.name == "nt":
-        user = os.getenv("USERNAME", "")
-        cmd = ["icacls", str(p), "/inheritance:r", "/grant:r", "*S-1-5-32-544:(F)", "*S-1-5-18:(F)"]
+        # A Windows service runs as its own account, which the installer names here.
+        user = os.getenv("TRIAGE_SERVICE_ACCOUNT") or os.getenv("USERNAME", "")
+        cmd =["icacls", str(p), "/inheritance:r", "/grant:r", "*S-1-5-32-544:(F)", "*S-1-5-18:(F)"]
         if user:
             cmd.append(f"{user}:(F)")
         subprocess.run(cmd, check=True, capture_output=True)

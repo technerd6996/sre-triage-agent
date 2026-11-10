@@ -66,6 +66,11 @@ def llm_post(messages: list, timeout=(10, 180), max_tokens=None, thinking=None) 
 
 def log_stream(kind: str, s: _Stream, seconds: float, waited: float, user_id: str = None) -> None:
     model = config.get("model.name")
+    try:
+        from app import telemetry
+        telemetry.record_model_call(kind, seconds, waited, s.stats)
+    except Exception:                                  # noqa: BLE001
+        pass
     usage.log_call(
         {"tokens_in": s.stats["tokens_in"], "tokens_out": s.stats["tokens_out"], "gen_s": seconds,
          "wait_s": waited, "ttft_s": s.stats["ttft_s"], "prompt_comp": {}, "wasted_tokens": 0, "model": model},

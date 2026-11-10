@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import bootstrap, bootstrap_store, config, store
 
@@ -15,6 +15,11 @@ _attempts: list[float] = []
 
 class Code(BaseModel):
     code: str
+
+
+class Complete(BaseModel):
+    code: str
+    password: str = Field(default="", max_length=200)        # the first Super Admin's password, chosen here
 
 
 def _guard(code: str) -> None:
@@ -29,9 +34,17 @@ def _guard(code: str) -> None:
         raise HTTPException(403, "Wrong setup code. It is printed in the server console at startup.")
 
 
+def _admin_needed() -> bool:
+    try:
+        return bootstrap.admin_needed()
+    except Exception:
+        return True
+
+
 @router.get("/status")
 def status():
     return {"database": bootstrap.database_check(), "secret_key": config.secrets_ready(),
+            "admin_needed": _admin_needed(), "admin_user": bootstrap.DEFAULT_ADMIN_ID, "min_password": config.get("security.min_password"),
             "cryptography_installed": importlib.util.find_spec("cryptography") is not None}
 
 
@@ -56,9 +69,9 @@ def generate_key(req: Code):
 
 
 @router.post("/complete")
-def complete(req: Code):
+def complete(req: Complete):
     _guard(req.code)
     try:
-        return bootstrap.complete_setup()
+        return bootstrap.complete_setup(req.password)
     except ValueError as e:
         raise HTTPException(409, str(e))

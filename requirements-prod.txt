@@ -1,0 +1,23 @@
+# What the packaged builds install. Same as requirements.txt without sentence-transformers and torch,
+# which only the old "local" runbook search needs. Exact versions come from packaging/constraints.txt.
+fastapi
+uvicorn
+requests
+python-dotenv
+python-multipart
+langchain
+langchain-openai
+langgraph
+paramiko
+pywinrm
+boto3
+passlib==1.7.4
+cryptography
+bcrypt==4.0.1
+hvac
+ldap3
+pycryptodome
+psycopg[binary,pool]
+langgraph-checkpoint-postgres
+opentelemetry-sdk==1.45.1
+psutil

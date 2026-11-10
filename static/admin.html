@@ -90,7 +90,7 @@
       </button>
       <button class="nav-item" data-section="performance">
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        AI performance
+        Performance
       </button>
       <button class="nav-item" data-section="connections">
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><line x1="6" y1="12" x2="6.01" y2="12"/><line x1="10" y1="12" x2="18" y2="12"/></svg>
@@ -157,6 +157,7 @@
       <div class="card p-5">
         <p class="text-[13px] text-gray-500 mb-4">Active run</p>
         <div id="ov-run" class="text-[14px] text-gray-400">No run in progress.</div>
+        <div id="ov-licence" class="text-[13px] text-gray-500 mt-3"></div>
       </div>
     </div>
 
@@ -209,7 +210,55 @@
 
     <!-- PERFORMANCE -->
     <div id="section-performance" class="section max-w-6xl">
-      <h1 class="text-[19px] font-semibold mb-6">Performance <span class="text-gray-600 font-normal text-[15px]">— last 7 days</span></h1>
+      <div class="flex items-center justify-between flex-wrap gap-3 mb-4">
+        <h1 class="text-[19px] font-semibold">Performance <span class="text-gray-600 font-normal text-[15px]">— the web app, not the runs</span></h1>
+        <div class="flex items-center gap-2" id="tel-controls">
+          <span id="tel-state" class="pill"></span>
+          <select id="tel-hours" aria-label="Time window" class="bg-[#1A2028] text-[13px] text-gray-300 rounded-lg px-2 py-1 border border-[#1A2028]">
+            <option value="1">Last hour</option><option value="6">6 hours</option><option value="24" selected>24 hours</option><option value="72">3 days</option>
+          </select>
+          <button id="tel-refresh" type="button" class="px-3 py-1 rounded-lg border border-[#2E3744] text-[13px] text-gray-200 hover:border-gray-500">Refresh</button>
+        </div>
+      </div>
+      <div id="tel-tabs" class="flex gap-1 mb-5 border-b border-[#232B33]">
+        <button type="button" data-tab="overview" class="px-4 py-2 text-[14px] border-b-2">Overview</button>
+        <button type="button" data-tab="traces" class="px-4 py-2 text-[14px] border-b-2">Traces</button>
+        <button type="button" data-tab="logs" class="px-4 py-2 text-[14px] border-b-2">Logs</button>
+        <button type="button" data-tab="model" class="px-4 py-2 text-[14px] border-b-2">Model (AI)</button>
+      </div>
+
+      <div id="tel-overview" class="tel-pane"><p class="text-[14px] text-gray-500">Loading…</p></div>
+
+      <div id="tel-traces" class="tel-pane hidden">
+        <div class="flex items-center flex-wrap gap-3 mb-3 text-[13px] text-gray-400">
+          <label class="flex items-center gap-2"><input id="tt-err" type="checkbox"> Failed only</label>
+          <label class="flex items-center gap-2">Slower than
+            <select id="tt-min" class="bg-[#1A2028] text-gray-300 rounded-lg px-2 py-1 border border-[#1A2028]">
+              <option value="0">any</option><option value="250">250 ms</option><option value="1000">1 s</option><option value="5000">5 s</option>
+            </select></label>
+          <label class="flex items-center gap-2">Area
+            <select id="tt-feat" class="bg-[#1A2028] text-gray-300 rounded-lg px-2 py-1 border border-[#1A2028]">
+              <option value="">all</option><option>chat</option><option>approver chat: checks</option><option>approver chat: actions</option>
+              <option>tickets from chat</option><option>sign-in</option><option>admin</option><option>pages</option><option>other</option>
+            </select></label>
+        </div>
+        <div id="tel-traces-list" class="card p-0 overflow-hidden"></div>
+        <div id="tel-trace-detail" class="mt-4"></div>
+      </div>
+
+      <div id="tel-logs" class="tel-pane hidden">
+        <div class="flex items-center gap-3 mb-3 text-[13px] text-gray-400">
+          <label class="flex items-center gap-2">Level
+            <select id="tl-level" class="bg-[#1A2028] text-gray-300 rounded-lg px-2 py-1 border border-[#1A2028]">
+              <option value="">all</option><option value="WARNING">warnings</option><option value="ERROR">errors</option>
+            </select></label>
+          <span>The app's own events: failed or slow outside calls and server errors. Not the server log, not runs.</span>
+        </div>
+        <div id="tel-logs-list" class="card p-0 overflow-hidden"></div>
+      </div>
+
+      <div id="tel-model" class="tel-pane hidden">
+      <h2 class="text-[16px] font-semibold mb-3">Model calls <span class="text-gray-600 font-normal text-[14px]">— last 7 days, chat and runs together</span></h2>
       <div id="perf-panel" class="card p-5">
         <p class="text-[14px] text-gray-500">Loading…</p>
       </div>
@@ -227,6 +276,8 @@
       <div id="cost-panel" class="card p-5">
         <p class="text-[14px] text-gray-500">Loading…</p>
       </div>
+    </div>
+
     </div>
 
     <!-- CONFIGURATION -->
@@ -405,8 +456,7 @@ document.querySelectorAll('.nav-item').forEach(btn => {
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('section-' + btn.dataset.section).classList.add('active');
-    if (btn.dataset.section === 'performance' && !perfLoaded) loadPerf();
-    if (btn.dataset.section === 'performance' && perfLoaded) loadCost();
+    if (btn.dataset.section === 'performance') telShow(telTab);
     if ((btn.dataset.section === 'connections' || btn.dataset.section === 'behaviour') && !cfgLoaded) loadConfigPane();
     const s = btn.dataset.section;
     if (s === 'users' && !usersLoaded) loadUsers();
@@ -463,14 +513,21 @@ function askDialog({ title, body = '', okLabel = 'Confirm', cancelLabel = 'Cance
 }
 
 // ── Overview ─────────────────────────────────────────────────────────────────
+// The running time is counted from this page's clock between replies, so it steps 1s at a time (no 2s, 7s jumps).
+let ovAnchor = null, ovKey = '', ovBusy = false;
 function loadOverview() {
+  if (ovBusy) return;                           // never stack requests if one is slow
+  ovBusy = true;
   fetch('/api/agent/status').then(r=>r.json()).then(d => {
     document.getElementById('ov-queue').textContent = d.queue === null ? '?' : d.queue;
     document.getElementById('ov-approvals').textContent = d.pending_approvals;
     const runEl = document.getElementById('ov-run');
     if (d.run) {
       const waiting = d.run.status === 'awaiting_approval';
-      const mins = Math.floor(d.run.seconds / 60), secs = d.run.seconds % 60;
+      const key = d.run.ticket + '|' + d.run.status, now = Date.now();
+      if (ovAnchor === null || key !== ovKey || Math.abs((now - ovAnchor) / 1000 - d.run.seconds) > 2) { ovAnchor = now - d.run.seconds * 1000; ovKey = key; }
+      const total = Math.max(0, Math.floor((now - ovAnchor) / 1000));
+      const mins = Math.floor(total / 60), secs = total % 60;
       runEl.innerHTML = `
         <div class="flex items-center gap-3">
           <span class="mono font-bold text-[#FFB000]">${esc(d.run.ticket)}</span>
@@ -478,12 +535,32 @@ function loadOverview() {
         </div>
         <p class="text-[13px] text-gray-500 mt-1">${esc(d.run.server)} ·${mins > 0 ? mins+'m ' : ''}${secs}s elapsed</p>`;
     } else {
+      ovAnchor = null;
       runEl.textContent = 'No run in progress.';
     }
-  }).catch(() => {});
+  }).catch(() => {}).finally(() => { ovBusy = false; });
 }
 loadOverview();
-setInterval(loadOverview, 5000);
+setInterval(loadOverview, 1000);
+
+// Plan and limits, with a warning when the install is near or over them.
+function loadLicence() {
+  fetch('/api/admin/licence').then(r => r.ok ? r.json() : null).then(s => {
+    const el = document.getElementById('ov-licence');
+    if (!s || !el) return;
+    const part = (k, label) => `${s.usage[k] == null ? '?' : s.usage[k]} of ${s.limits[k] ? s.limits[k] : 'unlimited'} ${label}`;
+    let html = `Plan: <b>${esc(s.plan)}</b>${s.customer ? ' (' + esc(s.customer) + ')' : ''} · ${part('servers', 'servers')} · ${part('seats', 'approver seats')} · ${part('tickets_month', 'automatic tickets this month')}`;
+    if (s.problems.length) {
+      const when = s.grace_ends ? new Date(s.grace_ends * 1000).toLocaleDateString() : '';
+      html += `<div class="text-red-400 mt-1">${s.auto_blocked ? 'New automatic tickets are stopped: ' : 'Over the plan. New automatic tickets stop after ' + esc(when) + ': '}${esc(s.problems.join('; '))}</div>`;
+    } else if (s.warnings.length) {
+      html += `<div class="text-[#FFB000] mt-1">${esc(s.warnings.join('; '))}</div>`;
+    }
+    el.innerHTML = html;
+  }).catch(() => {});
+}
+loadLicence();
+setInterval(loadLicence, 60000);
 
 // ── Controls ─────────────────────────────────────────────────────────────────
 fetch('/api/chat/status').then(r=>r.json()).then(d=>chat.checked=d.enabled);
@@ -593,6 +670,181 @@ function loadCost() {
   });
 }
 document.getElementById('cost-days').onchange = () => { if (perfLoaded) loadCost(); };
+
+// ── App telemetry: traces, metrics and logs of the web app itself (agent runs are not included) ──────────
+let telTab = 'overview';
+const fmtMs = v => v == null ? '—' : (v >= 1000 ? (v / 1000).toFixed(2) + ' s' : (v >= 100 ? Math.round(v) : v) + ' ms');
+const telWhen = ts => new Date(ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const telHrs = () => document.getElementById('tel-hours').value;
+const telNone = (msg) => `<div class="p-5 text-[14px] text-gray-500">${msg}</div>`;
+
+function telCard(label, value, sub, bad) {
+  return `<div class="card p-4"><p class="text-[12px] text-gray-500 mb-1">${label}</p>` +
+    `<p class="mono text-[23px] font-bold ${bad ? 'text-red-400' : ''}">${value}</p>` +
+    (sub ? `<p class="text-[12px] text-gray-500 mt-1">${sub}</p>` : '') + '</div>';
+}
+
+function telTable(title, head, rows, empty) {
+  const body = rows.length
+    ? `<div class="tbl-wrap"><table class="dtbl"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>` +
+      rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('') + '</tbody></table></div>'
+    : telNone(empty || 'Nothing recorded yet.');
+  return `<div class="card mb-4 overflow-hidden"><h3 class="text-[14px] font-semibold px-4 pt-4 pb-2">${title}</h3>${body}</div>`;
+}
+
+function telShow(tab) {
+  telTab = tab;
+  document.querySelectorAll('#tel-tabs button').forEach(b => {
+    const on = b.dataset.tab === tab;
+    b.classList.toggle('border-[#FFB000]', on); b.classList.toggle('text-[#FFB000]', on);
+    b.classList.toggle('border-transparent', !on); b.classList.toggle('text-gray-400', !on);
+  });
+  document.querySelectorAll('.tel-pane').forEach(p => p.classList.toggle('hidden', p.id !== 'tel-' + tab));
+  document.getElementById('tel-hours').style.display = tab === 'model' ? 'none' : '';
+  if (tab === 'overview') loadTelOverview();
+  else if (tab === 'traces') loadTelTraces();
+  else if (tab === 'logs') loadTelLogs();
+  else if (perfLoaded) loadCost(); else loadPerf();
+  telState();
+}
+
+function telState() {
+  api('GET', '/api/admin/telemetry/status').then(d => {
+    const el = document.getElementById('tel-state');
+    el.textContent = d.enabled && d.running ? 'Collecting' : (d.enabled ? 'Starting' : 'Off');
+    el.title = d.stored ? `Stored: ${d.stored.otel_spans} spans, ${d.stored.otel_metrics} metric points, ${d.stored.otel_logs} log lines. Kept ${d.retention_hours} h.` : '';
+  }).catch(() => {});
+}
+
+function loadTelOverview() {
+  const box = document.getElementById('tel-overview');
+  api('GET', '/api/admin/telemetry/summary?hours=' + telHrs()).then(d => {
+    const r = d.requests, db = d.database, pr = d.process;
+    if (!r.total && !d.outbound.length) {
+      box.innerHTML = '<div class="card p-5 text-[14px] text-gray-500">Nothing recorded in this window yet. Metrics are written once a minute; use the app, then Refresh. ' +
+        'Collection is controlled by <b>Telemetry</b> in Behaviour.</div>';
+      return;
+    }
+    const failedOut = d.outbound.reduce((a, o) => a + o.errors, 0), callsOut = d.outbound.reduce((a, o) => a + o.calls, 0);
+    const chatQ = d.model.queue_wait.find(q => q.kind === 'chat');
+    // One slot for every time step in the chosen window (empty ones too), so the chart reads as a timeline.
+    const step = d.step, byT = {};
+    d.series.forEach(x => { byT[x.t] = x; });
+    const lastT = Math.floor(Date.now() / 1000 / step) * step, slots = [];
+    for (let t = lastT - (Math.round(telHrs() * 3600 / step) - 1) * step; t <= lastT; t += step) slots.push(byT[t] || { t, requests: 0, errors: 0 });
+    const max = Math.max(...slots.map(x => x.requests), 1);
+    const bars = slots.map(x => `<div class="flex-1 flex flex-col justify-end h-full" data-bar="${telWhen(x.t)} to ${telWhen(x.t + step)}|${x.requests}|${x.errors}">` +
+      (x.requests ? `<div style="height:${Math.max(3, x.requests / max * 100)}%;background:var(--accent);opacity:.8;position:relative">` +
+        (x.errors ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${x.errors / x.requests * 100}%;background:var(--danger-fill)"></div>` : '') + '</div>'
+        : '<div style="height:1px;background:var(--border)"></div>') + '</div>').join('');
+    const stepLabel = step >= 3600 ? Math.round(step / 3600) + ' hour' : Math.round(step / 60) + ' min';
+    const pct = v => v == null ? '—' : v.toFixed(1) + '%';
+    box.innerHTML = `
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        ${telCard('Requests', fmt(r.total), `${fmt(r.client_errors)} refused or not found`)}
+        ${telCard('Failed requests', r.errors ? fmt(r.errors) : '0', `${r.error_rate}% of requests`, r.errors > 0)}
+        ${telCard('Latency p95', fmtMs(r.p95_ms), `p50 ${fmtMs(r.p50_ms)} · p99 ${fmtMs(r.p99_ms)}`)}
+        ${telCard('Outside call failures', failedOut ? fmt(failedOut) : '0', `of ${fmt(callsOut)} calls`, failedOut > 0)}
+        ${telCard('Database p95', fmtMs(db.p95_ms), `${fmt(db.queries)} queries · pool waiting max ${db.pool_waiting ? db.pool_waiting.max : '—'}`)}
+        ${telCard('Model queue wait p95', chatQ ? fmtMs(chatQ.p95_ms) : '—', chatQ ? `chat · ${fmt(chatQ.calls)} calls` : 'no chat calls')}
+        ${telCard('App CPU', pr.cpu_percent ? pct(pr.cpu_percent.avg) : '—', pr.cpu_percent ? `peak ${pct(pr.cpu_percent.max)}` : '')}
+        ${telCard('App memory', pr.memory_mb ? Math.round(pr.memory_mb.last) + ' MB' : '—', pr.threads ? `${pr.threads.last} threads` : '')}
+      </div>
+      <div class="card p-4 mb-4">
+        <div class="flex justify-between text-[13px] mb-1"><span class="font-semibold">Traffic to the web app</span><span class="text-gray-500">busiest bar: ${fmt(max)} requests in ${stepLabel}</span></div>
+        <div class="text-[12px] text-gray-500 mb-2">Each bar is the number of requests the app received during ${stepLabel}. Taller means busier; the red part is requests that failed. Hover a bar for the details.</div>
+        <div id="tel-bar-info" class="mono text-[12px] mb-2" style="min-height:18px">&nbsp;</div>
+        <div id="tel-bars" class="flex items-end gap-[2px]" style="height:90px">${bars}</div>
+        <div class="flex justify-between text-[11px] text-gray-500 mt-1"><span>${telWhen(slots[0].t)}</span><span>now</span></div>
+      </div>
+      ${telTable('By area', ['Area', 'Requests', 'Failed', 'p50', 'p95', 'Slowest'],
+        d.features.map(f => [esc(f.feature), fmt(f.requests), f.errors ? `<span class="text-red-400">${f.errors}</span>` : '0', fmtMs(f.p50_ms), fmtMs(f.p95_ms), fmtMs(f.max_ms)]))}
+      ${telTable('Slowest routes (by p95)', ['Route', 'Requests', 'Failed', 'p95', 'Slowest'],
+        d.routes.map(x => [`<span class="mono">${esc(x.route)}</span>`, fmt(x.requests), x.errors ? `<span class="text-red-400">${x.errors}</span>` : '0', fmtMs(x.p95_ms), fmtMs(x.max_ms)]))}
+      ${telTable('Outside systems', ['System', 'Calls', 'Failed', 'p50', 'p95', 'Slowest'],
+        d.outbound.map(o => [esc(o.system), fmt(o.calls), o.errors ? `<span class="text-red-400">${o.errors}</span>` : '0', fmtMs(o.p50_ms), fmtMs(o.p95_ms), fmtMs(o.max_ms)]),
+        'No outside calls in this window.')}
+      ${telTable('Slowest outside operations', ['Operation', 'Calls', 'Failed', 'p95'],
+        d.operations.map(o => [`<span class="mono">${esc(o.operation)}</span>`, fmt(o.calls), o.errors ? `<span class="text-red-400">${o.errors}</span>` : '0', fmtMs(o.p95_ms)]))}
+      ${telTable('Model queue', ['Kind', 'Calls', 'Wait p50', 'Wait p95', 'Time to first token'],
+        d.model.queue_wait.map(q => { const t = d.model.ttft.find(x => x.kind === q.kind); return [esc(q.kind), fmt(q.calls), fmtMs(q.p50_ms), fmtMs(q.p95_ms), t ? fmtMs(t.avg_ms) + ' avg' : '—']; }),
+        'No chat model calls in this window.')}`;
+    const info = document.getElementById('tel-bar-info'), barsEl = document.getElementById('tel-bars');
+    barsEl.onmouseover = ev => {
+      const b = ev.target.closest('[data-bar]');
+      if (!b) return;
+      const [when, n, bad] = b.dataset.bar.split('|');
+      info.textContent = `${when}: ${n} request${n === '1' ? '' : 's'}, ${bad} failed`;
+    };
+    barsEl.onmouseleave = () => { info.innerHTML = '&nbsp;'; };
+  }).catch(e => { box.innerHTML = `<div class="card p-5 text-[14px] text-red-400">${esc(e.message || 'Could not load telemetry.')}</div>`; });
+}
+
+function loadTelTraces() {
+  const box = document.getElementById('tel-traces-list');
+  const q = new URLSearchParams({ hours: telHrs(), min_ms: document.getElementById('tt-min').value, limit: 100 });
+  if (document.getElementById('tt-err').checked) q.set('errors_only', 'true');
+  const f = document.getElementById('tt-feat').value;
+  if (f) q.set('feature', f);
+  api('GET', '/api/admin/telemetry/traces?' + q).then(d => {
+    if (!d.traces.length) { box.innerHTML = telNone('No traces match. Normal fast requests are kept by chance (see Telemetry settings); slow and failed ones always are.'); return; }
+    box.innerHTML = '<div class="tbl-wrap"><table class="dtbl"><thead><tr><th>When</th><th>Request</th><th>Area</th><th>Status</th><th>Time</th><th>Result</th></tr></thead><tbody>' +
+      d.traces.map(t => { const a = t.attrs || {}, bad = t.status === 'error';
+        return `<tr data-trace="${esc(t.trace_id)}" style="cursor:pointer"><td class="whitespace-nowrap">${telWhen(t.start_ts)}</td>` +
+          `<td class="mono">${esc(t.name)}</td><td>${esc(a['app.feature'] || a['app.system'] || '')}</td><td>${esc(a['http.response.status_code'] ?? '')}</td>` +
+          `<td>${fmtMs(t.duration_ms)}</td><td>${bad ? `<span class="text-red-400">${esc(t.error || 'failed')}</span>` : 'ok'}</td></tr>`; }).join('') +
+      '</tbody></table></div>';
+  }).catch(e => { box.innerHTML = telNone(esc(e.message)); });
+}
+
+function openTrace(id) {
+  const box = document.getElementById('tel-trace-detail');
+  box.innerHTML = '<div class="card p-4 text-[14px] text-gray-500">Loading…</div>';
+  api('GET', '/api/admin/telemetry/traces/' + encodeURIComponent(id)).then(d => {
+    const spans = d.spans.slice().sort((a, b) => a.start_ts - b.start_ts);
+    const t0 = spans[0].start_ts, end = Math.max(...spans.map(x => x.start_ts + x.duration_ms / 1000)), total = Math.max(end - t0, 0.001);
+    const depth = {};
+    spans.forEach(x => { depth[x.span_id] = x.parent_id && depth[x.parent_id] != null ? depth[x.parent_id] + 1 : 0; });
+    const rows = spans.map(x => {
+      const left = (x.start_ts - t0) / total * 100, width = Math.max(x.duration_ms / 1000 / total * 100, 0.6), bad = x.status === 'error';
+      const tip = esc(JSON.stringify(x.attrs || {}));
+      return `<div class="flex items-center gap-3 py-1 text-[13px]" title="${tip}">` +
+        `<span class="shrink-0 truncate" style="width:260px;padding-left:${depth[x.span_id] * 14}px">${esc(x.name)}</span>` +
+        `<div class="flex-1 relative h-3 bg-[#1A2028] rounded"><div style="position:absolute;left:${left}%;width:${width}%;top:0;bottom:0;border-radius:4px;background:${bad ? 'var(--danger-fill)' : 'var(--accent)'}"></div></div>` +
+        `<span class="w-20 text-right text-gray-400 shrink-0">${fmtMs(x.duration_ms)}</span></div>`;
+    }).join('');
+    const logs = (d.logs || []).map(l => `<p class="text-[13px] text-gray-400"><span class="pill mr-2">${esc(l.severity)}</span>${esc(l.body)}</p>`).join('');
+    box.innerHTML = `<div class="card p-4"><div class="flex justify-between mb-3"><h3 class="text-[14px] font-semibold">Trace ${esc(id.slice(0, 8))} · ${fmtMs(total * 1000)}</h3>` +
+      `<button type="button" id="tt-close" class="text-[13px] text-gray-400 hover:text-gray-200">Close</button></div>${rows}` +
+      (logs ? `<div class="mt-3 pt-3 border-t border-[#232B33] space-y-1">${logs}</div>` : '') + '</div>';
+    document.getElementById('tt-close').onclick = () => { box.innerHTML = ''; };
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }).catch(e => { box.innerHTML = `<div class="card p-4 text-[14px] text-gray-500">${esc(e.message)}</div>`; });
+}
+
+function loadTelLogs() {
+  const box = document.getElementById('tel-logs-list');
+  const q = new URLSearchParams({ hours: telHrs(), level: document.getElementById('tl-level').value, limit: 200 });
+  api('GET', '/api/admin/telemetry/logs?' + q).then(d => {
+    if (!d.logs.length) { box.innerHTML = telNone('No events in this window. That is good news.'); return; }
+    box.innerHTML = '<div class="tbl-wrap"><table class="dtbl"><thead><tr><th>When</th><th>Level</th><th>Event</th><th>Trace</th></tr></thead><tbody>' +
+      d.logs.map(l => `<tr><td class="whitespace-nowrap">${telWhen(l.ts)}</td>` +
+        `<td><span class="pill ${l.severity === 'ERROR' ? 'text-red-400' : ''}">${esc(l.severity)}</span></td><td>${esc(l.body)}</td>` +
+        `<td>${l.trace_id ? `<button type="button" class="mono text-[#FFB000]" data-open-trace="${esc(l.trace_id)}">${esc(l.trace_id.slice(0, 8))}</button>` : ''}</td></tr>`).join('') +
+      '</tbody></table></div>';
+  }).catch(e => { box.innerHTML = telNone(esc(e.message)); });
+}
+
+document.getElementById('tel-tabs').onclick = e => { const b = e.target.closest('button[data-tab]'); if (b) telShow(b.dataset.tab); };
+document.getElementById('tel-refresh').onclick = () => telShow(telTab);
+document.getElementById('tel-hours').onchange = () => telShow(telTab);
+['tt-err', 'tt-min', 'tt-feat'].forEach(i => { document.getElementById(i).onchange = loadTelTraces; });
+document.getElementById('tl-level').onchange = loadTelLogs;
+document.getElementById('tel-traces-list').onclick = e => { const tr = e.target.closest('tr[data-trace]'); if (tr) openTrace(tr.dataset.trace); };
+document.getElementById('tel-logs-list').onclick = e => {
+  const b = e.target.closest('button[data-open-trace]');
+  if (b) { telShow('traces'); openTrace(b.dataset.openTrace); }
+};
 
 let kbLoaded = false;
 function loadKbStatus() {
@@ -931,10 +1183,11 @@ function renderCfg(panel) {
   panelEl.innerHTML = `
     <div class="flex items-center justify-between mb-3">
       <h3 class="text-[16px] font-semibold">${esc(sec.title)}</h3>
-      ${sec.testable ? `<button id="cfg-test" class="px-3 py-1.5 rounded-lg border border-[#232B33] text-[14px] hover:text-[#FFB000]">Test</button>` : ''}
+      ${sec.testable ? `<button id="cfg-test" class="px-3 py-1.5 rounded-lg border border-[#232B33] text-[14px] hover:text-[#FFB000]">${sec.id === 'backup' ? 'Back up now' : sec.id === 'licence' ? 'Check licence' : 'Test'}</button>` : ''}
     </div>${prov}${warn}
     <div class="flex flex-col gap-4">${sec.fields.map(cfgField).join('')}</div>${res}
-    ${sec.testable ? '<p class="text-[12px] text-gray-600 mt-3">Test uses the values the app is running on. After saving a field marked restart, restart the app first.</p>' : ''}`;
+    ${sec.id === 'backup' ? '<p class="text-[12px] text-gray-600 mt-3">The backup holds the encryption key and the encrypted credentials. Copy it off this machine to somewhere equally protected: a backup on the same disk does not survive losing that disk.</p>'
+      : sec.testable ? '<p class="text-[12px] text-gray-600 mt-3">Test uses the values the app is running on. After saving a field marked restart, restart the app first.</p>' : ''}`;
 }
 
 function renderBoot(panelEl) {

@@ -14,11 +14,14 @@ import logging
 import os
 import re
 import threading
+import time
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
+
+from app import telemetry          # light at import time (OpenTelemetry itself loads in setup()); registers its settings early
 
 log = logging.getLogger("uvicorn.error")
 
@@ -68,6 +71,14 @@ def close_pool() -> None:
     if _pool is not None:
         _pool.close()
         _pool = None
+
+
+def _timed(op: str, table: str, t0: float) -> None:
+    """Report one query's duration to telemetry (a no-op when it is off, in a run, or for run/audit tables)."""
+    try:
+        telemetry.db_call(op, table, time.perf_counter() - t0)
+    except Exception:                                  # noqa: BLE001  telemetry must never break a query
+        pass
 
 
 def _adapt(v):
@@ -240,8 +251,12 @@ class _Query:
         sql, params = self._build()
         if sql is None:
             return Result([])
-        with get_pool().connection() as c:
-            rows = c.execute(sql, params).fetchall()
+        t0 = time.perf_counter()
+        try:
+            with get_pool().connection() as c:
+                rows = c.execute(sql, params).fetchall()
+        finally:
+            _timed(self._op, self._table, t0)
         if self._single:
             if len(rows) != 1:
                 raise LookupError(f"expected one row, got {len(rows)}")
@@ -256,8 +271,12 @@ class _Rpc:
     def execute(self) -> Result:
         args = ", ".join(f"{_ident(k)} => %s" for k in self._params)
         sql = f"select * from {_ident(self._fn)}({args})"
-        with get_pool().connection() as c:
-            return Result(c.execute(sql, [_adapt(v) for v in self._params.values()]).fetchall())
+        t0 = time.perf_counter()
+        try:
+            with get_pool().connection() as c:
+                return Result(c.execute(sql, [_adapt(v) for v in self._params.values()]).fetchall())
+        finally:
+            _timed("rpc", self._fn, t0)
 
 
 class Client:

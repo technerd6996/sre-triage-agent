@@ -423,17 +423,101 @@ function appendDOM(role, content, info) {
     return div.querySelector('.content');
 }
 
-const THINKING_STEPS = ['Thinking…', 'Searching runbooks…', 'Putting the answer together…'];
+// The waiting phase. The label says what is really happening (the server sends a status for each real step) and a
+// live seconds counter shows the work is still going. stop() ends it; stop.set(text) changes the label after a short
+// pause (a step that lasts under a third of a second is skipped, so quick steps do not flicker); stop.now(text) changes it
+// at once; stop.later(ms, text) changes it if the wait is still going after ms.
+function startThinking(node, first = 'Thinking…') {
+    node.innerHTML = `<div class="thinking"><span class="thinking-dots"><i></i><i></i><i></i></span><span class="thinking-label shimmer"></span><span class="thinking-time"></span></div><div class="thinking-bar"></div>`;
+    const label = node.querySelector('.thinking-label'), clock = node.querySelector('.thinking-time');
+    const t0 = Date.now();
+    let pending = null, later = null, current = '';
+    const apply = (text) => {
+        if (text === current) return;
+        current = text;
+        label.textContent = text;
+        label.classList.remove('swap'); void label.offsetWidth; label.classList.add('swap');     // fades the new words in
+    };
+    apply(first);
+    const tick = setInterval(() => {
+        const s = Math.floor((Date.now() - t0) / 1000);
+        clock.textContent = s >= 3 ? `· ${s}s` : '';
+    }, 500);
+    const stop = () => { clearInterval(tick); clearTimeout(pending); clearTimeout(later); };
+    stop.set = (text) => { clearTimeout(pending); pending = setTimeout(() => apply(text), 350); };
+    stop.now = (text) => { clearTimeout(pending); apply(text); };
+    stop.later = (ms, text) => { clearTimeout(later); later = setTimeout(() => apply(text), ms); };
+    return stop;
+}
 
-function startThinking(node) {
-    node.innerHTML = `<div class="thinking"><span class="thinking-dots"><i></i><i></i><i></i></span><span class="thinking-label shimmer">${THINKING_STEPS[0]}</span></div>`;
-    const label = node.querySelector('.thinking-label');
-    let i = 0;
-    const timer = setInterval(() => {
-        i = Math.min(i + 1, THINKING_STEPS.length - 1);   // stays on the last step
-        label.textContent = THINKING_STEPS[i];
-    }, 2500);
-    return () => clearInterval(timer);
+// What a server check is doing, in words, for the waiting label (a check over WinRM or SSH can take several seconds).
+const CHECK_LABELS = [
+    [/\b(sccm|mecm|configmgr|ccmexec)\b|\bservices?\b/, 'Looking up services on the server'],
+    [/patch|update|hotfix|\bkb\d/, 'Checking Windows updates on the server'],
+    [/uptime|up time|boot|reboot|restart|up yet|come back|came back|\bback\b/, 'Reading uptime from the server'],
+    [/process/, 'Reading the busiest processes on the server'],
+    [/\bcpu\b/, 'Reading CPU use on the server'],
+    [/\bmem(ory)?\b/, 'Reading memory use on the server'],
+    [/disk|drive|storage/, 'Reading disk space on the server'],
+    [/ping|\bdns\b|\bport\b|nslookup|telnet|reach/, 'Testing the network from the server'],
+    [/event|journal|syslog|error/, 'Reading the error log on the server'],
+    [/session|quser|logged/, 'Listing sessions on the server'],
+    [/cron|timer|scheduled/, 'Listing scheduled jobs on the server'],
+    [/package|rpm|dpkg|\bapt\b/, 'Reading the package list on the server'],
+    [/cmdb|owner|criticality|support group|health check/, 'Looking up the CMDB'],
+];
+
+function checkLabel(query) {
+    const q = (query || '').toLowerCase();
+    const hit = CHECK_LABELS.find(([re]) => re.test(q));
+    return (hit ? hit[1] : 'Checking the server') + '…';
+}
+
+// The last element inside the answer, where the cursor goes.
+function deepestLast(el) {
+    while (el.lastElementChild && !/^(BR|HR|IMG|SVG)$/i.test(el.lastElementChild.tagName)) el = el.lastElementChild;
+    return el;
+}
+
+// Shows the streamed answer at a steady pace with a blinking cursor, instead of in network-sized bursts. It never falls far
+// behind (the pace rises with the unread text), catches up at once when the tab is in the background or the person prefers
+// reduced motion, and finish() resolves when everything is shown. The final paint has no cursor.
+function makeTyper(node) {
+    const still = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    let target = '', shown = 0, painted = -1, ended = false, timer = null, last = performance.now(), done = null;
+    const nearBottom = () => !chatContainer || chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 140;
+    const paint = (final) => {
+        const stick = nearBottom();                       // do not drag the page down if the person scrolled up to read
+        node.innerHTML = formatSeverity(target.slice(0, shown));
+        if (!final) {
+            const cursor = document.createElement('span');
+            cursor.className = 'stream-cursor';
+            deepestLast(node.querySelector('.kb-answer') || node).appendChild(cursor);
+        }
+        if (stick && chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
+    };
+    const stop = () => { if (timer) clearInterval(timer); timer = null; };
+    const tick = () => {
+        const now = performance.now(), dt = Math.min(now - last, 250);
+        last = now;
+        const backlog = target.length - shown;
+        if (backlog > 0) {
+            if (still || document.hidden) shown = target.length;
+            else shown = Math.min(target.length, shown + Math.max(1, Math.round(Math.max(80, backlog * (ended ? 8 : 3)) * dt / 1000)));
+        }
+        if (shown !== painted) { paint(false); painted = shown; }
+        if (ended && shown >= target.length) { stop(); paint(true); if (done) done(); }
+    };
+    const run = () => { if (!timer) { last = performance.now(); timer = setInterval(tick, 30); } };
+    return {
+        push(text) { target += text; run(); },
+        finish() {
+            ended = true;
+            if (!timer && shown >= target.length) { paint(true); return Promise.resolve(); }
+            return new Promise((resolve) => { done = resolve; run(); });
+        },
+        stop,
+    };
 }
 
 function setComposer(enabled, placeholder) {
@@ -793,8 +877,9 @@ async function streamResponse(query) {
 
     const activeHistory = chat.history;
     const contentNode = appendDOM('assistant', '');
+    let typer = null;                                           // reveals the streamed answer steadily
 
-    const stopThinking = contentNode ? startThinking(contentNode) : () => {};
+    const stopThinking = contentNode ? startThinking(contentNode) : (() => { const f = () => {}; f.set = f.now = f.later = f; return f; })();
     if (chatContainer) chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
 
     const maxTurns = slider ? parseInt(slider.value, 10) : 6;
@@ -805,7 +890,7 @@ async function streamResponse(query) {
     // not the chat persona. The server name itself is resolved server-side (resolve_server /
     // find_in_text scans the question for a known CI name) -- no client-side text parsing.
     const isApprover = (currentUser?.caps || []).includes('console.act');
-    const closeMatch = isApprover && /\b(close|resolve)\b/i.test(query) && /\bINC\d{5,}\b/i.test(query);
+    const closeMatch = isApprover && /\b(close|resolve)\b/i.test(query) && (/\bINC\d{5,}\b/i.test(query) || /\b[A-Z][A-Z0-9]{1,9}-\d+\b/.test(query));
     const actionMatch = isApprover
         && (closeMatch || /\b(restart|kill|stop|start|unlock|enable|disable|install|upgrade|logoff|reboot|uninstall|remove|poweroff)\b|\bshut ?down\b|\bpower off\b|\bfree up\b|\blog off\b|\brun (the )?(scheduled )?(task|job)\b|\bupdate (the )?packages?\b/i.test(query)
             || (/\b(clean|clear)\b/i.test(query) && /\b(temp|temporary|logs?)\b/i.test(query)))
@@ -816,7 +901,8 @@ async function streamResponse(query) {
     const inquireMatch = !actionMatch && isApprover
         && (/\b(cpu|memory|mem|disks?|drives?|storage|process(es)?|cmdb|criticality|support group|health check)\b/i.test(query)
             || /\b(uptime|up time|boot( |-)?up|boot time|booted|ping|dns|port|nslookup|telnet|reachab\w*|journal(ctl)?|syslog|sessions?|quser|cron|timers?|hotfix|patch(es|ing)?|packages?|upgradable|rpm|dpkg|apt)\b/i.test(query)
-            || /(last (boot|reboot|restart)|(pending|required|needed) (reboot|restart)|(reboot|restart) (pending|required|needed)|needs? (a )?(reboot|restart)|event (log|errors?)|error log|recent errors|logged (in|on)|scheduled (tasks?|jobs?)|(failed|stopped) (services?|units)|windows updates?|security (updates?|patches)|can .{0,60}\breach\b|is .{0,40}\bback\b|(has|have|did|was|is)\b.{0,40}\b(rebooted|restarted|booted)\b|\bup yet\b|\bis (it|[a-z0-9._-]+) up\b|(come|came) back)/i.test(query));
+            || /(last (boot|reboot|restart)|(pending|required|needed) (reboot|restart)|(reboot|restart) (pending|required|needed)|needs? (a )?(reboot|restart)|event (log|errors?)|error log|recent errors|logged (in|on)|scheduled (tasks?|jobs?)|(failed|stopped) (services?|units)|windows updates?|\b(patch|update)s?\s+status\b|status of (the )?(patch|update)s?\b|\b(pending|available|missing|waiting|outstanding|installed|needed) (updates?|patches)\b|\bupdates?\b.{0,25}\b(available|waiting|pending|missing|installed|needed|outstanding)\b|\blast (patch|update)\b|up[- ]to[- ]date|security (updates?|patches)|can .{0,60}\breach\b|is .{0,40}\bback\b|(has|have|did|was|is)\b.{0,40}\b(rebooted|restarted|booted)\b|\bup yet\b|\bis (it|[a-z0-9._-]+) up\b|(come|came) back)/i.test(query)
+            || (!/\bdepend/i.test(query) && /(\b(sccm|mecm|configmgr|ccmexec)\b|configuration manager|\bservices?\b.{0,30}\b(running|stopped|installed|present|exist\w*|status|state|in it|on it|there|listed)\b|\b(is|are|was|were|list|show|which|any|those|these)\b.{0,40}\bservices?\b)/i.test(query)));
 
     if (isApprover && /\bREQ-[A-Z0-9]{6}\b/.test(query) && query.length > 40) {
         await handleOwnerReply(contentNode, query, chat, activeHistory, stopThinking);
@@ -837,6 +923,8 @@ async function streamResponse(query) {
         return;
     }
     if (inquireMatch) {
+        stopThinking.now(checkLabel(query));
+        stopThinking.later(6000, 'Still waiting for the server to answer…');
         try {
             const res = await fetch('/api/approver-chat/inquire', {
                 method: 'POST',
@@ -940,16 +1028,18 @@ async function streamResponse(query) {
             try { parsed = JSON.parse(dataStr); } catch (e) { return; }
 
             if (parsed.meta) { meta = parsed.meta; return; }
+            if (parsed.status) { if (isFirstChunk) stopThinking.set(parsed.status); return; }     // a real step on the server
             if (parsed.error) throw new Error(parsed.error);
 
             if (parsed.text) {
                 if (isFirstChunk && contentNode) {
                     stopThinking();
                     contentNode.innerHTML = "";
+                    typer = makeTyper(contentNode);
                     isFirstChunk = false;
                 }
                 fullText += parsed.text;
-                if (contentNode) contentNode.innerHTML = formatSeverity(fullText);
+                if (typer) typer.push(parsed.text);
             }
         };
 
@@ -970,6 +1060,7 @@ async function streamResponse(query) {
 
         if (!finished && buffer) handleLine(buffer);
         if (finished) reader.cancel().catch(() => {});
+        if (typer) await typer.finish();                      // let the last of the answer appear before the badges and buttons
 
         if (!fullText) {
             if (contentNode) contentNode.innerHTML = `<span class="text-red-400">The model returned an empty response. Check the Colab server.</span>`;
@@ -1012,11 +1103,13 @@ async function streamResponse(query) {
 
     } catch (err) {
         console.error('Chat request failed:', err);
+        if (typer) typer.stop();
         if (contentNode) {
             contentNode.innerHTML = `<span class="text-red-400">Request failed: ${esc(err.message)}<br><span class="text-gray-500 text-[14px]">Check the uvicorn terminal for the full traceback.</span></span>`;
         }
     } finally {
         stopThinking();
+        if (typer) typer.stop();
         backToListening();
     }
 }

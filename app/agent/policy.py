@@ -15,7 +15,7 @@ DEFAULT_RISK = {
     "check_oom_events": 0, "get_service_logs": 0, "find_large_files": 0,
     # approver-chat-only read-only checks (app/tools/chat_tools.py; the agent does not have them)
     "check_uptime": 0, "check_pending_reboot": 0, "check_network": 0, "get_event_errors": 0, "list_sessions": 0,
-    "list_failed_services": 0, "list_scheduled_jobs": 0, "check_windows_updates": 0, "list_packages": 0,
+    "list_failed_services": 0, "find_services": 0, "list_scheduled_jobs": 0, "check_windows_updates": 0, "list_packages": 0,
     "list_upgradable": 0, "list_security_updates": 0,
     "escalate_l3": 0,  # notification only; no remediation happens at L3
     # L1: standard operations need a human

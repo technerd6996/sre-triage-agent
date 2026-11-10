@@ -1,0 +1,37 @@
+# TRIAGE-1 and its database.
+#   1. Create a file named .env next to this one with one line:  POSTGRES_PASSWORD=<long random letters and digits>
+#   2. docker compose up -d
+#   3. Open http://127.0.0.1:8000 and finish the setup page.
+# Port 8000 is published on this machine only. Put your own reverse proxy with HTTPS in front to reach it from elsewhere.
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: triage
+      POSTGRES_DB: triage
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the .env file}
+    volumes:
+      - triage-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U triage -d triage"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    image: triage1:1.0.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://triage:${POSTGRES_PASSWORD}@db:5432/triage
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - triage-data:/data
+
+volumes:
+  triage-db:
+  triage-data:

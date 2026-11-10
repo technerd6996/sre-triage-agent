@@ -1,4 +1,4 @@
-"""First-run helpers: the shipped Default Super Admin, the password rules, and the installed state."""
+"""First-run helpers: the first Super Admin (password chosen during setup), the password rules, and the installed state."""
 import logging
 from app import config
 import secrets
@@ -11,7 +11,7 @@ from app import store
 log = logging.getLogger("uvicorn.error")
 
 DEFAULT_ADMIN_ID = "superadmin@triage.local"
-DEFAULT_ADMIN_PASSWORD = "ChangeMe-Triage1!"      # shipped default: usable once, the first login must replace it
+DEFAULT_ADMIN_PASSWORD = "ChangeMe-Triage1!"      # the OLD shipped default. No account is created with it any more; it is only refused.
 
 _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -30,24 +30,33 @@ def check_new_password(new: str, user_id: str, current: str = "") -> str | None:
     return None
 
 
-def seed_default_admin(force: bool = False) -> bool:
-    """Creates the Default Super Admin when the system has no active admin (or force=True).
-    Returns True if it was created."""
+def admin_needed(force: bool = False) -> bool:
+    """True when setup has to create the first Super Admin (no active admin yet, and the account does not exist)."""
     db = store.supabase
     if not force and db.table("users").select("user_id").in_("role", ["admin", "super_admin"]).eq("status", "active").limit(1).execute().data:
         return False
-    if db.table("users").select("user_id").eq("user_id", DEFAULT_ADMIN_ID).execute().data:
+    return not db.table("users").select("user_id").eq("user_id", DEFAULT_ADMIN_ID).execute().data
+
+
+def seed_default_admin(password: str, force: bool = False) -> bool:
+    """Creates the first Super Admin with the password chosen during setup, when the system has no active admin
+    (or force=True). There is no shipped password. Returns True if it was created; raises ValueError for a weak password."""
+    if not admin_needed(force):
         return False
-    db.table("users").insert({
+    problem = check_new_password(password or "", DEFAULT_ADMIN_ID)
+    if problem:
+        raise ValueError(problem)
+    store.supabase.table("users").insert({
         "user_id": DEFAULT_ADMIN_ID, "name": "Default Super Admin", "role": "super_admin", "type": "human",
-        "status": "active", "password_hash": _pwd.hash(DEFAULT_ADMIN_PASSWORD),
-        "must_change_password": True}).execute()
+        "status": "active", "password_hash": _pwd.hash(password),
+        "must_change_password": False}).execute()
     store.audit(None, None, "system", "default_admin_created", DEFAULT_ADMIN_ID)
     return True
 
 
 def default_admin_unchanged() -> bool:
-    """True while the default account exists, is active, and still has the shipped password."""
+    """True while the default account exists, is active, and still has the old shipped password (installs made before
+    the password was chosen during setup)."""
     try:
         rows = (store.supabase.table("users").select("status,must_change_password")
                 .eq("user_id", DEFAULT_ADMIN_ID).execute().data)
@@ -114,18 +123,15 @@ def database_check() -> dict:
     return {"ok": not missing, "missing": missing, "checked": len(REQUIRED_TABLES)}
 
 
-def complete_setup() -> dict:
-    """Re-reads the database itself (never trusts cached state), seeds the default admin, closes /setup."""
+def complete_setup(password: str = "") -> dict:
+    """Re-reads the database itself (never trusts cached state), creates the first admin with the chosen password, closes /setup."""
     flag = store.supabase.table("settings").select("value_json").eq("key", "installed").execute().data
     if flag and flag[0]["value_json"] is True:
         raise ValueError("Setup is already complete.")
     chk = database_check()
     if not chk["ok"]:
         raise ValueError("These tables are missing: " + ", ".join(chk["missing"]))
-    created = seed_default_admin()
+    created = seed_default_admin(password)                 # ValueError (weak or missing password) leaves setup open
     store.audit(None, None, "system", "setup_completed", f"default admin created={created}")
     mark_installed("setup")
-    out = {"ok": True, "created": created, "username": DEFAULT_ADMIN_ID if created else None}
-    if created:
-        out["default_password"] = DEFAULT_ADMIN_PASSWORD      # shown once, to whoever holds the setup code
-    return out
+    return {"ok": True, "created": created, "username": DEFAULT_ADMIN_ID if created else None}

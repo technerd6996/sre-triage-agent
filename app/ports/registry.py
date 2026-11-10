@@ -44,7 +44,28 @@ def get(port: str, provider: str, **kw):
 
 # Until the config layer exists (P1) the active provider comes from the environment.
 def active_provider(port: str, default: str) -> str:
+    if port == "ticketing":                 # the licence key names the one ticketing tool this install may use
+        try:
+            from app import licence
+            tool = licence.current().get("itsm")
+        except Exception:                   # noqa: BLE001
+            tool = ""
+        if tool:
+            return tool
+    if port == "credentials":
+        try:
+            from app import config
+            chosen = config.get("credentials.provider")
+        except Exception:                   # noqa: BLE001
+            chosen = ""
+        if chosen:
+            return chosen
     return os.getenv(f"{port.upper()}_PROVIDER", default)
+
+
+def is_servicenow() -> bool:
+    """False when the install's ticketing tool is not ServiceNow: its knowledge base, CMDB and owner lookups are then off."""
+    return active_provider("ticketing", "servicenow") == "servicenow"
 
 
 def get_ticketing(role: str = "agent"):

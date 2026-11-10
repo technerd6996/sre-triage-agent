@@ -9,7 +9,7 @@ goes into a command is validated first; output is capped. Linux commands are fix
 command truly needs it, and nothing here can raise privileges (no su, no sudo -i, no sudoers or group changes).
 
 Read-only (risk 0): check_uptime, check_pending_reboot, check_network, get_event_errors, list_sessions, list_failed_services,
-list_scheduled_jobs, check_windows_updates, list_packages, list_upgradable, list_security_updates."""
+list_scheduled_jobs, check_windows_updates, list_packages, list_upgradable, list_security_updates, find_services."""
 import json
 import re
 
@@ -301,8 +301,10 @@ def check_windows_updates(target: str) -> dict:
         lines = [f"pending: {p['kb'] or '(no KB)'} {p['title']}" + (f" [{p['severity']}]" if p.get("severity") else "") for p in pending]
         lines += [f"installed: {i['kb']} on {i['on'] or 'unknown date'}" for i in installed]
         err = d.get("search_error", "")
+        last = max((i.get("on") or "" for i in installed), default="")          # dates are yyyy-MM-dd, so the largest is the newest
         summary = (f"{len(pending)} update(s) waiting" if not err else "could not search for waiting updates") + \
-                  f"; Windows Update service is {d.get('wu_service') or 'unknown'}"
+                  f"; Windows Update service is {d.get('wu_service') or 'unknown'}" + \
+                  (f"; the last update was installed on {last}" if last else "")
         out = _ok(target, summary, lines, pending=len(pending), search_error=err)
         if err:
             out["note"] = ("Windows blocks the update search in some remote sessions; the installed list above is still correct. "
@@ -411,5 +413,48 @@ def check_patch_job(target: str, job: str = "") -> dict:
         return _fail(target, e)
 
 
+# ---------------------------------------------------------------- finding services by name (read only)
+_SVC_TERM = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.@-]{0,63}$")
+
+
+def valid_service_terms(names) -> list:
+    items = [t.strip() for t in (names.split(",") if isinstance(names, str) else names or []) if t and t.strip()]
+    if not items or len(items) > 8:
+        raise ValueError("give 1 to 8 service names, or parts of a name")
+    for t in items:
+        if not _SVC_TERM.match(t):
+            raise ValueError(f"'{t}' is not a valid service name (letters, digits, space, dot, dash, underscore)")
+    return items
+
+
+@tool
+def find_services(target: str, names: str) -> dict:
+    """Services on the server whose name or display name contains any of `names` (comma separated, 1 to 8 parts of a name),
+    with their state. Read only. An empty answer means no such service exists on the server. target is 'windows' or 'linux'."""
+    try:
+        _target(target)
+        terms = valid_service_terms(names)
+        if target == "windows":
+            arr = ",".join("'%s'" % t for t in terms)
+            rows = _win_json("$t = @(%s); $s = @(Get-CimInstance Win32_Service | Where-Object { $svc = $_; "
+                             "(@($t | Where-Object { $svc.Name -like ('*' + $_ + '*') -or $svc.DisplayName -like ('*' + $_ + '*') })).Count -gt 0 } | "
+                             "Select-Object -First 30 Name, DisplayName, State, StartMode); ConvertTo-Json -InputObject $s -Compress" % arr) or []
+            if isinstance(rows, dict):
+                rows = [rows]
+            lines = [f"{r['Name']} ({r['DisplayName']}): {r['State']}, startup {r['StartMode']}" for r in rows]
+        else:
+            grep = " ".join("-e '%s'" % t for t in terms)
+            out = infra._linux(f"systemctl list-units --type=service --all --no-legend --plain 2>/dev/null | grep -i -F {grep} | head -n 30 || true")
+            lines = [f"{p[0]}: {p[2]} ({p[3]})" for p in (ln.split() for ln in out.splitlines()) if len(p) >= 4]
+            if not lines:
+                out = infra._linux(f"systemctl list-unit-files --type=service --no-legend --plain 2>/dev/null | grep -i -F {grep} | head -n 30 || true")
+                lines = [f"{p[0]}: installed, {p[1]}" for p in (ln.split() for ln in out.splitlines()) if len(p) >= 2]
+        what = ", ".join(terms)
+        return _ok(target, f"{len(lines)} service(s) match {what}" if lines else f"no service matching {what} exists on this server", lines,
+                   count=len(lines), note="Only service names and display names were searched. This does not show how updates or software were delivered.")
+    except Exception as e:
+        return _fail(target, e)
+
+
 READ_ONLY_TOOLS = [check_patch_job, check_uptime, check_pending_reboot, check_network, get_event_errors, list_sessions, list_failed_services,
-                   list_scheduled_jobs, check_windows_updates, list_packages, list_upgradable, list_security_updates]
+                   list_scheduled_jobs, check_windows_updates, list_packages, list_upgradable, list_security_updates, find_services]

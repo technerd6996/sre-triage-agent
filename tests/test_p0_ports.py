@@ -96,9 +96,9 @@ def test_ticket_ref_backfill():
 
 def test_registry_discovers_servicenow(monkeypatch):
     monkeypatch.delenv("TICKETING_PROVIDER", raising=False)
-    assert [m.provider for m in registry.available("ticketing")] == ["servicenow"]
+    assert "servicenow" in [m.provider for m in registry.available("ticketing")]
     assert isinstance(registry.get_ticketing(), ServiceNowTicketing)
     with pytest.raises(Unsupported):
-        registry.get("ticketing", "jira")
+        registry.get("ticketing", "no-such-tool")
     secrets = registry.available("ticketing")[0].secret_keys
     assert set(secrets) == {"password", "checker_password"}

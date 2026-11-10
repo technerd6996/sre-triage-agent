@@ -243,3 +243,75 @@ def test_follow_up_questions_after_a_reboot_route_to_the_uptime_check(q):
 @pytest.mark.parametrize("q", ["reboot victim-test for patch update", "does victim-test need a reboot"])
 def test_asking_for_a_reboot_is_not_an_uptime_question(q):
     assert chat_reads.pick(q) is not T.check_uptime
+
+
+# ---------------------------------------------------------------- finding services (the SCCM answer that was invented)
+def test_find_services_reports_that_nothing_matches_instead_of_guessing(fake):
+    fake.win = lambda s: ""                                    # PowerShell prints nothing when no service matches
+    r = T.find_services.invoke({"target": "windows", "names": "ccmexec, SMS Agent Host"})
+    assert r["count"] == 0 and r["summary"] == "no service matching ccmexec, SMS Agent Host exists on this server" and r["lines"] == []
+    assert "'ccmexec','SMS Agent Host'" in fake.win_cmds[0]
+
+
+def test_find_services_lists_what_exists(fake):
+    fake.win = lambda s: json.dumps([{"Name": "Spooler", "DisplayName": "Print Spooler", "State": "Running", "StartMode": "Auto"}])
+    r = T.find_services.invoke({"target": "windows", "names": "spooler"})
+    assert r["count"] == 1 and r["lines"] == ["Spooler (Print Spooler): Running, startup Auto"]
+    fake.lin = lambda c: "nginx.service loaded active running A high performance web server"
+    r = T.find_services.invoke({"target": "linux", "names": "nginx"})
+    assert r["lines"] == ["nginx.service: active (running)"] and "-e 'nginx'" in fake.lin_cmds[0]
+
+
+@pytest.mark.parametrize("bad", ["x'; reboot #", "a$(id)", "", ",,", "a,b,c,d,e,f,g,h,i", "*"])
+def test_find_services_refuses_names_that_could_carry_a_command(fake, bad):
+    assert "error" in T.find_services.invoke({"target": "windows", "names": bad}) and not fake.win_cmds
+
+
+def test_windows_updates_summary_names_the_last_install_date(fake):
+    fake.win = lambda s: json.dumps({"pending": [], "installed": [{"kb": "KB2", "on": "2026-10-23"}, {"kb": "KB1", "on": "2026-09-01"}],
+                                     "wu_service": "Running", "search_error": ""})
+    assert "the last update was installed on 2026-10-23" in T.check_windows_updates.invoke({"target": "windows"})["summary"]
+
+
+@pytest.mark.parametrize("q,tool", [
+    ("what is the patch status on term-win-srv?", T.check_windows_updates),
+    ("When was the last patch installed to that server?", T.check_windows_updates),
+    ("how about the sccm services?", T.find_services),
+    ("What are those sccm service in it?", T.find_services),
+    ("is the spooler service running on term-win-srv", T.find_services),
+    ("patch job status on win-test", T.check_patch_job),
+    ("which services are stopped on term-win-srv", T.list_failed_services),
+])
+def test_server_questions_reach_a_real_check_not_the_model(q, tool):
+    assert chat_reads.pick(q) is tool
+
+
+@pytest.mark.parametrize("q", ["what does the print spooler service do", "which services depend on sql", "how do I restart a service"])
+def test_general_service_questions_are_left_to_the_model(q):
+    assert chat_reads.pick(q) is None
+
+
+def test_service_names_come_from_the_alias_list_or_the_message():
+    assert "ccmexec" in chat_reads.service_names("how about the sccm services?")
+    assert chat_reads.service_names("is the spooler service running") == "spooler"
+    assert chat_reads.service_names("any services named foo-bar there") == "foo-bar"
+    with pytest.raises(chat_reads.NeedsMore):
+        chat_reads.service_names("are the services running")
+
+
+def test_the_chat_model_is_told_not_to_invent_server_facts():
+    from app import config
+    from app.agent import prompts
+    assert "cannot see, query or run anything on any server" in config.get("prompt.grounding")
+    assert prompts.GROUNDING_RULE.startswith("GROUNDING RULE")
+
+
+@pytest.mark.parametrize("q", ["What is the update status on victim-test?", "any updates available on victim-test", "are there updates waiting on victim-test",
+                               "when was the last update on victim-test", "what updates are installed on victim-test", "is victim-test up to date"])
+def test_update_questions_without_the_word_windows_reach_the_updates_check(q):
+    assert chat_reads.pick(q) is T.check_windows_updates                  # "up to date" is not an uptime question
+
+
+@pytest.mark.parametrize("q", ["update victim-test", "how do I update nginx"])
+def test_an_instruction_or_how_to_about_updating_is_not_an_updates_check(q):
+    assert chat_reads.pick(q) is None

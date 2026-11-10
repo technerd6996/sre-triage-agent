@@ -89,6 +89,8 @@ _r(_G, r"/api/agent/(queue|runs|approvals)", "console.view")
 _r("POST", r"/api/agent/(run|runs/[^/]+/(decision|p1))", "console.act")
 # admin API
 _r(_G, r"/api/admin/(summary|bot-stats|rag-stats|api-health|runs|jobs)", "monitor.view")
+_r(_G, r"/api/admin/telemetry/(status|summary|traces|traces/[0-9a-fA-F]+|logs)", "monitor.view")
+_r(_G, r"/api/admin/licence", "monitor.view")
 _r(_G, r"/api/admin/audit(\.csv)?", "audit.view")
 _r("POST", r"/api/admin/users/[^/]+/revoke", "users.manage")
 _r("*", r"/api/admin/users(/[^/]+)?", "users.manage")

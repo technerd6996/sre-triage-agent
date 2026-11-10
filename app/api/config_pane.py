@@ -16,7 +16,11 @@ router = APIRouter(prefix="/api/admin/config")
 
 # id == the Setting.group it shows
 SECTIONS = (
-    {"id": "ticketing", "title": "Ticketing", "port": "ticketing", "testable": True, "panel": "connections"},
+    {"id": "ticketing", "title": "Ticketing", "port": "ticketing", "testable": True, "panel": "connections", "only": "servicenow"},
+    {"id": "jira", "title": "Ticketing (Jira)", "port": None, "testable": True, "panel": "connections", "only": "jira"},
+    {"id": "bmc", "title": "Ticketing (BMC)", "port": None, "testable": True, "panel": "connections", "only": "bmc"},
+    {"id": "manageengine", "title": "Ticketing (ServiceDesk Plus)", "port": None, "testable": True, "panel": "connections", "only": "manageengine"},
+    {"id": "freshservice", "title": "Ticketing (Freshservice)", "port": None, "testable": True, "panel": "connections", "only": "freshservice"},
     {"id": "identity", "title": "Identity (AD)", "port": "identity", "testable": True, "panel": "connections"},
     {"id": "knowledge", "title": "Knowledge source", "port": None, "testable": True, "panel": "connections"},
     {"id": "notifications", "title": "Notifications", "port": None, "testable": True, "panel": "connections"},
@@ -27,6 +31,9 @@ SECTIONS = (
     {"id": "security", "title": "Security and access", "port": None, "testable": False, "panel": "behaviour"},
     {"id": "policy", "title": "Safety policy (approvals)", "port": None, "testable": False, "panel": "behaviour"},
     {"id": "prompts", "title": "Prompts and messages", "port": None, "testable": False, "panel": "behaviour"},
+    {"id": "telemetry", "title": "Telemetry (app monitoring)", "port": None, "testable": False, "panel": "behaviour"},
+    {"id": "backup", "title": "Backups", "port": None, "testable": True, "panel": "behaviour"},
+    {"id": "licence", "title": "Licence and plan", "port": None, "testable": True, "panel": "behaviour"},
 )
 # Groups with settings but no pane section: their values come from the environment or the built-in defaults.
 HIDDEN_GROUPS = {"infra"}
@@ -93,7 +100,11 @@ def _bootstrap_items() -> list[dict]:
 @router.get("/sections")
 def sections():
     out = []
+    registry.discover()                                      # adapters register their own settings
+    tool = registry.active_provider("ticketing", "servicenow")
     for s in SECTIONS:
+        if s.get("only") and s["only"] != tool:              # only the ticketing tool this licence is for
+            continue
         info = _provider_info(s["port"])
         required = set(info["required"]) if info else set()
         fields = config.describe(s["id"])
@@ -157,7 +168,31 @@ def _t_identity() -> str:
     return f"AD bound successfully. Search test returned {len(groups)} groups."
 
 
-_TESTS = {"ticketing": _t_ticketing, "model": _t_model, "knowledge": _t_knowledge,
+def _t_backup() -> str:
+    """The button in the Backups section: makes one backup now and says where it went."""
+    from app import backup
+    res = backup.run()
+    if not res["ok"]:
+        raise RuntimeError(res["error"])
+    return backup.describe(res)
+
+
+def _t_licence() -> str:
+    """The button in the Licence section: the plan, the limits with today's counts, and any problem."""
+    from app import licence
+    s = licence.status(force=True)
+    text = licence.describe(s)
+    if s["auto_blocked"]:
+        raise RuntimeError(text)
+    return text
+
+
+def _t_itsm() -> str:
+    registry.get_ticketing().ping()
+    return "signed in to the ticketing tool"
+
+
+_TESTS = {"jira": _t_itsm, "bmc": _t_itsm, "manageengine": _t_itsm, "freshservice": _t_itsm, "licence": _t_licence, "backup": _t_backup, "ticketing": _t_ticketing, "model": _t_model, "knowledge": _t_knowledge,
           "notifications": _t_notifications, "bootstrap": _t_bootstrap, "identity": _t_identity}
 
 
