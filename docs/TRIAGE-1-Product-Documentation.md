@@ -1,6 +1,6 @@
 # TRIAGE-1 Product Documentation
 
-An L1 SRE assistant for ServiceNow incidents. Document date 2026-11-09. Describes the build that passes 242 automated tests.
+An L1 SRE assistant for ServiceNow incidents. Document date 2026-11-10. Describes the build that passes 406 automated tests.
 
 ## Contents
 
@@ -168,6 +168,15 @@ Approver's message
 
 The page remembers the last server you asked about, so "What about memory?" needs no server name.
 
+### What the chat remembers
+
+Follow-up questions work because the page keeps two things for the length of the conversation:
+
+- **The server you are talking about.** It is set by any question or card that names a server, including the "Email the owners" card, so "is it up yet?" right after a reboot request means that server. A server named in a new message always wins over the remembered one.
+- **A short list of what the chat has done** (up to the last 20 entries: owner requests, confirmed actions, closed tickets, each with its ticket number, request code and result). A question such as "what was the ticket number?", "which request was that?" or "show me the incident number" is answered from this list at once, without the model. It is kept in the browser, so it survives a page reload but belongs to that browser and does not carry over to another machine or a cleared browser.
+
+The notes that go to the model as conversation history are plain sentences ("Restart of victim-test is scheduled. Ticket INC0010714."), and the note on a card is rewritten when the outcome is known, so later general questions see what really happened.
+
 ### Read-only checks (run immediately)
 
 | Ask | You get |
@@ -176,7 +185,7 @@ The page remembers the last server you asked about, so "What about memory?" need
 | "What is the C drive utilization?" | The named drive (or every disk) with percent used, free and total GB. |
 | "Which process is consuming the CPU?" | The top five processes with memory, CPU and service name. |
 | "Who owns term-win-srv?" (CMDB, owner, support group, criticality) | The CMDB context for that server. |
-| "What is the uptime?" / "boot up time" / "is term-win-srv back?" | Last start and how long the server has been up. |
+| "What is the uptime?" / "boot up time" / "is term-win-srv back?" / "is it up yet?" / "was victim-test rebooted?" | Last start and how long the server has been up. Good for checking a restart you asked for. |
 | "Does zabbix-mon need a reboot?" | Whether a restart is pending, and why (Windows servicing keys, Linux reboot-required). |
 | "Can term-win-srv reach db01 on port 1433?" / "ping 8.8.8.8 from victim-test" | Name lookup, ping and TCP port test, run from that server. The first server named is the source. |
 | "Recent errors in the event log" / "in the journal" | Error and critical entries from the last hour (or the period you give), capped. |
@@ -248,7 +257,8 @@ Steps 2 and 4 are the safety design. Step 2 changes nothing, so a card can be re
 ### The ticket
 
 - On Confirm, ServiceNow gets a new incident with **you** as caller and assignee and **no assignment group**, so it never lands in the L1 queue that the agent works.
-- If no ServiceNow user has your email, the ticket is still created, unassigned, and the work note names you.
+- **You are matched to your ServiceNow user by the email on that user's profile first, then by user name** (the part of your TRIAGE-1 login before the `@`). So a TRIAGE-1 login such as `vedavidyadaran@lab.local` still finds the ServiceNow user `vedavidyadaran` after the profile email was changed to a real address.
+- If neither matches, the ticket is still created, unassigned, and the work note names you.
 - If the ticket cannot be created, nothing is changed on the server.
 - The ticket stays **In Progress**. After a successful action the result card offers a **Close INC...** button.
 - **Closing** works only for tickets you opened from the chat and that are not in the agent queue. The drafted notes list what was done; the ticket is resolved only after your second Confirm.
@@ -340,19 +350,28 @@ Nothing restarts automatically. If an update needs a restart, the result says so
 
 ### Owner contacts and mail
 
-Owner addresses come from the ServiceNow CMDB record of the server (the server table, `cmdb_ci_server` by default). Which fields are read is an admin setting (Notifications section):
+Owner addresses come from the ServiceNow CMDB record of the server (the server table, `cmdb_ci_server` by default) and are found **through each person's ServiceNow profile**: the server record points at a user, and the **Email on that user's profile** is the address. No custom field is needed. Which fields are read is an admin setting (Notifications section):
 
 | Field on the server CI | Type | Status | What is read |
 |---|---|---|---|
-| `owned_by` | Reference to User | standard | The user's **Email** |
-| `managed_by` | Reference to User | standard | The user's **Email** |
-| `support_group` | Reference to Group | standard | The group's **Email** |
-| `u_owner_email` | String (255) | **new, add it** | One or more addresses (a shared mailbox), separated by comma, semicolon or space |
-| `u_maintenance_window` | String | optional, not used yet | Reserved for showing a maintenance window on cards |
+| `owned_by` | Reference to User | standard | The user's profile **Email** |
+| `managed_by` | Reference to User | standard | The user's profile **Email** |
+| `assigned_to` | Reference to User | standard | The user's profile **Email** |
+| `support_group` | Reference to Group | standard | The group's **Email** (the group record needs one) |
+| `managed_by_group` | Reference to Group | standard | The group's **Email** |
+| `u_owner_email` | String (255) | optional, not required | One or more extra addresses (a shared mailbox), separated by comma, semicolon or space. Creating it needs ServiceNow admin rights |
 
-The owners' user and group records must have an email address, or TRIAGE-1 finds nobody to mail and says so.
+Whoever is named in any of these fields is mailed; duplicates are removed. If none of the fields holds an address, TRIAGE-1 finds nobody to mail and says so on the card instead of sending anything.
+
+Set the owner in ServiceNow by opening the server's CMDB record and filling **Owned by** with a person whose profile has a **deliverable** email address. A lab-only address (for example one ending in `.local`) cannot receive mail: change it on the profile, or choose another person. TRIAGE-1 sign-in names and profile emails are independent, because the engineer's ticket matching falls back to the user name.
+
+**Copy to the engineer.** Owner mail also copies the engineer who asked, using the email on their **ServiceNow profile** (never their sign-in name, which may be a lab-only address that mail systems reject), and never twice on the same message.
 
 > **The mail transport must be able to address people.** SMTP and SES can. **SNS cannot**: it publishes to one fixed topic and ignores the To and Cc lists, so owners would never receive the message. TRIAGE-1 checks this and reports "Owner mail will NOT be sent" on the card and on the ticket instead of pretending. Switch Notifications to SMTP or SES to mail owners.
+
+**SES sandbox.** A new Amazon SES account is in sandbox: it can mail **only verified addresses**. The sender must be verified, and so must every owner mailbox until AWS grants production access (SES console, Account dashboard, Request production access). An unverified recipient is rejected with `MessageRejected: Email address is not verified`; the chat reports it and nothing has changed on the server.
+
+**Same-domain senders.** If the sender and the owner are both `@outlook.com` (or the same mail provider), the provider may treat the message as spoofed and drop it into Junk even though SES reports it as accepted. Look in Junk and mark the sender as safe. The lasting fixes are an SMTP login on the provider itself (an app password; the provider then really sends the mail) or an SES sender on a domain you own with DKIM records.
 
 ### Limits you may meet
 
@@ -490,7 +509,7 @@ The registry holds about 115 settings. The ones you are most likely to touch:
 | `chat.service_protected` | Services the chat will never stop or disable. | winrm, sshd, ssh, dbus, systemd-logind, rpcss, eventlog, termservice, lsass, networkmanager, network |
 | `chat.package_denylist` | Packages the chat will never install or update (a trailing `*` matches a prefix). | sudo, doas, polkit*, pkexec, openssh-server, systemd, glibc, libc6, kernel*, linux-image*, bash ... |
 | `chat.max_packages`, `chat.install_timeout_seconds` | Most packages per request, and the longest an install may run. | 10, 300 |
-| `owners.email_field`, `owners.user_fields`, `owners.group_fields` | Which CMDB fields supply owner addresses. | u_owner_email, owned_by and managed_by, support_group |
+| `owners.email_field`, `owners.user_fields`, `owners.group_fields` | Which CMDB fields supply owner addresses. | u_owner_email, owned_by / managed_by / assigned_to, support_group / managed_by_group |
 | `owners.approve_words`, `owners.refuse_words`, `owners.condition_words` | What counts as approval, refusal or a condition in an owner's reply. | see panel |
 | `owners.require_sender_match`, `owners.approval_ttl_hours`, `owners.reply_scan_lines` | The reply's From must be an owner; how long a request stays open; how many lines of the reply are read. | on, 24, 3 |
 | `chat.patch_poll_seconds`, `chat.patch_wait_minutes` | How often a running Windows update install is checked, and how long to wait for it. | 120, 40 |
@@ -548,7 +567,7 @@ Every approval, run and chat action writes an audit row with who, what and which
 
 - **Code changes need a restart; settings do not.** After copying new files, stop and start the app, then hard-refresh the browser (Ctrl+F5).
 - Back up nightly: a `pg_dump` of the `triage` database and a copy of `bootstrap.json`. Scheduling this is on the roadmap.
-- Run the tests: `.venv\Scripts\python.exe -m pytest tests -q` (242 pass at the time of writing).
+- Run the tests: `.venv\Scripts\python.exe -m pytest tests -q` (406 pass at the time of writing).
 - After editing the page scripts, check them with `node --check`. The scripts in `static/` are not type checked.
 
 ### Troubleshooting
@@ -567,14 +586,27 @@ Every approval, run and chat action writes an audit row with who, what and which
 | Sign-in returns 401 on a fresh install | bcrypt 5 with passlib. Keep `bcrypt==4.0.1`, `passlib==1.7.4`. |
 | AD sign-in: invalid credentials or "not in any mapped group" | Check the user is under the domain root, the group is under the Search Base and is mapped on the Users page; the log names the directory's reason. |
 | Everything fails with a `NoneType` error after a code edit | A function argument named `config` shadows the settings module. In the agent module use `app_config`. |
+| Owner approval mail is not in the inbox | Check Junk first. If SES says `Email address is not verified`, the account is in sandbox and that mailbox must be verified. Sender and owner on the same provider can be dropped as spoofing (see "Owner contacts and mail"). |
+| The card says no owner address was found | The server's CMDB record has no `owned_by`, `managed_by`, `assigned_to` or group with an email, or the person's profile Email is empty. Fill the owner on the CI and the profile Email, or set `u_owner_email`. |
+| "Is it up yet?" or "what was the ticket number?" gets the generic "I'm a triage assistant" reply | An old page script is cached: hard-refresh (Ctrl+F5). Ticket numbers are remembered per browser; ask in the same browser where you ran the action. |
 | Jobs stay queued | The model health check is failing (the app calls `/health` on the model server) or all run places are busy. |
 
 ---
 
 ## 12. Known limits and roadmap
 
+### Exercised live, and not yet
+
+On 2026-11-10 the owner approval path was run for real once: a reboot of `victim-test` (ticket INC0010714). The request mail was sent through SES, the reply was pasted and accepted, the reboot ran, the background check wrote "back after about 1 min" on the ticket, and a second reboot request two minutes later was refused by the 60 minute guard. Everything below was tested with mocks and read-only live checks only:
+
+- package install and removal on Linux, and Windows update install by KB number
+- the "done" mail to owners reaching a different person than the requester
+- a patch watcher or reboot verifier surviving a restart of TRIAGE-1 (it does not; see the limits)
+
 ### Limits today
 
+- Owner mail works only for recipients SES can deliver to: in sandbox each owner mailbox must be verified, and a mail provider may filter same-domain senders to Junk.
+- The list of what the chat did (used for "what was the ticket number?") lives in the browser, not on the server.
 - From chat you can close only tickets you opened there. There is no "pick up an existing ticket" yet.
 - Kill process and other L2 actions are not available from chat until the owner-approval step exists.
 - Keyword search with a model reorder can miss an article whose wording shares nothing with the question. Good titles and first paragraphs matter.
