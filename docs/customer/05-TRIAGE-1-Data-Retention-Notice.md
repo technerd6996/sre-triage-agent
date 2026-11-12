@@ -9,56 +9,84 @@ TRIAGE-1 runs on your own infrastructure:
 - None of it is sent to the vendor.
 - Your organisation decides how long to keep it.
 
-## 1. What is stored and for how long
+## 1. Where data lives
+
+```
+Engineer's browser ---------> chat conversations (kept in that browser only)
+        |
+        v
+TRIAGE-1 server ------------> PostgreSQL database (accounts, audit, runs, approvals, settings)
+        |                             |
+        |                             v
+        |                     Daily encrypted backup ---> second disk or network share
+        v
+Your ticketing tool, mail service, directory ---> kept under those systems' own retention rules
+```
+
+## 2. What is stored and for how long
 
 | Data | Contents | Kept for | How to change it |
 |---|---|---|---|
 | **User accounts** | Email or user ID, name, role, status, ticketing-tool user reference, password hash (local accounts only), created and last sign-in times | Until the account is removed. Disabling an account stops access but keeps the record | Admin > Users. See the Privacy and Erasure Notice |
-| **Sign-in sessions** | A hash of the session token, the user and the expiry time | 7 days. Expired sessions are deleted automatically | Sign out, or revoke sessions in Admin > Users |
-| **Audit log** | Time, actor, action, ticket and details of every check, change, approval, setting change and sign-in event | Until you delete it. The audit log is your accountability record | Database procedure (see Section 3) |
-| **Triage runs and steps** | Ticket number, server, playbook, the steps and findings of each run, outcome, requester, token counts | Until you delete it | Database procedure |
-| **Agent working memory** | The working state of each run, which can include ticket text | Until you delete it | Database procedure |
-| **Approvals** | Requested action, risk level, who decided, decision, comment | Until you delete it | Database procedure |
-| **Owner approval requests** | Ticket, requester, action, server, owner addresses, the pasted approval reply, who approved and when | Until you delete it | Database procedure |
-| **Notifications** | Recipients, message ID and body of approval and result emails | Until you delete it | Database procedure |
-| **Verifications** | Results of the checks run after a fix, reopen count | Until you delete it | Database procedure |
-| **Knowledge search records** | Question text (shortened), a pseudonymous user identifier, retrieved articles, timings | Until you delete it | Database procedure |
-| **Model usage records** | Type of call, token counts, timings. No prompt text | Until you delete it | Database procedure |
-| **Application telemetry** | Request timings, errors and metrics for TRIAGE-1 itself. No chat text | **72 hours** by default, deleted automatically | Admin > Telemetry, from 1 to 720 hours |
+| **Sign-in sessions** | A coded form of the session token, the user and the expiry time | 7 days, then deleted automatically | Sign out, or revoke sessions in Admin > Users |
+| **Audit log** | Time, actor, action, ticket and details of every check, change, approval, setting change and sign-in event | Until you delete it. This is your accountability record | Administrator procedure |
+| **Triage runs and steps** | Ticket number, server, playbook, steps and findings, outcome, requester, token counts | Until you delete it | Administrator procedure |
+| **Agent working memory** | The working state of each run, which can include ticket text | Until you delete it | Administrator procedure |
+| **Approvals** | Requested action, risk level, who decided, decision, comment | Until you delete it | Administrator procedure |
+| **Owner approval requests** | Ticket, requester, action, server, owner addresses, the pasted approval reply, who approved and when | Until you delete it | Administrator procedure |
+| **Notifications** | Recipients and text of approval and result emails | Until you delete it | Administrator procedure |
+| **Verifications** | Results of the checks run after a fix | Until you delete it | Administrator procedure |
+| **Knowledge search records** | Question text (shortened), a pseudonymous user identifier, articles found, timings | Until you delete it | Administrator procedure |
+| **Model usage records** | Type of call, token counts, timings. No prompt text | Until you delete it | Administrator procedure |
+| **Application telemetry** | Request timings, errors and metrics for TRIAGE-1 itself. No chat text | **72 hours** by default, then deleted automatically | Admin > Telemetry, from 1 to 720 hours |
 | **Settings and stored credentials** | Configuration, with credentials and other secrets encrypted | Until changed or removed | Admin panel |
 | **Approver chat conversations** | The conversation text | In each user's **own browser** only, until that user deletes the chat or clears browser data. Not on the server | The user's browser |
-| **Backups** | Encrypted copies of the whole database and the installation's key file | According to **your retention policy**: every backup for N days, one a week for N weeks, one a month for N months. The newest is always kept | Admin > Behaviour > Backups |
-| **Backup copies off the machine** | The same encrypted files on your second disk or share | Pruned by the same policy | As above |
+| **Backups** | Encrypted copies of the whole database and the installation's key file | According to **your retention policy**. The newest backup is always kept | Admin > Behaviour > Backups |
+| **Backup copies off the machine** | The same encrypted files on your second disk or share | Removed by the same policy | As above |
 
-## 2. Data held outside TRIAGE-1
+## 3. How each kind of data leaves the system
+
+```
+Sign-in session   -> expires after 7 days     -> deleted automatically
+Telemetry         -> older than 72 hours      -> deleted automatically
+Backup            -> outside your retention   -> deleted automatically (the newest is always kept)
+Audit, runs,      -> reach your chosen period -> your administrator deletes them
+approvals, emails                                using the Administrator Procedures guide
+Chat conversation -> user deletes the chat    -> gone from that browser
+```
+
+## 4. How backup retention works
+
+You choose three numbers in Admin > Behaviour > Backups:
+
+```
+Keep every backup  -> for N days    (for example 14)
+then keep one a week  -> for N weeks   (for example 8)
+then keep one a month -> for N months  (for example 12)
+Anything older        -> deleted, on the server and on the backup copy
+```
+
+## 5. Deleting older operational records
+
+This version deletes sessions, telemetry and backups automatically. Audit, run, approval, notification and search records are kept until your administrator deletes them. This lets your organisation set its own period for accountability records.
+
+```
+Decide the period (for example 365 days)
+   -> take a backup
+   -> your database administrator runs the "Retention clean-up" procedure
+      from the TRIAGE-1 Administrator Procedures guide
+   -> only finished work older than the period is removed
+      (anything running or waiting for approval is never touched)
+   -> repeat on a schedule, for example monthly
+```
+
+Records deleted from the database remain in older backups until those backups expire under your backup retention policy.
+
+## 6. Data held outside TRIAGE-1
 
 TRIAGE-1 writes work notes, incident updates and new incidents into **your ticketing tool**, and sends email through **your mail service**. Records there are kept under that system's own retention settings, not TRIAGE-1's.
 
-## 3. Deleting older operational records
-
-This version deletes sessions, telemetry and backups automatically. Audit, run, approval, notification and search records are kept until your administrator deletes them, so that your organisation can set its own period for accountability records.
-
-To apply a retention period, a database administrator can run the statements below on a schedule. Take a backup and test on a copy first. The example uses a period of 365 days.
-
-```sql
--- seconds since 1970 for 365 days ago
-\set cutoff 'extract(epoch from now() - interval ''365 days'')'
-delete from public.events        where run_id in (select id from public.runs where ended is not null and ended < :cutoff);
-delete from public.runs          where ended is not null and ended < :cutoff;   -- finished runs only
-delete from public.approvals     where coalesce(decided_at, requested_at) < :cutoff and decision is not null;
-delete from public.owner_requests where created < :cutoff and status <> 'waiting';
-delete from public.notices       where sent_at < :cutoff;
-delete from public.verifications where ts < :cutoff;
-delete from public.rag_events    where ts < :cutoff;
-delete from public.llm_calls     where ts < :cutoff;
-delete from public.audit         where ts < :cutoff;   -- only if your policy allows deleting audit records
-```
-
-Agent working memory is kept in the checkpoint tables created by the agent engine (`checkpoints`, `checkpoint_writes`, `checkpoint_blobs`). It is linked to runs by thread ID. Ask support for the statement that matches your version before you delete it.
-
-Records deleted from the database stay in older backups until those backups expire under your backup retention policy.
-
-## 4. Recommended starting points
+## 7. Recommended starting points
 
 | Record | Common choice |
 |---|---|

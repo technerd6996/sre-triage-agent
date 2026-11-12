@@ -15,6 +15,13 @@ TRIAGE-1 is software that your organisation installs and runs on its own infrast
 - **Your organisation is the controller** of the personal data that TRIAGE-1 processes. It decides why and how that data is used.
 - **[Vendor legal name] does not receive this data.** The software does not report to the vendor, and the licence check runs offline. The vendor sees personal data only if your organisation shares it, for example during a support session. In that case the vendor acts as your processor, under your instructions and a data processing agreement.
 
+```
+Person (engineer, server owner, ticket caller)
+   -> data used by TRIAGE-1 on YOUR server
+   -> your organisation decides how it is used (controller)
+   -> the vendor receives nothing, unless you share data for support (then the vendor is your processor)
+```
+
 Your organisation's own privacy notice to its staff should cover the use of TRIAGE-1. This document gives you the details to include.
 
 ## 2. Whose data, what data, and why
@@ -35,18 +42,17 @@ The language model processes ticket text to suggest checks and write findings. I
 
 ## 3. Where the data goes
 
-**Within TRIAGE-1**
-- Your PostgreSQL database, on your server.
-- Your encrypted backups and backup copies.
-- Each user's own browser, for approver chat conversations.
+```
+TRIAGE-1 server -> PostgreSQL database on your server
+                -> encrypted backups -> your second disk or share
+                -> your ticketing tool   (work notes, incidents)
+                -> your mail service     (approval and result emails)
+                -> your directory        (sign-in, account checks)
+                -> your credential store (short-lived server passwords)
+Engineer's browser -> approver chat conversations (stay in that browser)
+```
 
-**To systems your organisation connects**
-- Your ticketing tool, for work notes and incidents.
-- Your mail service, for approval and result emails.
-- Your directory, for sign-in and account checks.
-- Your credential store.
-
-If any of these is a cloud service, data goes to that provider under your organisation's agreement with it, and international transfer rules may apply.
+If any connected system is a cloud service, data goes to that provider under your organisation's agreement with it, and international transfer rules may apply.
 
 **Security**
 - Credentials and secret settings are encrypted with a key unique to your installation.
@@ -74,49 +80,52 @@ Depending on the law that applies, people may have the right to:
 
 Examples of such laws include the EU and UK GDPR and the Nigeria Data Protection Act 2023.
 
-Requests go to **your organisation**, as the controller. Your administrators handle them using the procedures below. Some records can lawfully be kept despite an erasure request, for example where your organisation needs an audit trail to meet legal or security obligations. In those cases, replacing the person's identity with a pseudonym in the audit trail is usually the right balance.
+Requests go to **your organisation**, as the controller. Some records can lawfully be kept despite an erasure request, for example where your organisation needs an audit trail to meet legal or security obligations. In those cases, replacing the person's identity with a pseudonym in the audit trail is usually the right balance.
 
 ## 6. Handling an access request
 
-A database administrator can list everything that names the person. Take care to give the person only their own data, not other people's.
-
-```sql
-\set who '''jane.doe@example.com'''
-select * from public.users          where user_id = :who;
-select ts, action, ticket, detail from public.audit where actor = :who order by ts;
-select * from public.runs           where requester = :who;
-select * from public.approvals      where decided_by = :who;
-select * from public.owner_requests where requester = :who or approved_by = :who or owners_json::text ilike '%' || :who || '%';
-select * from public.notices        where approver = :who or recipients_json::text ilike '%' || :who || '%';
 ```
-
-Chat conversations are only in the person's own browser, and they can export or delete them there. Ticket records are in your ticketing tool.
+Request received by your data protection contact
+   -> confirm the person's identity
+   -> database administrator runs the "Find a person's data" procedure
+      (TRIAGE-1 Administrator Procedures guide), searching by the person's email or user ID
+   -> results cover: account, audit entries, runs they asked for,
+      approvals they gave, owner requests, emails sent to or about them
+   -> remove other people's details from the results
+   -> add their chat history (the person exports it from their own browser)
+      and their ticket records (from your ticketing tool)
+   -> reply to the person within the legal deadline
+```
 
 ## 7. Handling an erasure request
 
-1. **Verify** the request and decide what your organisation must keep. Audit records are often kept, but under a pseudonym.
-2. **Stop access.** In **Admin > Users**, set the account to *Disabled* and revoke its sessions.
-3. **Replace or remove** the person's details in the database. Take a backup and test on a copy first. The statements below replace the person's identity with a fixed pseudonym, which keeps the audit trail intact.
-
-```sql
-begin;
-\set who '''jane.doe@example.com'''
-\set alias '''erased-user-0001'''
-delete from public.sessions       where user_id = :who;
-update public.audit          set actor = :alias        where actor = :who;
-update public.runs           set requester = :alias    where requester = :who;
-update public.approvals      set decided_by = :alias   where decided_by = :who;
-update public.owner_requests set requester = :alias    where requester = :who;
-update public.owner_requests set approved_by = :alias, approval_text = '[removed on request]' where approved_by = :who;
-update public.notices        set approver = :alias     where approver = :who;
-delete from public.users          where user_id = :who;
-commit;
 ```
-
-4. **Free-text fields** such as audit details, run steps, notification bodies and agent working memory can mention the person by name. Search for the name and edit or delete those rows as your decision in step 1 requires.
-5. **Backups:** older backups still contain the data until they expire under your retention policy. Record that the request has been applied in production and that backups will age out by a known date. If a backup is ever restored, re-apply the erasure.
-6. **Outside TRIAGE-1:** carry out the request in your ticketing tool, mail system and directory as well, under their own procedures.
-7. **The person's browser:** chat history is cleared when the person deletes their chats or clears their browser data.
+Request received
+   -> 1. Verify and decide
+         Confirm identity. Decide what must be kept
+         (audit records are usually kept, under a pseudonym).
+   -> 2. Stop access
+         Admin > Users -> set the account to Disabled -> revoke its sessions.
+   -> 3. Replace the identity
+         Take a backup -> the database administrator runs the "Erase a person" procedure
+         (TRIAGE-1 Administrator Procedures guide)
+         -> the person's name is replaced by a pseudonym such as "erased-user-0001"
+            in the audit log, runs, approvals, owner requests and notifications
+         -> their sessions and their account are deleted
+         -> any approval text they wrote is replaced with "[removed on request]"
+   -> 4. Check free text
+         Search audit details, run steps, email text and agent working memory
+         for the person's name -> edit or delete those entries as decided in step 1.
+   -> 5. Backups
+         Older backups keep the data until they expire under your retention policy
+         -> record the date they will have aged out
+         -> if a backup is ever restored, repeat step 3.
+   -> 6. Outside TRIAGE-1
+         Carry out the request in your ticketing tool, mail system and directory too.
+   -> 7. Browser
+         The person deletes their chats, or clears their browser data.
+   -> Confirm completion to the person.
+```
 
 ## 8. Changes and contact
 

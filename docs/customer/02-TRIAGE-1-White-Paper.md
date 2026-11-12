@@ -172,3 +172,4 @@ Custom limits are available. The licensing guide covers how licences work.
 - Third-Party Software Notices
 - Data Retention Notice
 - Privacy and Erasure Notice
+- Administrator Procedures (for database administrators)
