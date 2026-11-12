@@ -3,6 +3,12 @@
 #   2. docker compose up -d
 #   3. Open http://127.0.0.1:8000 and finish the setup page.
 # Port 8000 is published on this machine only. Put your own reverse proxy with HTTPS in front to reach it from elsewhere.
+#
+# Upgrade: docker compose exec app python /opt/triage1/launch.py backup-now --reason before-upgrade
+#          then docker load -i the new image, change the version under "image" below, and run docker compose up -d
+# Restore: docker compose stop app
+#          docker compose run --rm app restore /data/backups/triage-<date>.dump.enc
+#          docker compose start app
 services:
   db:
     image: postgres:17

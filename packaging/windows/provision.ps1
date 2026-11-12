@@ -6,6 +6,7 @@ New-Item -ItemType Directory -Force $data | Out-Null
 Start-Transcript -Path (Join-Path $data "install.log") -Force | Out-Null
 
 $exe = Join-Path $AppDir "triage1.exe"
+$launch = Join-Path $AppDir "launch.py"
 $bin = Join-Path $AppDir "pgsql\bin"
 $svcDir = Join-Path $AppDir "service"
 $account = "NT SERVICE\TRIAGE1"
@@ -34,7 +35,7 @@ try {
     }
 
     # An existing install keeps its database. Otherwise the bundled PostgreSQL is set up below.
-    & $exe bootstrap-has
+    & $exe $launch bootstrap-has
     $hasDb = ($LASTEXITCODE -eq 0)
     if ($hasDb) {
         $found = Get-Service "postgresql*", $pgService -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -111,7 +112,7 @@ try {
 
     $env:TRIAGE_SERVICE_ACCOUNT = $account
     if ($newBootstrap) {
-        $newBootstrap | & $exe bootstrap-merge
+        $newBootstrap | & $exe $launch bootstrap-merge
         Assert-Ok "Saving the database address"
     }
     $bootstrap = Join-Path $data "bootstrap.json"

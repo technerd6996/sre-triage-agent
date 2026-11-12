@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from app import bootstrap, config, envimport, rbac, store
 from app import ad_roles
@@ -16,7 +16,32 @@ class ChatSwitch(BaseModel):
 def licence_status():
     """Plan, limits, usage and warnings, for the admin Overview."""
     from app import licence
-    return licence.status()
+    from app.version import VERSION
+    return {**licence.status(), "version": VERSION}
+
+
+@router.get("/api/admin/backup/status")
+def backup_status():
+    """Backup warnings for the admin Overview. Never contains the recovery key."""
+    from app import backup
+    return backup.health()
+
+
+@router.post("/api/admin/backup/recovery-key")
+def backup_recovery_key(request: Request):
+    """Shows the recovery key so it can be stored outside this server. Audited."""
+    from app import backup
+    try:
+        return {"key": backup.reveal_key(getattr(request.state, "user", "unknown"))}
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.post("/api/admin/backup/recovery-key/confirm")
+def backup_recovery_key_confirm(request: Request):
+    from app import backup
+    backup.confirm_key(getattr(request.state, "user", "unknown"))
+    return {"ok": True}
 
 
 @router.get("/api/chat/status")                      # any logged-in user: lets the UI know chat is off

@@ -32,6 +32,7 @@ def env(monkeypatch, tmp_path):
     (home / "bootstrap.json").write_text('{"TRIAGE_SECRET_KEY": "k"}', encoding="utf-8")
     saved, audits, calls = {}, [], []
     monkeypatch.setenv("TRIAGE_HOME", str(home))
+    monkeypatch.setenv("TRIAGE_BACKUP_KEY", "a-test-recovery-key")
     # built from parts so the repo's secret scanner (test_hardening) never sees a database address with a password in source
     monkeypatch.setenv("DATABASE_URL", "postgresql" + "://" + "triage" + ":" + "p%40ss" + "@localhost:5433/triage")
     monkeypatch.setattr(backup.store, "set_setting", lambda k, v, by="": saved.__setitem__(k, v))

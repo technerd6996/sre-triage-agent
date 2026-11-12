@@ -158,6 +158,7 @@
         <p class="text-[13px] text-gray-500 mb-4">Active run</p>
         <div id="ov-run" class="text-[14px] text-gray-400">No run in progress.</div>
         <div id="ov-licence" class="text-[13px] text-gray-500 mt-3"></div>
+        <div id="ov-backup" class="text-[13px] text-gray-500 mt-1"></div>
       </div>
     </div>
 
@@ -549,7 +550,7 @@ function loadLicence() {
     const el = document.getElementById('ov-licence');
     if (!s || !el) return;
     const part = (k, label) => `${s.usage[k] == null ? '?' : s.usage[k]} of ${s.limits[k] ? s.limits[k] : 'unlimited'} ${label}`;
-    let html = `Plan: <b>${esc(s.plan)}</b>${s.customer ? ' (' + esc(s.customer) + ')' : ''} · ${part('servers', 'servers')} · ${part('seats', 'approver seats')} · ${part('tickets_month', 'automatic tickets this month')}`;
+    let html = `${s.version ? 'Version ' + esc(s.version) + ' · ' : ''}Plan: <b>${esc(s.plan)}</b>${s.customer ? ' (' + esc(s.customer) + ')' : ''} ·${part('servers', 'servers')} · ${part('seats', 'approver seats')} · ${part('tickets_month', 'automatic tickets this month')}`;
     if (s.problems.length) {
       const when = s.grace_ends ? new Date(s.grace_ends * 1000).toLocaleDateString() : '';
       html += `<div class="text-red-400 mt-1">${s.auto_blocked ? 'New automatic tickets are stopped: ' : 'Over the plan. New automatic tickets stop after ' + esc(when) + ': '}${esc(s.problems.join('; '))}</div>`;
@@ -561,6 +562,39 @@ function loadLicence() {
 }
 loadLicence();
 setInterval(loadLicence, 60000);
+
+// Backup warnings on the Overview.
+function loadBackupStatus() {
+  fetch('/api/admin/backup/status').then(r => r.ok ? r.json() : null).then(s => {
+    const el = document.getElementById('ov-backup');
+    if (!s || !el) return;
+    el.innerHTML = s.problems.length
+      ? `<span class="text-red-400">Backups need attention: ${esc(s.problems.join('; '))}</span>`
+      : `Backups: ${esc(s.summary)}`;
+  }).catch(() => {});
+}
+loadBackupStatus();
+setInterval(loadBackupStatus, 60000);
+
+// The recovery key is only fetched when a super admin asks for it, and is never kept in the page afterwards.
+document.addEventListener('click', e => {
+  const out = document.getElementById('bk-key-out');
+  if (e.target.id === 'bk-show' && out) {
+    fetch('/api/admin/backup/recovery-key', {method: 'POST'}).then(async r => {
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { out.textContent = r.status === 403 ? 'Only a super admin can see the recovery key.' : (d.detail || 'The key could not be shown.'); return; }
+      out.innerHTML = `<code class="mono text-[#FFB000] break-all">${esc(d.key)}</code>
+        <p class="text-[12px] text-gray-500 mt-1">Store this outside this server, for example in a password manager. Without it, backups cannot be restored after losing this server.</p>
+        <button id="bk-saved" class="mt-2 px-3 py-1.5 rounded-lg border border-[#232B33] text-[14px] hover:text-[#FFB000]">I have saved it</button>`;
+    });
+  }
+  if (e.target.id === 'bk-saved' && out) {
+    fetch('/api/admin/backup/recovery-key/confirm', {method: 'POST'}).then(r => {
+      out.textContent = r.ok ? 'Recorded. The warning clears on the Overview.' : 'That could not be recorded.';
+      loadBackupStatus();
+    });
+  }
+});
 
 // ── Controls ─────────────────────────────────────────────────────────────────
 fetch('/api/chat/status').then(r=>r.json()).then(d=>chat.checked=d.enabled);
@@ -1186,7 +1220,7 @@ function renderCfg(panel) {
       ${sec.testable ? `<button id="cfg-test" class="px-3 py-1.5 rounded-lg border border-[#232B33] text-[14px] hover:text-[#FFB000]">${sec.id === 'backup' ? 'Back up now' : sec.id === 'licence' ? 'Check licence' : 'Test'}</button>` : ''}
     </div>${prov}${warn}
     <div class="flex flex-col gap-4">${sec.fields.map(cfgField).join('')}</div>${res}
-    ${sec.id === 'backup' ? '<p class="text-[12px] text-gray-600 mt-3">The backup holds the encryption key and the encrypted credentials. Copy it off this machine to somewhere equally protected: a backup on the same disk does not survive losing that disk.</p>'
+    ${sec.id === 'backup' ? '<div class="mt-4 border-t border-[#1A2028] pt-3"><p class="text-[14px]">Recovery key</p><p class="text-[12px] text-gray-500 mb-2">Backups are encrypted with this key. To restore on a server, run: triage1 restore &lt;file&gt; as an administrator.</p><button id="bk-show" class="px-3 py-1.5 rounded-lg border border-[#232B33] text-[14px] hover:text-[#FFB000]">Show recovery key</button><div id="bk-key-out" class="text-[13px] mt-2"></div></div>'
       : sec.testable ? '<p class="text-[12px] text-gray-600 mt-3">Test uses the values the app is running on. After saving a field marked restart, restart the app first.</p>' : ''}`;
 }
 

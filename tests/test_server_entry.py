@@ -60,6 +60,16 @@ def test_installer_commands(tmp_path, monkeypatch, capsys):
     assert server.main(["bootstrap-has"]) == 0
 
 
+@pytest.mark.parametrize("mark", ["﻿", "\u00ef\u00bb\u00bf"])
+def test_installer_text_with_a_byte_order_mark_is_accepted(tmp_path, monkeypatch, mark):
+    monkeypatch.setenv("TRIAGE_HOME", str(tmp_path))
+    monkeypatch.setattr(bootstrap_store, "_lock", lambda p: None)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("TRIAGE_SECRET_KEY", raising=False)
+    monkeypatch.setattr("sys.stdin", io.StringIO(mark + json.dumps({"DATABASE_URL": "postgres" + "ql://a", "TRIAGE_SECRET_KEY": "k"})))
+    assert server.main(["bootstrap-merge"]) == 0 and bootstrap_store.read()["TRIAGE_SECRET_KEY"] == "k"
+
+
 def test_service_account_gets_the_key_file(tmp_path, monkeypatch):
     if bootstrap_store.os.name != "nt":
         pytest.skip("Windows permissions")

@@ -4,6 +4,9 @@
     triage1 init-db               apply db/schema.sql and exit (safe to repeat)
     triage1 bootstrap-merge       JSON object on stdin -> bootstrap.json (used by the installer)
     triage1 bootstrap-has         exit 0 when a database address is stored
+    triage1 backup-now            one backup now (the installer runs this before an upgrade)
+    triage1 restore <file>        put a backup back (administrators, on the server)
+    triage1 version               print the version
 
 Address: TRIAGE_HOST (default 127.0.0.1) and TRIAGE_PORT (default 8000). They are read here because the
 settings live in the database and this runs before it is reachable.
@@ -63,17 +66,48 @@ def serve() -> None:
     uvicorn.run(app, host=host, port=port)
 
 
+def _load_settings() -> None:
+    bootstrap_store.load()
+    from app import config
+    config.hydrate_environ()
+
+
+def backup_now(reason: str) -> int:
+    _load_settings()
+    from app import backup
+    result = backup.run(reason)
+    print(backup.describe(result), flush=True)
+    return 0 if result["ok"] else 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="triage1", description="TRIAGE-1 server")
-    p.add_argument("command", choices=["serve", "init-db", "bootstrap-merge", "bootstrap-has"])
-    cmd = p.parse_args(argv).command
-    if cmd == "serve":
+    p.add_argument("command", choices=["serve", "init-db", "bootstrap-merge", "bootstrap-has", "backup-now", "restore", "version"])
+    p.add_argument("file", nargs="?", help="restore: the triage-<date>.dump.enc file")
+    p.add_argument("--yes", action="store_true", help="restore: do not ask for confirmation")
+    p.add_argument("--no-safety-backup", action="store_true", help="restore: skip the backup of the current data")
+    p.add_argument("--reason", default="manual", help="backup-now: why this backup was made")
+    args = p.parse_args(argv)
+    cmd = args.command
+    if cmd == "version":
+        from app.version import VERSION
+        print(VERSION)
+    elif cmd == "backup-now":
+        return backup_now(args.reason)
+    elif cmd == "restore":
+        if not args.file:
+            p.error("restore needs the backup file")
+        _load_settings()
+        from app import restore
+        return restore.run(args.file, yes=args.yes, safety=not args.no_safety_backup)
+    elif cmd == "serve":
         serve()
     elif cmd == "init-db":
         apply_schema()
         print("database ready")
     elif cmd == "bootstrap-merge":
-        bootstrap_store.save(**json.load(sys.stdin))
+        # Windows PowerShell can put a byte-order mark in front of text it pipes to a program.
+        bootstrap_store.save(**json.loads(sys.stdin.read().lstrip("﻿").removeprefix("\u00ef\u00bb\u00bf")))
         print("bootstrap saved")
     elif cmd == "bootstrap-has":
         return 0 if bootstrap_store.read().get("DATABASE_URL") else 1
