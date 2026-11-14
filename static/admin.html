@@ -550,12 +550,15 @@ function loadLicence() {
     const el = document.getElementById('ov-licence');
     if (!s || !el) return;
     const part = (k, label) => `${s.usage[k] == null ? '?' : s.usage[k]} of ${s.limits[k] ? s.limits[k] : 'unlimited'} ${label}`;
-    let html = `${s.version ? 'Version ' + esc(s.version) + ' · ' : ''}Plan: <b>${esc(s.plan)}</b>${s.customer ? ' (' + esc(s.customer) + ')' : ''} ·${part('servers', 'servers')} · ${part('seats', 'approver seats')} · ${part('tickets_month', 'automatic tickets this month')}`;
+    let html = `${s.version ? 'Version ' + esc(s.version) + ' · ' : ''}Plan: <b>${esc(s.plan)}</b>${s.customer ? ' (' + esc(s.customer) + ')' : ''} · ${part('servers', s.servers_label || 'servers')} · ${part('seats', 'approver seats')} · ${part('tickets_month', 'automatic tickets this month')}`;
     if (s.problems.length) {
       const when = s.grace_ends ? new Date(s.grace_ends * 1000).toLocaleDateString() : '';
       html += `<div class="text-red-400 mt-1">${s.auto_blocked ? 'New automatic tickets are stopped: ' : 'Over the plan. New automatic tickets stop after ' + esc(when) + ': '}${esc(s.problems.join('; '))}</div>`;
     } else if (s.warnings.length) {
       html += `<div class="text-[#FFB000] mt-1">${esc(s.warnings.join('; '))}</div>`;
+    }
+    if (s.usage_errors && s.usage_errors.length) {
+      html += `<div class="text-[#FFB000] mt-1">${esc(s.usage_errors.join('; '))}</div>`;
     }
     el.innerHTML = html;
   }).catch(() => {});
@@ -1244,7 +1247,8 @@ function cfgField(f) {
   const chip = (f.pending_restart ? '<span class="pill ml-2" style="color:#FFB000">restart needed</span>' : '')
              + (f.required ? '<span class="pill ml-2">required</span>' : '');
   const head = `<label class="text-[14px]">${esc(f.label)}${chip}</label>`;
-  const help = f.help ? `<p class="text-[12px] text-gray-500">${esc(f.help)}</p>` : '';
+  const help = (f.help ? `<p class="text-[12px] text-gray-500">${esc(f.help)}</p>` : '')
+             + (f.warning ? `<p class="text-[12px]" style="color:#FFB000">${esc(f.warning)}</p>` : '');
   if (f.kind === 'secret') {
     const st = f.is_set ? `Set${f.version ? ', version ' + f.version : ''}${f.updated ? ', updated ' + when(f.updated) : ''}` : (f.source === 'env' ? 'Set in the environment' : 'Not set');
     return `<div class="field">${head}<div class="flex items-center gap-3"><span class="text-[13px] text-gray-400">${esc(st)}</span>

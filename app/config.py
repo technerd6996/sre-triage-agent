@@ -146,6 +146,23 @@ _add("notifications.sns_topic_arn", "SNS topic ARN", "SNS_TOPIC_ARN", group="not
 _add("notifications.aws_access_key_id", "AWS access key ID", "AWS_ACCESS_KEY_ID", "secret", group="notifications")
 _add("notifications.aws_secret_access_key", "AWS secret access key", "AWS_SECRET_ACCESS_KEY", "secret", group="notifications")
 _add("notifications.smtp_host", "SMTP host", "SMTP_HOST", group="notifications")
+
+
+def _check_managed_tag(t: str) -> None:
+    if any(c in t for c in "^\r\n"):
+        raise ValueError("Managed-server tag cannot contain ^ or line breaks")
+    if len(t) > 100:
+        raise ValueError("Managed-server tag may have at most 100 characters")
+
+
+register("cmdb.managed_tag", "Managed-server tag (ServiceNow)", "triage1:managed=true", group="ticketing",
+         check=_check_managed_tag,
+         help="Name of the ServiceNow tag that marks a CMDB server as managed by TRIAGE-1. Only servers whose CI has "
+              "this tag are seen by the agent, the approver chat and the licence count; a ticket about any other "
+              "server is escalated as not managed. An EC2 instance matches a CI by instance id in asset_tag, or by "
+              "name. Empty = every server is managed.")
+register("cmdb.managed_tag_ttl", "Managed-server tag cache (seconds)", 60, "int", "infra", lo=0, hi=3600,
+         help="How long the list of tagged CIs is kept before ServiceNow is asked again.")
 _add("notifications.smtp_port", "SMTP port", "SMTP_PORT", group="notifications")
 _add("notifications.smtp_user", "SMTP user", "SMTP_USER", group="notifications")
 _add("notifications.smtp_from", "SMTP sender", "SMTP_FROM", group="notifications")
@@ -330,22 +347,35 @@ def _notify(s: Setting) -> None:
             log.warning("config: listener failed for %s: %s", s.key, str(e)[:150])
 
 
+def _restore_env(env: str) -> None:
+    """Puts back what the environment held before any saved value, or removes the variable."""
+    if _orig_env.get(env) is None:
+        os.environ.pop(env, None)
+    else:
+        os.environ[env] = _orig_env[env]
+
+
+def _export(s: Setting, text: str) -> None:
+    """An empty saved value means "not set" and is never exported as "" (AWS_PROFILE="" makes boto3 look for a
+    profile named "" and fail)."""
+    _orig_env.setdefault(s.env, os.environ.get(s.env))          # what the environment held before any saved value
+    if text.strip():
+        os.environ[s.env] = text
+    else:
+        _restore_env(s.env)
+
+
 def _after_change(s: Setting) -> None:
     """Makes a saved change visible to code that still reads os.getenv, and tells the listeners."""
     if s.bridge and s.env and s.secret:
-        if _orig_env.get(s.env) is None:
-            os.environ.pop(s.env, None)
-        else:
-            os.environ[s.env] = _orig_env[s.env]
+        _restore_env(s.env)
     elif s.bridge and s.env:
-        _orig_env.setdefault(s.env, os.environ.get(s.env))      # what the environment held before any saved value
         value, source = _resolve(s)
         if source == "saved":
-            os.environ[s.env] = _env_text(s, value)
-        elif _orig_env[s.env] is None:
-            os.environ.pop(s.env, None)
+            _export(s, _env_text(s, value))
         else:
-            os.environ[s.env] = _orig_env[s.env]
+            _orig_env.setdefault(s.env, os.environ.get(s.env))
+            _restore_env(s.env)
     _notify(s)
 
 
@@ -433,8 +463,7 @@ def save_secret(key: str, value, by: str = "system") -> None:
         "updated_by": by, "updated_at": time.time()}).execute()
     _cache["at"] = 0.0
     if s.bridge and s.env:
-        _orig_env.setdefault(s.env, os.environ.get(s.env))
-        os.environ[s.env] = _cast(s, value)
+        _export(s, _cast(s, value))
     _notify(s)
     try:
         store.audit(None, None, by, "secret_changed", key)            # the value is never logged
@@ -471,7 +500,10 @@ def hydrate_environ() -> int:
         except Exception as e:
             log.warning("config: could not load %s into the environment (%s)", s.key, type(e).__name__)
             continue
-        os.environ[s.env] = _env_text(s, value)
+        text = _env_text(s, value)
+        if not text.strip():                    # an empty saved value means "not set"
+            continue
+        os.environ[s.env] = text
         n += 1
     if n:
         log.info("config: %d saved setting(s) loaded into the environment", n)

@@ -21,3 +21,4 @@ psycopg[binary,pool]
 langgraph-checkpoint-postgres
 opentelemetry-sdk==1.45.1
 psutil
+transformers

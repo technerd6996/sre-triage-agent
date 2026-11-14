@@ -31,7 +31,7 @@ from app import config, store
 log = logging.getLogger("uvicorn.error")
 
 # The vendor's public key (raw Ed25519, base64). The matching private key is NOT in this project.
-PUBLIC_KEY = "30q+Lbp8neS1omlmigTi+IWEdpq0qL/KhcTGylcW4Gw="
+PUBLIC_KEY = "9LnsMRUQxQGyjuyDBr8TH3YsGaHPv7euhaE2B9xSq8Q="   # replaced 2026-11-13: the previous private key was lost
 PREFIX = "TRIAGE1-"
 GRACE_DAYS = 14
 WARN_AT = 0.8
@@ -167,16 +167,51 @@ def _count_seats() -> int:
                and any("console.act" in rbac.ROLES[n] for n in rbac.role_names(r.get("role"))))
 
 
+_usage_errors: dict = {}
+
+
 def usage() -> dict:
-    """Counts now. A count that cannot be read is None (and is not treated as over the limit)."""
+    """Counts now. A count that cannot be read is None (and is not treated as over the limit); the reason is kept in
+    _usage_errors so the admin panel can show it."""
     out = {}
+    _usage_errors.clear()
     for name, fn in (("servers", _count_servers), ("seats", _count_seats), ("tickets_month", auto_tickets_this_month)):
         try:
             out[name] = fn()
         except Exception as e:                               # noqa: BLE001
             out[name] = None
+            _usage_errors[name] = str(e)[:200]
             log.warning("licence count of %s failed: %s", name, str(e)[:120])
     return out
+
+
+def _explain(name: str, err: str) -> str:
+    low = err.lower()
+    if name == "servers" and "servicenow tag" in low:
+        return ("servers could not be counted: the ServiceNow tag in 'Managed-server tag' (Admin > Connections > "
+                f"Ticketing) could not be read from the CMDB. ({err[:160]})")
+    if name == "servers" and "profile" in low and "could not be found" in low:
+        return ("servers could not be counted: the AWS profile named in 'AWS profile' (Admin > Connections > "
+                "Notifications) does not exist on this machine. Clear 'AWS profile' to use the instance role.")
+    if name == "servers" and "region" in low:
+        return ("servers could not be counted: no AWS region is set. Set 'AWS region' (Admin > Connections > "
+                "Notifications) to the region of your servers.")
+    if name == "servers" and any(w in low for w in ("unauthorizedoperation", "accessdenied", "not authorized",
+                                                     "authfailure", "invalidclienttokenid", "expiredtoken",
+                                                     "unable to locate credentials", "no credentials")):
+        return ("servers could not be counted: AWS refused access or no credentials were found. Check the app's "
+                f"AWS role allows ec2:DescribeInstances in this region. ({err[:160]})")
+    return f"{LABELS.get(name, name)} could not be counted: {err}"
+
+
+def _servers_label() -> str:
+    """'managed servers' when the ServiceNow managed-server tag narrows the servers."""
+    try:
+        if (config.get("cmdb.managed_tag") or "").strip():
+            return "managed servers"
+    except Exception:                       # noqa: BLE001
+        pass
+    return "servers"
 
 
 LABELS = {"servers": "servers", "seats": "approver seats", "tickets_month": "automatic tickets this month"}
@@ -231,6 +266,8 @@ def status(force: bool = False) -> dict:
     value = {"itsm": ITSM.get(lic.get("itsm") or "", ""), "plan": lic["plan"], "customer": lic.get("customer", ""), "id": lic.get("id", ""), "licensed": bool(lic.get("valid")),
              "expires": lic.get("expires") or None,
              "limits": {k: lic.get(k, 0) for k in LABELS}, "usage": used,
+             "usage_errors": [_explain(k, v) for k, v in _usage_errors.items()],
+             "servers_label": _servers_label(),
              "features": {f: f in lic.get("features", []) for f in FEATURES}, **ev}
     _status_cache.update(at=now, value=value)
     return value

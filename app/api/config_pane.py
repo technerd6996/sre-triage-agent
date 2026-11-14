@@ -97,6 +97,14 @@ def _bootstrap_items() -> list[dict]:
         out.append({"env": env, "label": label, "shown": shown, "set": bool(v)})
     return out
 
+def _warning(f: dict) -> str:
+    """A note shown next to a field whose current value is risky."""
+    if f["key"] == "cmdb.managed_tag" and not str(f.get("value") or "").strip():
+        return ("No tag is set, so EVERY server is managed: the agent may act on any EC2 instance in the region "
+                "(including this app server) or any CI, and the licence counts them all.")
+    return ""
+
+
 @router.get("/sections")
 def sections():
     out = []
@@ -111,6 +119,7 @@ def sections():
         for f in fields:
             f["required"] = f["key"] in required
             f["pending_restart"] = _pending_restart(f["key"])
+            f["warning"] = _warning(f)
         out.append({"id": s["id"], "title": s["title"], "testable": s["testable"], "panel": s["panel"],
                     "provider": info, "fields": fields,
                     "missing": [f["label"] for f in fields if f["required"] and not _filled(f)]})

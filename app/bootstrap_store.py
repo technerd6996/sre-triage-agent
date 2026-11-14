@@ -31,7 +31,7 @@ def path() -> Path:
 
 def read() -> dict:
     try:
-        data = json.loads(path().read_text(encoding="utf-8"))
+        data = json.loads(path().read_text(encoding="utf-8-sig"))
         return {k: str(v) for k, v in data.items() if k in NAMES and v}
     except (OSError, ValueError):
         return {}
@@ -77,7 +77,8 @@ def save(**values: str) -> None:
 if __name__ == "__main__":
     # python -m app.bootstrap_store merge   <- JSON object on stdin; used by scripts/start.ps1
     if len(sys.argv) == 2 and sys.argv[1] == "merge":
-        save(**json.load(sys.stdin))
+        # utf-8-sig: Windows PowerShell 5.1 may put a BOM in front of what it pipes to a native program.
+        save(**json.loads(sys.stdin.buffer.read().decode("utf-8-sig")))
         print("bootstrap saved to", path())
     elif len(sys.argv) == 2 and sys.argv[1] == "has":
         sys.exit(0 if read().get("DATABASE_URL") else 1)

@@ -47,7 +47,7 @@ def database_url() -> str:
     bootstrap_store.load()
     url = (os.getenv("DATABASE_URL") or "").strip()
     if not url:
-        raise DatabaseConfigError("DATABASE_URL is not set. Start the app with scripts\start.ps1, which creates the "
+        raise DatabaseConfigError("DATABASE_URL is not set. Start the app with scripts\\start.ps1, which creates the "
                                   "local database and its bootstrap file on first run.")
     return url
 

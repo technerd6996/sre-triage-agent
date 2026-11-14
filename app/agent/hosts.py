@@ -37,6 +37,27 @@ def _not_found(text: str) -> str:
     return msg
 
 
+def _unmanaged(hosts, ticket_text: str, ci_name: str = "") -> str:
+    """'Server X is not managed by TRIAGE-1 App: ...' when the ticket names a real server that lacks the
+    managed-server tag in the CMDB; '' otherwise (or when the provider cannot tell)."""
+    find = getattr(hosts, "find_unmanaged_in_text", None)
+    if not find:
+        return ""
+    try:
+        h = find(ticket_text) or (find(ci_name) if ci_name else None)
+    except Exception:                       # noqa: BLE001 - only improves the message
+        return ""
+    if not h:
+        return ""
+    from app.tools import cmdb_tags
+    return cmdb_tags.not_managed_message(h.name or h.id) + "."
+
+
+def is_not_managed(why: str) -> bool:
+    from app.tools import cmdb_tags
+    return cmdb_tags.NOT_MANAGED in (why or "")
+
+
 def resolve_server(ticket_text: str, ci_name: str = ""):
     """Returns (instance, reason). Also sets the active server so the infra tools use its address."""
     active.bind({})  # never carry a previous ticket's server over
@@ -51,9 +72,47 @@ def resolve_server(ticket_text: str, ci_name: str = ""):
     except Exception as e:
         return None, f"Host lookup failed: {str(e)[:150]}."
     if not host:
+        unmanaged = _unmanaged(hosts, ticket_text, ci_name)
+        if unmanaged:
+            return None, unmanaged
         return None, _not_found(ticket_text)
     active.bind({host.os: host.id})
     return _legacy(host), ""
+
+
+_PLATFORM_WORDS = {
+    "windows": ("windows", "win32", "powershell"),
+    "linux": ("linux", "ubuntu", "debian", "rhel", "red hat", "centos", "amazon linux", "systemd", "systemctl"),
+}
+
+
+def _platform_from_text(text: str) -> str:
+    """'windows' or 'linux' when the ticket names exactly one of them as a whole word, else ''."""
+    low = (text or "").lower()
+    hits = {p for p, words in _PLATFORM_WORDS.items()
+            if any(re.search(rf"(?<![a-z0-9]){re.escape(w)}(?![a-z0-9])", low) for w in words)}
+    return hits.pop() if len(hits) == 1 else ""
+
+
+def _platform_from_cmdb(text: str, ci_name: str = "") -> tuple:
+    """(os, CI name) from the ServiceNow CMDB record of the server the ticket names, or ('', '')."""
+    try:
+        from app.adapters.cmdbhosts.hosts import CmdbHosts
+        cmdb = CmdbHosts(managed_only=False)           # a hint only: the OS of any CI, tagged or not
+        h = (cmdb.find_by_name(ci_name) if ci_name else None) or cmdb.find_in_text(text)
+    except Exception:                       # noqa: BLE001 - only a hint: no CMDB means no hint
+        return "", ""
+    return (h.os, h.name) if h and h.os else ("", "")
+
+
+def guess_platform(ticket_text: str, ci_name: str = "") -> tuple:
+    """When the server itself cannot be found: (platform, where it came from), so the playbook is for the right OS.
+    The CMDB record wins over words in the ticket. Only picks a playbook: never selects or touches a server."""
+    os_name, ci = _platform_from_cmdb(ticket_text, ci_name)
+    if os_name:
+        return os_name, f"from the CMDB record {ci}"
+    os_name = _platform_from_text(ticket_text)
+    return (os_name, "from the ticket text") if os_name else ("", "")
 
 
 def resolve_default_windows():

@@ -19,12 +19,12 @@ from langgraph.types import Command
 import threading
 
 from app.agent.policy import interrupt_config
-from app.agent.skills import build_playbook
+from app.agent.skills import ESCALATE_ONLY, build_playbook, server_unknown_playbook
 from app.llm.colab_chat import ColabChat
 from app.tools.infra import INFRA_TOOLS
 from app.tools.snow import SNOW_TOOLS, get_incident
 from app.tools.aws_tools import AWS_TOOLS
-from app.agent.hosts import resolve_server, resolve_default_windows
+from app.agent.hosts import guess_platform, is_not_managed, resolve_server, resolve_default_windows
 from app.tools import active
 from app.tools.infra_perf import PERF_TOOLS
 TOOLS = SNOW_TOOLS + INFRA_TOOLS + PERF_TOOLS + AWS_TOOLS
@@ -184,7 +184,10 @@ def start(ticket_number: str, thread_id: str = ""):
     short, desc = ticket.get("short_description", ""), ticket.get("description", "")
     text = f"{short} {desc}"
     inst, why = resolve_server(text, ticket.get("cmdb_ci", ""))
-    playbook, skill, allowed_tools, skill_version = build_playbook(text, inst["platform"] if inst else None)
+    # Server not found: still pick the playbook for the right OS (CMDB record, else the ticket text), so a Windows
+    # ticket is never matched to a Linux skill on keywords alone.
+    platform, platform_from = (inst["platform"], "") if inst else guess_platform(text, ticket.get("cmdb_ci", ""))
+    playbook, skill, allowed_tools, skill_version = build_playbook(text, platform or None)
 
     if not inst and skill == "ad-account-locked":
         inst = resolve_default_windows()
@@ -195,9 +198,15 @@ def start(ticket_number: str, thread_id: str = ""):
                   f'Use target "{inst["platform"]}" for all server tools.')
     else:
         label = None
-        server = (f"Affected server: unknown. {why} "
-                  f"Call claim_incident, add_work_note, and escalate_incident giving that as the reason.")
-        allowed_tools = {"claim_incident", "get_incident", "add_work_note", "escalate_incident"}
+        seems = f" The ticket is about a {platform} server ({platform_from})." if platform else ""
+        if is_not_managed(why):
+            reason = f"{why}{seems} TRIAGE-1 does not work on it; escalating to a human."
+        else:
+            reason = (f"Server not found. {why}{seems} If the server exists, check its CMDB record has the "
+                      "managed-server tag (Admin > Connections > Ticketing > Managed-server tag).")
+        server = f"Affected server: unknown. {reason}"
+        playbook = server_unknown_playbook(reason)      # the skill name above is still recorded on the run
+        allowed_tools = set(ESCALATE_ONLY)
 
     tool_tuple = tuple(sorted(allowed_tools))
     THREAD_TOOLS[thread_id] = tool_tuple

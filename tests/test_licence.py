@@ -156,6 +156,15 @@ def test_unlimited_is_never_over_and_an_unreadable_count_is_not_a_breach(vendor)
     assert ev["problems"] == []
 
 
+def test_a_count_that_fails_is_explained_in_the_status(vendor, monkeypatch):
+    def no_region():
+        raise RuntimeError("You must specify a region.")
+    monkeypatch.setattr(licence, "_count_servers", no_region)
+    s = licence.status(force=True)
+    assert s["usage"]["servers"] is None and s["problems"] == []
+    assert len(s["usage_errors"]) == 1 and "AWS region" in s["usage_errors"][0]
+
+
 def test_automatic_tickets_are_counted_per_month(vendor):
     vendor.use("Starter")
     for _ in range(3):

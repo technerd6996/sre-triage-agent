@@ -32,11 +32,13 @@ def map_error(e: Exception) -> PortError:
     resp = getattr(e, "response", None)
     code = str(resp.get("Error", {}).get("Code", "")) if isinstance(resp, dict) else ""
     name, msg = type(e).__name__, str(e)
-    if code.startswith("InvalidInstanceID") or isinstance(e, IndexError):
+    if code.startswith("InvalidInstanceID") or isinstance(e, IndexError) or name == "NotManaged":
         return NotFound(msg or "Instance not found")
     if code in ("AuthFailure", "UnauthorizedOperation", "InvalidClientTokenId", "ExpiredToken") \
             or name in ("NoCredentialsError", "PartialCredentialsError"):
         return AuthFailed(msg)
+    if name == "TagsUnreadable":
+        return Unavailable(msg)
     if name in ("EndpointConnectionError", "ConnectTimeoutError", "ReadTimeoutError",
                 "ConnectionClosedError") or code in ("RequestLimitExceeded", "Throttling", "ServiceUnavailable"):
         return Unavailable(msg)
@@ -65,6 +67,11 @@ class AwsHosts:
 
     def find_in_text(self, text: str) -> Host | None:
         inst = self._run(lambda a: a.find_in_text(text))
+        return to_host(inst) if inst else None
+
+    def find_unmanaged_in_text(self, text: str) -> Host | None:
+        """A server named in the text that exists in EC2 but whose CMDB record lacks the managed-server tag."""
+        inst = self._run(lambda a: a.find_unmanaged_in_text(text))
         return to_host(inst) if inst else None
 
     def connect_address(self, host_id: str) -> str:

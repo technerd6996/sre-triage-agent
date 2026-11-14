@@ -57,6 +57,7 @@ if ($firstRun) {
     Restart-Service $svc.Name; Start-Sleep 3
     $key = & $py -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     (@{ DATABASE_URL = "postgresql://triage:$appPw@127.0.0.1:5432/triage"; TRIAGE_SECRET_KEY = $key } | ConvertTo-Json) | & $py -m app.bootstrap_store merge
+    if ($LASTEXITCODE -ne 0) { throw "Could not save bootstrap.json. The triage role now exists with an unsaved password: drop the triage database and role, then run this script again." }
     Write-Host "First-run database provisioning done."
 }
 

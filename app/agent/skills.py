@@ -152,6 +152,22 @@ def pick_skill(ticket_text: str, platform: str = None, audience: str = "l1"):
     return best_name, best
 
 
+ESCALATE_ONLY = {"claim_incident", "get_incident", "add_work_note", "escalate_incident"}
+
+
+def server_unknown_playbook(reason: str) -> str:
+    """Playbook for a ticket whose server could not be found: the lifecycle skill and an escalation instruction only.
+    A technical skill is left out on purpose: its steps name tools the run does not have, and the model then writes
+    those tool calls as text instead of escalating."""
+    skills = load_skills()
+    parts = [skills[BASE_SKILL]["body"]] if BASE_SKILL in skills else []
+    parts.append("TECHNICAL SKILL: none (the affected server could not be found)\n"
+                 f"Reason: {reason}\n"
+                 "No server tools are available for this ticket. Call claim_incident, then add_work_note stating the "
+                 "reason above, then escalate_incident with that reason. Do not try any other tool.")
+    return "\n\n".join(parts)
+
+
 def build_playbook(ticket_text: str, platform: str = None):
     """Returns (playbook_text, technical_skill_name, allowed_tool_names, version)."""
     skills = load_skills()

@@ -54,17 +54,35 @@ def _to_host(row: dict) -> Host:
                 address=ip, private_address=ip, provider=PROVIDER, extras={"sys_id": row.get("sys_id", "")})
 
 
+def _tags():
+    return importlib.import_module("app.tools.cmdb_tags")
+
+
 class CmdbHosts:
+    """managed_only=False sees every CI (used only for hints such as the OS of an unmanaged server)."""
     provider = PROVIDER
     capabilities = MANIFEST.capabilities
 
+    def __init__(self, managed_only: bool = True):
+        self.managed_only = managed_only
+
+    def _managed_rows(self, force: bool = False) -> list:
+        rows = _rows(force)
+        if not self.managed_only:
+            return rows
+        try:
+            cis = _tags().tagged_cis()
+        except Exception as e:                               # noqa: BLE001
+            raise Unavailable(str(e)[:200]) from e
+        return rows if cis is None else [r for r in rows if _tags().ci_is_managed(r.get("sys_id", ""), cis)]
+
     def list_hosts(self, force: bool = False) -> list[Host]:
-        return [_to_host(r) for r in _rows(force) if r.get("name")]
+        return [_to_host(r) for r in self._managed_rows(force) if r.get("name")]
 
     def find_by_name(self, identifier: str) -> Host | None:
         ident = (identifier or "").strip().lower()
         ipf = os.getenv("CMDB_IP_FIELD", "ip_address")
-        for r in _rows():
+        for r in self._managed_rows():
             match_targets = (
                 str(r.get("name", "")).lower(), 
                 str(r.get(ipf, "")).lower(), 
@@ -80,13 +98,20 @@ class CmdbHosts:
             _rows(force=True)
             h = self.find_by_name(host_id)
         if h is None:
+            if self.managed_only and CmdbHosts(managed_only=False).find_by_name(host_id):
+                raise NotFound(_tags().not_managed_message(host_id))
             raise NotFound(f"No CI named {host_id}")
         return h
 
     def find_in_text(self, text: str) -> Host | None:
-        hits = {r["name"] for r in _rows() if r.get("name") and re.search(
+        hits = {r["name"] for r in self._managed_rows() if r.get("name") and re.search(
             rf"(?<![A-Za-z0-9._-]){re.escape(r['name'])}(?![A-Za-z0-9._-])", text or "", re.IGNORECASE)}
         return self.find_by_name(hits.pop()) if len(hits) == 1 else None
+
+    def find_unmanaged_in_text(self, text: str) -> Host | None:
+        """A CI named in the text that exists but lacks the managed-server tag."""
+        h = CmdbHosts(managed_only=False).find_in_text(text)
+        return h if h and self.managed_only and self.find_by_name(h.name) is None else None
 
     def connect_address(self, host_id: str) -> str:
         h = self.get_host(host_id)
